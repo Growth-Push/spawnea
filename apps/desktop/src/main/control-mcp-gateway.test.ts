@@ -34,7 +34,7 @@ class AuthenticatedSocketTransport implements Transport {
     const socket = createConnection(this.socketPath);
     this.socket = socket;
     socket.on('data', (chunk) => {
-      this.readBuffer.append(chunk);
+      this.readBuffer.append(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       let message: JSONRPCMessage | null;
       while ((message = this.readBuffer.readMessage()) !== null) this.onmessage?.(message);
     });

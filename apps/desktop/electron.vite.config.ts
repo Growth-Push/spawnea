@@ -8,7 +8,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ['@spawnea/domain', '@spawnea/db', '@spawnea/hosts', '@spawnea/state'] })],
     build: {
       rollupOptions: {
-        external: ['better-sqlite3', 'ssh2', 'cpu-features', 'node-pty'],
+        external: ['electron', 'better-sqlite3', 'ssh2', 'cpu-features', 'node-pty'],
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           'spawnea-mcp': resolve(__dirname, 'src/mcp/index.ts'),

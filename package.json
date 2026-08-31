@@ -30,8 +30,8 @@
   "devDependencies": {
     "@types/ssh2": "^1.15.5",
     "oxlint": "^1.80.0",
-    "typescript": "^5.8.2",
-    "vitest": "^4.1.0"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

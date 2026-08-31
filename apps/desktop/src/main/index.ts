@@ -62,6 +62,8 @@ try {
   // Ignore in CommonJS
 }
 
+const mainDir = dirname(fileURLToPath(import.meta.url));
+
 process.on('unhandledRejection', (reason) => {
   console.error('[Spawnea Fatal Unhandled Rejection]:', reason);
 });
@@ -751,9 +753,9 @@ function registerIpcHandlers(
 
 function getPreloadPath(): string {
   const candidates = [
-    join(__dirname, '../preload/index.mjs'),
-    join(__dirname, '../preload/index.js'),
-    join(__dirname, '../preload/index.cjs'),
+    join(mainDir, '../preload/index.mjs'),
+    join(mainDir, '../preload/index.js'),
+    join(mainDir, '../preload/index.cjs'),
     resolve(process.cwd(), 'apps/desktop/out/preload/index.mjs'),
     resolve(process.cwd(), 'apps/desktop/out/preload/index.js'),
     resolve(process.cwd(), 'out/preload/index.mjs'),
@@ -819,7 +821,7 @@ function createWindow(): void {
   if (process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
+    mainWindow.loadFile(join(mainDir, '../renderer/index.html'));
   }
 
   mainWindow.show();

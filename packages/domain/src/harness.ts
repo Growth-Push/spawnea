@@ -7,7 +7,7 @@ export const HarnessLifecycleEventSchema = z.object({
   harness: z.string(),
   eventType: z.string(),
   timestamp: z.string(),
-  rawPayload: z.union([z.record(z.unknown()), z.string()]).optional(),
+  rawPayload: z.union([z.record(z.string(), z.unknown()), z.string()]).optional(),
   summary: z.string().optional(),
 });
 

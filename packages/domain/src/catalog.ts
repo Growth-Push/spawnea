@@ -320,7 +320,7 @@ export const RawCatalogHostSchema = z
 export const RawOperationalCatalogSchema = z
   .object({
     version: z.literal(1, {
-      errorMap: () => ({ message: 'Catalog version must be 1 for Pilot 1' }),
+      error: () => 'Catalog version must be 1 for Pilot 1',
     }),
     hosts: z.record(z.string(), RawCatalogHostSchema),
   })
