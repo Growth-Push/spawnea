@@ -6,7 +6,7 @@ import type {
   DiscoveredTmuxSession,
   HostTestResult,
   HostHealthResult,
-  HostHealthStatus,
+
   SessionContextFile,
   HostAdapter,
   HostSystemInfo,

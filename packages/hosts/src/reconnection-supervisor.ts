@@ -1,6 +1,6 @@
 import type {
   HostConnectionState,
-  HostConnectionStatus,
+
   Logger,
 } from '@spawnea/domain';
 import { createLogger } from '@spawnea/domain';

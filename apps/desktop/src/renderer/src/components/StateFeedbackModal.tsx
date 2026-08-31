@@ -89,7 +89,7 @@ const STATUS_OPTIONS: {
 export function StateFeedbackModal({
   isOpen,
   session,
-  server,
+  server: _server,
   agent,
   onClose,
 }: StateFeedbackModalProps): React.JSX.Element | null {

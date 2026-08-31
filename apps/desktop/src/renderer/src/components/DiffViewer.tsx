@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { GitDiffResult, GitDiffFile } from '@spawnea/domain';
+import type { GitDiffResult } from '@spawnea/domain';
 import {
   FileCode2,
   Copy,

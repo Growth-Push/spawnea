@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { HostHealthChecker } from '../src/host-health-checker.js';
 import { MockHostAdapter } from '../src/mock-host.js';
 import type { HostAdapter, HostTestResult } from '@spawnea/domain';

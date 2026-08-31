@@ -205,7 +205,7 @@ export class AntigravityStatusAdapter implements HarnessStatusAdapter {
       const hasQuestionHeader = /Question \d+\/\d+:/i.test(combinedTail);
       const hasPermissionPrompt = /(?:Requesting permission for:|Do you want to proceed\?|Accept this (?:file )?edit\?)[\s\S]*?>\s*1\.\s+Yes/i.test(combinedTail);
       const hasQuestionnaireMenu = /Question \d+\/\d+:[^\n]*\n[\s\S]*?(?:Navigate|Select|Skip)/i.test(combinedTail);
-      const hasNavigationFooter = /(?:↑\/↓|[\u2191\u2193\/]+)\s*Navigate/i.test(combinedTail);
+      const hasNavigationFooter = /(?:↑\/↓|[\u2191\u2193/]+)\s*Navigate/i.test(combinedTail);
       const hasNumberedChoice = />\s*1\.\s+[^\n]+\n\s*2\.\s+/i.test(combinedTail);
       const hasQuestionLine = /(?:^\s*\?\s+[A-Z0-9].+\?\s*$|Accept this (?:file )?edit\?)/im.test(combinedTail);
 

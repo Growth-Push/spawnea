@@ -15,11 +15,10 @@ import {
   AlertCircle,
   Loader2,
   RefreshCw,
-  Clock,
-  Folder,
+
   Radio,
   CheckCircle2,
-  ExternalLink,
+
 } from 'lucide-react';
 
 interface AdoptSessionModalProps {

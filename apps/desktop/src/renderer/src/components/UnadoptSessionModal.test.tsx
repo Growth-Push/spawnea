@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { UnadoptSessionModal } from './UnadoptSessionModal';
-import type { Session, Server, Project, Agent } from '@spawnea/domain';
+import type { Session, Server, Project } from '@spawnea/domain';
 
 describe('UnadoptSessionModal (FG-7.2.3)', () => {
   const mockSession: Session = {

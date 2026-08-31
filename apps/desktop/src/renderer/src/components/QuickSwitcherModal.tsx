@@ -3,7 +3,7 @@ import type { Session, Server, Project, Agent, SessionStatusResult } from '@spaw
 import type { WorkspaceTabType } from './WorkspaceTabs';
 import type { StatusFilterMode, GroupingMode } from './Sidebar';
 import { StatusBadge } from './StatusBadge';
-import { OsIcon } from './OsIcon';
+
 import { AgentIcon } from './AgentIcon';
 import {
   Search,
@@ -21,7 +21,7 @@ import {
   Bot,
   Server as ServerIcon,
   Filter,
-  Check,
+
   CornerDownLeft,
   X,
   Radio,
@@ -69,7 +69,7 @@ export function QuickSwitcherModal({
   projects,
   agents,
   activeSessionId,
-  activeTab,
+  activeTab: _activeTab,
   onSelectSession,
   onSelectTab,
   onOpenCreateModal,
@@ -80,7 +80,7 @@ export function QuickSwitcherModal({
   onClearDoneSessions,
   onSetStatusFilter,
   onSetGroupingMode,
-  statusDetailsMap = {},
+  statusDetailsMap: _statusDetailsMap = {},
 }: QuickSwitcherModalProps): React.JSX.Element | null {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);

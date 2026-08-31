@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { mergeProjectIntoCatalogYaml, parseOperationalCatalog, validateOperationalCatalog } from '../src/catalog.js';
+import { mergeProjectIntoCatalogYaml, parseOperationalCatalog } from '../src/catalog.js';
 
 describe('Operational Catalog Validation', () => {
   it('merges a project while preserving existing catalog entries and comments', () => {

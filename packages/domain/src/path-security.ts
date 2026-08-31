@@ -1,3 +1,5 @@
+// Control characters are intentionally rejected from filesystem paths.
+// eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 /**

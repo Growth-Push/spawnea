@@ -1,15 +1,15 @@
 import React, { useState, useMemo, useRef, useCallback } from 'react';
-import type { Artifact, ArtifactDirection } from '@spawnea/domain';
+import type { Artifact } from '@spawnea/domain';
 import { ArtifactPreviewModal } from './ArtifactPreviewModal';
 import { ArtifactContextMenu } from './ArtifactContextMenu';
 import {
   FileCode2,
   FileText,
   Image as ImageIcon,
-  FileQuestion,
+
   Search,
   Upload,
-  Clipboard,
+
   Download,
   ExternalLink,
   Trash2,
@@ -17,13 +17,10 @@ import {
   Check,
   Eye,
   EyeOff,
-  Ban,
-  Filter,
-  ArrowUpDown,
+
   LayoutGrid,
   List,
-  Sparkles,
-  Plus,
+
   Loader2,
 } from 'lucide-react';
 
@@ -46,7 +43,7 @@ export function ArtifactGallery({
   isLoading = false,
   onRefresh,
   onUploadFile,
-  onPasteImage,
+  onPasteImage: _onPasteImage,
   onDeleteArtifact,
 }: ArtifactGalleryProps): React.JSX.Element {
   const [filterDir, setFilterDir] = useState<FilterDirection>('all');

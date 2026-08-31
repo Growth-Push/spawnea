@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { GitService, parseGitDiff } from '../src/git-service.js';
+
+import { GitService } from '../src/git-service.js';
 import { MockHostAdapter } from '../src/mock-host.js';
 
 describe('GitService', () => {

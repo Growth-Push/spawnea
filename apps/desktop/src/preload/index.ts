@@ -15,10 +15,10 @@ import type {
   AddProjectToCatalogInput,
   HostTestResult,
   HostHealthResult,
-  HostHealthStatus,
+
   HostSystemInfo,
   HostConnectionState,
-  HostConnectionStatus,
+
   GitBranchDiscoveryResult,
   StateFeedbackSnapshot,
   StateFeedbackReport,

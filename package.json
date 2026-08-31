@@ -22,13 +22,14 @@
     "privacy:check": "node scripts/privacy-check.mjs",
     "secret:scan": "node scripts/secret-scan.mjs",
     "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r --if-present lint",
+    "lint": "oxlint apps packages scripts --deny-warnings",
     "test": "pnpm --filter @spawnea/db rebuild better-sqlite3 && pnpm -r test",
     "validate": "pnpm privacy:check && pnpm typecheck && pnpm test && pnpm build && pnpm smoke",
     "ci": "pnpm validate"
   },
   "devDependencies": {
     "@types/ssh2": "^1.15.5",
+    "oxlint": "^1.80.0",
     "typescript": "^5.8.2",
     "vitest": "^4.1.0"
   },

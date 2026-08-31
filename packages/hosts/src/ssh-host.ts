@@ -1,4 +1,4 @@
-import { Client, type ClientChannel, type SFTPWrapper } from 'ssh2';
+import { Client, type SFTPWrapper } from 'ssh2';
 import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +16,7 @@ import type {
   Logger,
 } from '@spawnea/domain';
 import { createLogger, maskSensitiveString } from '@spawnea/domain';
-import { resolveSshTarget, type ResolvedSshConfig } from './ssh-config.js';
+import { resolveSshTarget } from './ssh-config.js';
 import { HostReconnectionSupervisor } from './reconnection-supervisor.js';
 import { createKnownHostsVerifier } from './known-hosts.js';
 

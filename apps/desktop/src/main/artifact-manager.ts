@@ -1,11 +1,11 @@
-import { join, basename, extname, dirname } from 'node:path';
+import { join, basename, dirname } from 'node:path';
 import { mkdir, copyFile, writeFile, readFile, rm, stat as localStat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import type {
   Artifact,
   ArtifactDirection,
   FileContentResult,
-  FileStat,
+
   HostAdapter,
   Logger,
 } from '@spawnea/domain';

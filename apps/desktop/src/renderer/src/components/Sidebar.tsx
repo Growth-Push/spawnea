@@ -24,13 +24,11 @@ import {
   Terminal,
   FileCode,
   AlertTriangle,
-  AlertCircle,
+
   ListFilter,
   Folder,
   MessageSquare,
-  Activity,
   CheckCircle2,
-  Clock,
   Unplug,
   Radio,
   PanelLeftClose,
@@ -332,7 +330,7 @@ export function Sidebar({
   onRefresh,
   onReloadCatalog,
   onCheckHostHealth,
-  onDeleteSession,
+  onDeleteSession: _onDeleteSession,
   onClearDoneSessions,
   isReloadingCatalog = false,
   catalogErrorCount = 0,
@@ -527,9 +525,6 @@ export function Sidebar({
 
   // Sessions requiring immediate attention in background (for top prioritized group - Task 2.2.2)
   // Suppress active session to avoid false alerts while user is actively typing in the tab
-  const needsAttentionSessions = sessions.filter(
-    (s) => (s.status === 'needs_input' || s.status === 'error') && s.id !== activeSessionId
-  );
 
   // Grouping structures (FG-4.1.1, FG-4.1.2, FG-4.1.3)
   interface SessionGroup {

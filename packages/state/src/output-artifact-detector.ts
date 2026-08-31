@@ -129,15 +129,6 @@ const PATTERNS: { regex: RegExp; source: 'tool_call' | 'terminal_output'; confid
   },
 ];
 
-const IGNORED_SEGMENTS = [
-  '.git/',
-  'node_modules/',
-  '.pnpm/',
-  'dist/',
-  'out/',
-  'build/',
-  '.DS_Store',
-];
 
 /**
  * Parses terminal lines and capture-pane output to detect candidate files created or edited by LLM agents.

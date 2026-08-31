@@ -6,7 +6,7 @@ import {
   Radio,
   Server as ServerIcon,
   Folder,
-  Bot,
+
   Loader2,
   AlertCircle,
   Info,
@@ -29,7 +29,7 @@ export function UnadoptSessionModal({
   session,
   server,
   project,
-  agent,
+  agent: _agent,
   onClose,
   onConfirmUnadopt,
   isUnadopting = false,
@@ -52,7 +52,7 @@ export function UnadoptSessionModal({
 
   const serverDisplay = server ? `${server.name} (${server.host})` : session.serverId;
   const projectDisplay = project ? project.name : session.projectId;
-  const agentDisplay = agent ? agent.name : session.agentId;
+
 
   return (
     <div

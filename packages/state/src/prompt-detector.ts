@@ -5,6 +5,7 @@ import { DEFAULT_PATTERN_RULES } from './rules/default-rules.js';
  * ANSI escape sequence regex matching standard VT100/xterm control codes.
  */
 const ANSI_REGEX =
+  // eslint-disable-next-line no-control-regex
   /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g;
 
 /**

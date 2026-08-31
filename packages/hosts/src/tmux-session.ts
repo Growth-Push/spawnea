@@ -103,7 +103,7 @@ export class TmuxManager {
     const fullCommand =
       envPrefix +
       [command, ...(args || [])]
-        .map((part) => (/[ \t\n"'\\$`!*?~#&;|<>()\[\]{}]/.test(part) ? escapeShellArg(part) : part))
+        .map((part) => (/[ \t\n"'\\$`!*?~#&;|<>()[\]{}]/.test(part) ? escapeShellArg(part) : part))
         .join(' ');
 
     this.logger.info('Sending harness command to tmux session', { sessionName, fullCommand });

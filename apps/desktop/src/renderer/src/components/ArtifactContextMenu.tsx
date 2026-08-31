@@ -8,7 +8,7 @@ import {
   ExternalLink,
   Download,
   Trash2,
-  FileCode2,
+
 } from 'lucide-react';
 
 export interface ArtifactContextMenuProps {

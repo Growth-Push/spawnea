@@ -13,11 +13,11 @@ import {
   Trash2,
   ZoomIn,
   ZoomOut,
-  Maximize2,
+
   RotateCcw,
   Loader2,
   AlertTriangle,
-  FileCheck,
+
 } from 'lucide-react';
 
 export interface ArtifactPreviewModalProps {

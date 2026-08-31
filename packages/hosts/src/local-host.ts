@@ -226,7 +226,6 @@ export class LocalHostAdapter implements HostAdapter {
   ): Promise<import('@spawnea/domain').FileContentResult> {
     this.logger.debug('Reading local file', { filePath, maxBytes });
     const fs = await import('node:fs/promises');
-    const path = await import('node:path');
 
     try {
       const stats = await fs.stat(filePath);

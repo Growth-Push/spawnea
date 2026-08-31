@@ -3,7 +3,7 @@ import type { FileEntry, FileContentResult } from '@spawnea/domain';
 import { FilePreview } from './FilePreview';
 import {
   Folder,
-  FolderOpen,
+
   File,
   FileCode2,
   FileText,

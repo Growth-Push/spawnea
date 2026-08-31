@@ -433,7 +433,7 @@ describe('Domain Repositories & Logging Integration', () => {
     });
 
     it('verifies server entity persistence strictly stores host descriptors only', async () => {
-      const server = await repos.servers.save({
+      await repos.servers.save({
         id: 'srv-clean',
         name: 'Clean Host',
         host: 'remote.example.com',

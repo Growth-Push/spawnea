@@ -8,7 +8,7 @@ describe('PtyBroker', () => {
     const broker = new PtyBroker();
 
     let dataCb: (d: string) => void = () => {};
-    let exitCb: (c: number) => void = () => {};
+    let _exitCb: (c: number) => void = () => {};
 
     const mockStream: PtyStream = {
       id: 'pty-1',
@@ -17,7 +17,7 @@ describe('PtyBroker', () => {
         return () => {};
       },
       onExit: (cb) => {
-        exitCb = cb;
+        _exitCb = cb;
         return () => {};
       },
       write: vi.fn(),

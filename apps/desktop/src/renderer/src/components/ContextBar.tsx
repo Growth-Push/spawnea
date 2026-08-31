@@ -6,9 +6,7 @@ import {
   ChevronRight,
   GitBranch,
   GitFork,
-  Folder,
-  Server as ServerIcon,
-  Bot,
+
   Square,
   Unplug,
   Play,

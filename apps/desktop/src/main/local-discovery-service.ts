@@ -28,6 +28,8 @@ const RESERVED_ALIASES = new Set([
   'broadcasthost',
 ]);
 const HOST_ALIAS_REGEX = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
+// These control characters are intentionally rejected from host aliases.
+// eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTER_REGEX = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
 
 const HARNESS_CANDIDATES: ReadonlyArray<{

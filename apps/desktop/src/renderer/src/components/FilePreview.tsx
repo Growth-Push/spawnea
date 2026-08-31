@@ -9,7 +9,7 @@ import {
   X,
   AlertTriangle,
   FileQuestion,
-  Download,
+
   Star,
   Loader2,
 } from 'lucide-react';

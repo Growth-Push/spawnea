@@ -1,6 +1,6 @@
 import React from 'react';
 import type { Artifact } from '@spawnea/domain';
-import { Sparkles, Eye, FolderOpen, X, FileCode2 } from 'lucide-react';
+import { Sparkles, Eye, FolderOpen, X } from 'lucide-react';
 
 export interface DetectedOutputBannerProps {
   artifact: Artifact;

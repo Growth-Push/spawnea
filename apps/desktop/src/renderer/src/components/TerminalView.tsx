@@ -65,7 +65,7 @@ export function TerminalView({
   session,
   agent,
   onAttach,
-  onDetach,
+  onDetach: _onDetach,
   onDelete,
   onStatusChange,
 }: TerminalViewProps): React.JSX.Element {
@@ -89,7 +89,7 @@ export function TerminalView({
   const onAttachRef = useRef(onAttach);
   onAttachRef.current = onAttach;
 
-  const [ptyChannelId, setPtyChannelId] = useState<string | null>(null);
+  const [_ptyChannelId, setPtyChannelId] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<
     'connecting' | 'connected' | 'error' | 'disconnected'
   >(session.status === 'done' ? 'disconnected' : 'connecting');
@@ -252,6 +252,8 @@ export function TerminalView({
           // 3. Hook up user keyboard input (with DA sequence filter to prevent leaking 0;276;0c)
           const termInputDisposable = term.onData((data) => {
             // Filter out any leaked DA escape responses from xterm.js
+            // Device-attribute responses are intentionally matched as control sequences.
+            // eslint-disable-next-line no-control-regex
             if (/^\x1b\[(\?|>|=)?[0-9;]*c$/.test(data)) {
               return;
             }

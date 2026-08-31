@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { TerminalView, createHttpLinkProvider, findHttpUrls } from './TerminalView.js';
-import type { Session, Agent, HostConnectionState } from '@spawnea/domain';
+import type { Session, HostConnectionState } from '@spawnea/domain';
 
 // Mock xterm.js and fit addon
 vi.mock('@xterm/xterm', () => {

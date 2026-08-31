@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
 import { NotificationBroker } from './notification-broker.js';
 import type { SessionStatusResult } from '@spawnea/domain';
-import { Notification, BrowserWindow } from 'electron';
+import { BrowserWindow } from 'electron';
 
 const mockConstructor = vi.fn();
 const mockShow = vi.fn();

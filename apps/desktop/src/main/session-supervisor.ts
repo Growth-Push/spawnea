@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdir, writeFile } from 'node:fs/promises';
 import type {
-  Session,
+
   SessionSignals,
   SessionStatusResult,
   SessionStatus,

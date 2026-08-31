@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Check, Copy, Terminal, X, ArrowUpRight } from 'lucide-react';
+import { X } from 'lucide-react';
 
 export interface ToastAction {
   label: string;

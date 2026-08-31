@@ -54,9 +54,9 @@ const SENSITIVE_KEY_PATTERNS = [
 ];
 
 const PRIVATE_KEY_REGEX = /(-----BEGIN [A-Z0-9\s_-]+PRIVATE KEY-----)[\s\S]*?(-----END [A-Z0-9\s_-]+PRIVATE KEY-----)/gi;
-const BEARER_TOKEN_REGEX = /Bearer\s+[A-Za-z0-9_\-\.~+\/=]+/gi;
-const API_KEY_REGEX = /(sk-[a-zA-Z0-9_\-]{8,}|ghp_[a-zA-Z0-9]{15,}|gho_[a-zA-Z0-9]{15,}|glpat-[a-zA-Z0-9\-_]{15,})/g;
-const URL_AUTH_REGEX = /([a-zA-Z0-9+.-]+:\/\/)([^:\/\s@]+):([^@\/\s]+)@/gi;
+const BEARER_TOKEN_REGEX = /Bearer\s+[A-Za-z0-9_\-.~+/=]+/gi;
+const API_KEY_REGEX = /(sk-[a-zA-Z0-9_-]{8,}|ghp_[a-zA-Z0-9]{15,}|gho_[a-zA-Z0-9]{15,}|glpat-[a-zA-Z0-9\-_]{15,})/g;
+const URL_AUTH_REGEX = /([a-zA-Z0-9+.-]+:\/\/)([^:/\s@]+):([^@/\s]+)@/gi;
 const OP_REFERENCE_REGEX = /op:\/\/[^\r\n]*/gi;
 const registeredSensitiveValues = new Map<string, number>();
 

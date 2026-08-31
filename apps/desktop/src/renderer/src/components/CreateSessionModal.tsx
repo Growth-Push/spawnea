@@ -321,9 +321,7 @@ export function CreateSessionModal({
 
   if (!isOpen) return null;
 
-  const selectedServer = servers.find((s) => s.id === serverId);
   const selectedProject = projects.find((p) => p.id === projectId);
-  const selectedAgent = agents.find((a) => a.id === agentId);
 
   const catalogHost = catalog?.hosts[serverId] || (serverId ? Object.values(catalog?.hosts || {}).find((h) => h.name === serverId) : undefined);
   const catalogProject = catalogHost?.projects

@@ -198,7 +198,7 @@ export class MockHostAdapter implements HostAdapter {
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
-  async openPty(command: string, options: PtyOptions): Promise<PtyStream> {
+  async openPty(_command: string, _options: PtyOptions): Promise<PtyStream> {
     if (!this.connected) {
       await this.connect();
     }

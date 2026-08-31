@@ -1,3 +1,5 @@
+// Control characters are intentionally rejected from secret references.
+// eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTER_REGEX = /[\x00-\x1f\x7f]/;
 
 export type SecretReference = string & { readonly __secretReference: unique symbol };

@@ -28,7 +28,6 @@ import {
   Info,
   Copy,
   Check,
-  Download,
   RefreshCw,
   Server as ServerIcon,
   Loader2,

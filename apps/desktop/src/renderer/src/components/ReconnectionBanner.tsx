@@ -1,6 +1,6 @@
 import React from 'react';
 import type { HostConnectionState } from '@spawnea/domain';
-import { WifiOff, RefreshCw, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { WifiOff, RefreshCw } from 'lucide-react';
 
 export interface ReconnectionBannerProps {
   hostState: HostConnectionState;
@@ -18,7 +18,6 @@ export function ReconnectionBanner({
   }
 
   const isReconnecting = hostState.status === 'reconnecting';
-  const isDisconnected = hostState.status === 'disconnected';
 
   return (
     <div

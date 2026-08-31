@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { AgentIcon, detectProviderType, getProviderDisplayName } from './AgentIcon';
+import { AgentIcon, detectProviderType } from './AgentIcon';
 
 describe('AgentIcon Component & detectProviderType', () => {
   it('detects provider types correctly from harness, name, or command', () => {

@@ -8,7 +8,7 @@ import type {
   GitBranchDiscoveryResult,
   GitDiffFile,
   GitDiffHunk,
-  GitDiffHunkLine,
+
   ManagedWorktreeInspection,
   Logger,
 } from '@spawnea/domain';
@@ -899,7 +899,6 @@ export function parseGitDiff(rawDiff: string): GitDiffResult {
         const oldLines = hunkMatch[2] ? parseInt(hunkMatch[2], 10) : 1;
         const newStart = parseInt(hunkMatch[3], 10);
         const newLines = hunkMatch[4] ? parseInt(hunkMatch[4], 10) : 1;
-        const header = hunkMatch[5]?.trim() || '';
 
         oldLine = oldStart;
         newLine = newStart;
