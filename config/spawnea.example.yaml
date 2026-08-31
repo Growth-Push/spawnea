@@ -1,0 +1,128 @@
+# Spawnea Pilot 1 operational catalog example
+# Canonical operational catalog example for Spawnea.
+
+version: 1
+
+hosts:
+  local:
+    name: Local Workstation
+    enabled: true
+
+    projects:
+      spawnea:
+        name: Spawnea
+        path: ~/code/Spawnea
+        git_url: https://github.com/example/Spawnea.git
+        worktree:
+          enabled: true
+          copy_files:
+            - .envrc.custom
+        enabled: true
+
+      scratch:
+        name: Local Scratch
+        path: ~/work/scratch
+        enabled: true
+
+    harnesses:
+      claude:
+        name: Claude Code
+        command: claude
+        args: []
+        enabled: true
+
+      codex:
+        name: Codex
+        command: codex
+        args: []
+        enabled: true
+
+      antigravity:
+        name: Antigravity
+        command: agy
+        args: []
+        enabled: true
+
+      shell:
+        name: Interactive Shell
+        command: zsh
+        args: []
+        enabled: true
+
+  dev-workstation:
+    name: Development Workstation
+    enabled: true
+    ssh:
+      target: example-host
+      user: developer
+      port: 22
+
+    projects:
+      spawnea:
+        name: Spawnea
+        path: ~/code/Spawnea
+        git_url: https://github.com/example/Spawnea.git
+        enabled: true
+
+      scratch:
+        name: Remote Scratch
+        path: ~/work/scratch
+        enabled: true
+
+    harnesses:
+      codex:
+        name: Codex
+        command: codex
+        args: []
+        enabled: true
+
+      hermes-python:
+        name: Hermes Python Dev
+        command: hermes
+        args:
+          - agent
+          - example-agent-profile
+        enabled: true
+
+      shell:
+        name: Shell
+        command: zsh
+        args: []
+        enabled: true
+
+  deployment-example:
+    name: Deployment Example
+    enabled: false
+    ssh:
+      target: example-host
+      user: deploy
+
+    projects: {}
+    harnesses:
+      shell:
+        name: Shell
+        command: sh
+        args: []
+        enabled: true
+
+# 1Password-backed profile example (copy, uncomment, and replace only the
+# placeholder vault/item names with your own full op:// references):
+#
+#  secure-remote:
+#    name: Secure remote
+#    enabled: false
+#    ssh:
+#      target: op://example-vault/example-server/hostname
+#      user: op://example-vault/example-server/username
+#      port: op://example-vault/example-server/port
+#    projects:
+#      customer-app:
+#        name: Customer app
+#        path: op://example-vault/example-server/project-root
+#        enabled: true
+#    harnesses:
+#      shell:
+#        name: Shell
+#        command: sh
+#        args: []
+#        enabled: true

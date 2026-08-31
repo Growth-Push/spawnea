@@ -1,0 +1,7 @@
+# Local machine-specific overrides (uncommitted)
+# Copy this file to .envrc.custom and adjust values as needed.
+
+# export SPAWNEA_LOG_LEVEL="trace"
+# export SPAWNEA_PORT=3000
+# Set this to 0/false/off/disabled only when the local MCP control socket is not wanted.
+# export SPAWNEA_CONTROL_ENABLED="0"

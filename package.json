@@ -1,0 +1,48 @@
+{
+  "name": "spawnea",
+  "productName": "Spawnea",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A local-first desktop IDE for operating AI coding agents across local and remote machines.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.15.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @spawnea/desktop dev",
+    "start": "pnpm build && ./apps/desktop/node_modules/.bin/electron --ozone-platform-hint=auto apps/desktop/out/main/index.js",
+    "app": "./apps/desktop/node_modules/.bin/electron --ozone-platform-hint=auto apps/desktop/out/main/index.js",
+    "build": "pnpm -r build",
+
+
+    "smoke": "pnpm --filter @spawnea/desktop smoke",
+
+    "test:smoke": "pnpm smoke",
+    "privacy:check": "node scripts/privacy-check.mjs",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r --if-present lint",
+    "test": "pnpm --filter @spawnea/db rebuild better-sqlite3 && pnpm -r test",
+    "validate": "pnpm privacy:check && pnpm typecheck && pnpm test && pnpm build && pnpm smoke",
+    "ci": "pnpm validate"
+  },
+  "devDependencies": {
+    "@types/ssh2": "^1.15.5",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "core-js",
+      "electron",
+      "esbuild",
+      "node-pty",
+      "sqlite3"
+    ],
+    "ignoredBuiltDependencies": [
+      "cpu-features",
+      "ssh2"
+    ]
+  }
+}
