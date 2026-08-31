@@ -1,4 +1,5 @@
 export * from './ssh-config.js';
+export * from './known-hosts.js';
 export * from './ssh-host.js';
 export * from './local-host.js';
 export * from './mock-host.js';

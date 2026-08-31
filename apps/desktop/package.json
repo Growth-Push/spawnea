@@ -6,7 +6,8 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-rebuild -f --only better-sqlite3,node-pty && electron-vite dev",
+    "electron:ensure": "install-electron",
+    "dev": "pnpm electron:ensure && electron-rebuild -f --only better-sqlite3,node-pty && electron-vite dev",
     "start": "electron --ozone-platform-hint=auto out/main/index.js",
     "preview": "electron-vite preview",
     "build": "electron-rebuild -f --only better-sqlite3,node-pty && electron-vite build",

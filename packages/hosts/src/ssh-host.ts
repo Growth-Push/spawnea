@@ -18,6 +18,7 @@ import type {
 import { createLogger, maskSensitiveString } from '@spawnea/domain';
 import { resolveSshTarget, type ResolvedSshConfig } from './ssh-config.js';
 import { HostReconnectionSupervisor } from './reconnection-supervisor.js';
+import { createKnownHostsVerifier } from './known-hosts.js';
 
 export interface SSHHostOptions {
   serverId: string;
@@ -25,6 +26,7 @@ export interface SSHHostOptions {
   user?: string;
   port?: number;
   configPath?: string;
+  knownHostsPath?: string;
   supervisor?: HostReconnectionSupervisor;
   logger?: Logger;
   displayTarget?: string;
@@ -43,6 +45,7 @@ export class SSHHostAdapter implements HostAdapter {
   private readonly explicitUser?: string;
   private readonly explicitPort?: number;
   private readonly configPath?: string;
+  private readonly knownHostsPath?: string;
   private readonly logger: Logger;
   private readonly supervisor: HostReconnectionSupervisor;
   private readonly displayTarget: string;
@@ -63,6 +66,7 @@ export class SSHHostAdapter implements HostAdapter {
     this.explicitUser = options.user;
     this.explicitPort = options.port;
     this.configPath = options.configPath;
+    this.knownHostsPath = options.knownHostsPath;
     this.logger = options.logger || createLogger(`SSHHost:${options.serverId}`);
     this.supervisor = options.supervisor || new HostReconnectionSupervisor({ logger: this.logger.child('reconnection') });
     this.displayTarget = options.displayTarget ?? options.target;
@@ -191,6 +195,7 @@ export class SSHHostAdapter implements HostAdapter {
         username: resolved.user,
         readyTimeout: 10000,
         keepaliveInterval: 15000,
+        hostVerifier: createKnownHostsVerifier(resolved.hostname, resolved.port ?? 22, this.knownHostsPath),
       };
 
       // Honor the selected host's OpenSSH IdentityAgent, including a local

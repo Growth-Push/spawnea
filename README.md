@@ -56,6 +56,8 @@ pnpm validate
 pnpm dev
 ```
 
+Spawnea requires the exact pnpm version declared in `package.json`. Before `pnpm run` or `pnpm exec`, pnpm automatically installs dependencies when `node_modules` is missing or out of sync with the workspace manifests and lockfile.
+
 Copy [`config/spawnea.example.yaml`](config/spawnea.example.yaml) to the per-user data directory shown by the application, then customize that local file. Spawnea does not load operational configuration from the repository working tree.
 
 Run `pnpm privacy:check` before publishing changes. Add private names, aliases, hostnames, and customer identifiers to a local `.privacy-denylist`, one value per line, to extend the automated scan.
