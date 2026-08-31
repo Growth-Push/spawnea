@@ -1,0 +1,42 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+@layer base {
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #0d1117;
+    color: #c9d1d9;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+}
+
+/* Hide xterm scrollbar completely */
+.xterm .xterm-viewport {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+  overflow-y: scroll !important;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+  background: transparent !important;
+}
+
+/* Clean dark scrollbars for the rest of the application */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0d1117;
+}
+::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #484f58;
+}

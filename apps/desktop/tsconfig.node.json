@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tooling/tsconfig/node.json",
+  "compilerOptions": {
+    "composite": true,
+    "types": ["node", "electron-vite/node"]
+  },
+  "include": [
+    "electron.vite.config.ts",
+    "vitest.config.ts",
+    "src/main/**/*",
+    "src/mcp/**/*",
+    "src/preload/**/*"
+  ]
+}
