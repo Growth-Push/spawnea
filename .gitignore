@@ -174,4 +174,6 @@ config/spawnea.local.yaml
 config/config.yaml
 *.local.yaml
 
+# Private planning notes
+docs/task/
 docs/tasks/

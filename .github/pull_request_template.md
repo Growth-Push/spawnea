@@ -4,11 +4,11 @@ Describe what this PR changes and why.
 
 ## Related task / issue
 
-Link the relevant `docs/tasks/...` file or GitHub issue.
+Link the relevant GitHub issue when applicable.
 
 ## What changed
 
-- 
+-
 
 ## Validation
 
