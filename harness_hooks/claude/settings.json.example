@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/tmp/spawnea/sess-example/bin/hook-handler.sh sess-example tool_start"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/tmp/spawnea/sess-example/bin/hook-handler.sh sess-example tool_complete"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "/tmp/spawnea/sess-example/bin/hook-handler.sh sess-example turn_complete"
+      }
+    ]
+  }
+}
