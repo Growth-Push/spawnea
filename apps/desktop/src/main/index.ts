@@ -781,7 +781,7 @@ function createWindow(): void {
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: preloadPath,
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
     },
