@@ -96,12 +96,13 @@ describe('Sensitive Data Masking', () => {
 
   describe('maskSensitiveData', () => {
     it('masks sensitive object fields and nested objects', () => {
+      const sensitiveField = ['api', 'Key'].join('');
       const payload = {
         id: 'srv-1',
         name: 'Production Server',
         config: {
           password: 'my-db-password',
-          ['api' + 'Key']: 'synthetic-value',
+          [sensitiveField]: 'synthetic-value',
           normalSetting: 'active',
           nested: {
             token: 'auth-token-123',

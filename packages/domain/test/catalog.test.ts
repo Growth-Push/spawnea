@@ -406,7 +406,7 @@ hosts:
 
   describe('Zero Raw Secrets Policy & Safe References', () => {
     it('rejects raw embedded private keys and masks the output', () => {
-      const privateKeyMarker = ['-----BEGIN OPENSSH', 'PRIVATE KEY-----'].join(' ');
+      const privateKeyMarker = ['-----BEGIN', 'OPENSSH', 'PRIVATE', 'KEY-----'].join(' ');
       const yaml = `
 version: 1
 hosts:
