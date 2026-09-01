@@ -100,8 +100,6 @@ Run `pnpm privacy:check` before publishing changes. Never commit credentials, SS
 
 Spawnea is released under the [Apache License 2.0](LICENSE).
 
-## Wizard demo
-
 <p align="center">
   <img src="docs/assets/spawnea-wizard.gif" alt="Spawnea wizard casting agent sessions" width="480">
 </p>
