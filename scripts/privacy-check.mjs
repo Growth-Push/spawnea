@@ -1,12 +1,10 @@
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { extname, relative, resolve } from 'node:path';
+import { extname, resolve } from 'node:path';
 import process from 'node:process';
-import { promisify } from 'node:util';
+import { collectRepositoryFiles } from './privacy-check-files.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const execFileAsync = promisify(execFile);
 const ignoredFiles = new Set(['scripts/privacy-check.mjs', '.privacy-denylist']);
 const dependencyMetadataFiles = new Set(['pnpm-lock.yaml']);
 const approvedVisualAssets = new Map([
@@ -51,18 +49,6 @@ async function loadDenylist() {
   }
 }
 
-async function collectFiles() {
-  const { stdout } = await execFileAsync(
-    'git',
-    ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
-    { cwd: root, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
-  );
-  return stdout
-    .split('\0')
-    .filter(Boolean)
-    .map((filePath) => resolve(root, filePath));
-}
-
 function addFinding(filePath, lineNumber, message) {
   findings.push(`${filePath}:${lineNumber}: ${message}`);
 }
@@ -75,10 +61,9 @@ function isAllowedIpv4(address) {
 }
 
 const denylist = await loadDenylist();
-const files = await collectFiles();
+const files = await collectRepositoryFiles(root);
 
-for (const absolutePath of files) {
-  const filePath = relative(root, absolutePath);
+for (const { absolutePath, filePath } of files) {
   const extension = extname(filePath).toLowerCase();
   if (visualAssetExtensions.has(extension)) {
     const approvedDigest = approvedVisualAssets.get(filePath);

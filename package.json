@@ -24,7 +24,8 @@
     "license:check": "node scripts/license-check.mjs",
     "typecheck": "pnpm -r typecheck",
     "lint": "oxlint apps packages scripts --deny-warnings",
-    "test": "pnpm --filter @spawnea/db rebuild better-sqlite3 && pnpm -r test",
+    "test": "pnpm test:scripts && pnpm --filter @spawnea/db rebuild better-sqlite3 && pnpm -r test",
+    "test:scripts": "node --test scripts/*.test.mjs",
     "validate": "pnpm privacy:check && pnpm typecheck && pnpm test && pnpm build && pnpm smoke",
     "ci": "pnpm validate"
   },

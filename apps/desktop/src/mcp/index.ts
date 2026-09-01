@@ -6,6 +6,7 @@ import {
   type ControlRuntimeDescriptor,
 } from '@spawnea/domain';
 import { resolveControlRuntimeFileCandidates } from '../main/control-runtime.js';
+import { attachMcpBridgeSocket } from './socket-bridge.js';
 
 function runtimeFilesFromArgs(argv: string[]): string[] {
   const index = argv.indexOf('--runtime-file');
@@ -55,34 +56,21 @@ async function main(): Promise<void> {
   }
   if (!descriptor) throw missingError ?? new Error('Spawnea control runtime was not found');
   const socket = createConnection(descriptor.socketPath);
-  let connectionFailed = false;
-
-  socket.once('connect', () => {
-    socket.write(`${JSON.stringify({ type: 'spawnea-auth', token: descriptor.token })}\n`);
-    process.stdin.pipe(socket);
-    socket.pipe(process.stdout);
-    process.stdin.resume();
+  const shutdown = attachMcpBridgeSocket(socket, descriptor.token, {
+    stdin: process.stdin,
+    stdout: process.stdout,
+    reportConnectionError: (error) => {
+      console.error(`Spawnea MCP bridge could not connect: ${error.message}`);
+    },
+    setExitCode: (code) => {
+      process.exitCode = code;
+    },
   });
-  socket.once('error', (error) => {
-    console.error(`Spawnea MCP bridge could not connect: ${error.message}`);
-    connectionFailed = true;
-  });
-  socket.once('close', () => {
-    if (!process.stdin.destroyed) process.stdin.pause();
-    // The desktop gateway owns the socket. Once Spawnea exits, this one-shot
-    // stdio bridge must exit too so the MCP client can restart it cleanly.
-    process.exit(connectionFailed ? 1 : 0);
-  });
-
-  const shutdown = () => {
-    process.stdin.unpipe(socket);
-    socket.end();
-  };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
 }
 
 main().catch((error) => {
   console.error(`Spawnea MCP bridge failed: ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
+  process.exitCode = 1;
 });
