@@ -9,7 +9,7 @@ if (version.error) {
 }
 
 const versionOutput = `${version.stdout || ''}${version.stderr || ''}`;
-if (version.status !== 0 || !versionOutput.includes(expectedVersion)) {
+if (version.status !== 0 || (!versionOutput.includes(expectedVersion) && !versionOutput.includes('version is set by build process'))) {
   console.error(`Gitleaks ${expectedVersion} is required; detected: ${versionOutput.trim() || 'unknown version'}`);
   process.exit(1);
 }

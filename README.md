@@ -13,10 +13,6 @@
   <img src="https://img.shields.io/badge/pnpm-10-F69220.svg" alt="pnpm 10">
 </p>
 
-<p align="center">
-  <img src="docs/assets/spawnea-session.png" alt="Spawnea desktop session" width="1100">
-</p>
-
 Spawnea brings terminals, persistent `tmux` sessions, Git worktrees, files, artifacts, and agent attention state into one desktop workspace. It is harness-agnostic: Codex, Hermes, Claude Code, Antigravity, OpenCode, shell commands, and other CLI agents can run as first-class sessions.
 
 ## Why Spawnea
@@ -65,6 +61,14 @@ For a production-style local build:
 pnpm build
 pnpm start
 ```
+
+To package the desktop application for the current host without publishing:
+
+```sh
+pnpm package:desktop:host
+```
+
+See [Desktop distribution](docs/desktop-distribution.md) for supported release artifacts and the GitHub Release process.
 
 Operational configuration is user-owned runtime data and is documented separately. It is not loaded from the repository working tree.
 
