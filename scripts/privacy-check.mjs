@@ -1,9 +1,9 @@
 import { readFile, readdir } from 'node:fs/promises';
-import { relative, resolve } from 'node:path';
+import { extname, relative, resolve } from 'node:path';
 import process from 'node:process';
 
 const root = resolve(import.meta.dirname, '..');
-const ignoredDirectories = new Set([
+const ignoredNames = new Set([
   '.git',
   '.pnpm-store',
   '.references',
@@ -15,6 +15,21 @@ const ignoredDirectories = new Set([
   'release',
 ]);
 const ignoredFiles = new Set(['scripts/privacy-check.mjs', '.privacy-denylist']);
+const ignoredExtensions = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.ico',
+  '.pdf',
+  '.woff',
+  '.woff2',
+  '.ttf',
+  '.eot',
+  '.wasm',
+  '.node',
+]);
 const allowedEmailDomains = new Set([
   'example.com',
   'example.invalid',
@@ -40,7 +55,7 @@ async function collectFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
+    if (ignoredNames.has(entry.name)) continue;
     const absolutePath = resolve(directory, entry.name);
     if (entry.isDirectory()) files.push(...await collectFiles(absolutePath));
     else if (entry.isFile()) files.push(absolutePath);
@@ -68,6 +83,7 @@ for (const absolutePath of files) {
     ignoredFiles.has(filePath)
     || filePath.endsWith('.log')
     || filePath.endsWith('log.txt')
+    || ignoredExtensions.has(extname(filePath).toLowerCase())
   ) continue;
 
   let content;

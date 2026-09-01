@@ -21,6 +21,7 @@
     "test:smoke": "pnpm smoke",
     "privacy:check": "node scripts/privacy-check.mjs",
     "secret:scan": "node scripts/secret-scan.mjs",
+    "license:check": "node scripts/license-check.mjs",
     "typecheck": "pnpm -r typecheck",
     "lint": "oxlint apps packages scripts --deny-warnings",
     "test": "pnpm --filter @spawnea/db rebuild better-sqlite3 && pnpm -r test",
