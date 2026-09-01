@@ -62,6 +62,7 @@ export function App(): React.JSX.Element {
   const [sessionToFinish, setSessionToFinish] = useState<Session | null>(null);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [startupError, setStartupError] = useState<string | null>(null);
   const [controlFinalizationRequests, setControlFinalizationRequests] = useState<ControlFinalizationRequest[]>([]);
 
   // Tab persistence helper
@@ -178,49 +179,9 @@ export function App(): React.JSX.Element {
           return loadedSessions.length > 0 ? loadedSessions[0].id : null;
         });
       } else {
-        // Standalone browser preview / fallback mode
-        const fallbackServer: Server = {
-          id: 'srv-local',
-          name: 'Local Workstation',
-          host: 'localhost',
-          sshPort: 22,
-          enabled: true,
-          createdAt: new Date(),
-        };
-        const fallbackProject: Project = {
-          id: 'proj-spawnea',
-          serverId: 'srv-local',
-          name: 'Spawnea',
-          rootPath: '/workspace/spawnea',
-          createdAt: new Date(),
-        };
-        const fallbackAgent: Agent = {
-          id: 'agent-claude',
-          name: 'Claude Code',
-          harness: 'claude',
-          command: 'claude',
-          createdAt: new Date(),
-        };
-        const fallbackSession: Session = {
-          id: 'sess-dev',
-          name: 'Task 1.4 — Navigation & Session Shell',
-          serverId: 'srv-local',
-          projectId: 'proj-spawnea',
-          agentId: 'agent-claude',
-          task: 'Implement desktop navigation and session shell',
-          worktreePath: '/workspace/spawnea',
-          branch: 'main',
-          tmuxSessionName: 'spawnea-nav-shell',
-          status: 'working',
-          createdAt: new Date(),
-          lastActivityAt: new Date(),
-        };
-
-        setServers([fallbackServer]);
-        setProjects([fallbackProject]);
-        setAgents([fallbackAgent]);
-        setSessions([fallbackSession]);
-        setActiveSessionId(fallbackSession.id);
+        setStartupError(
+          'The Electron preload bridge is unavailable. Spawnea cannot load operational data.'
+        );
       }
     } catch (err) {
       console.error('Failed to load Spawnea data:', err);
@@ -827,6 +788,24 @@ export function App(): React.JSX.Element {
   const activeServer = activeSession ? servers.find((s) => s.id === activeSession.serverId) : undefined;
   const activeProject = activeSession ? projects.find((p) => p.id === activeSession.projectId) : undefined;
   const activeAgent = activeSession ? agents.find((a) => a.id === activeSession.agentId) : undefined;
+
+  if (startupError || !window.spawneaApi) {
+    return (
+      <main className="flex h-screen w-screen items-center justify-center bg-[#0d1117] px-6 text-[#c9d1d9]">
+        <section className="w-full max-w-2xl rounded-lg border border-red-500/40 bg-[#161b22] p-6 shadow-xl">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-red-400">Spawnea startup failure</p>
+          <h1 className="mb-3 text-xl font-semibold text-white">The desktop bridge is unavailable</h1>
+          <p className="mb-4 text-sm text-zinc-300">
+            Spawnea stopped before loading your operational catalog. No fallback data was loaded.
+          </p>
+          <pre className="overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-red-300">
+            {startupError ?? 'window.spawneaApi is not available'}
+          </pre>
+          <p className="mt-4 text-xs text-zinc-500">Check the Electron terminal and log.txt for the preload error.</p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <div className="flex h-screen w-screen bg-[#0d1117] text-[#c9d1d9] overflow-hidden select-none font-sans">

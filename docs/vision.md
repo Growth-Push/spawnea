@@ -38,7 +38,15 @@ Remote Linux machines are accessed through standard SSH/SFTP. The MVP should not
 
 ### Zero Required Remote Installation
 
-Spawnea must operate on remote hosts without requiring the installation of background daemons, packages, plugins, or global configuration modifications (`~/.codex/`, `~/.claude/`, `~/.config/opencode/`, shell rc files, `/etc/`). It leverages standard tools (SSH, tmux, ps, POSIX utilities) and non-invasive inspections (`tmux capture-pane`), creating temporary/session-scoped state only when useful. Optional harness-specific integrations may be supported later, but base functionality works without them.
+Spawnea must operate on remote hosts without installing Spawnea software, background daemons, packages, plugins, hooks, or global configuration modifications (`~/.codex/`, `~/.claude/`, `~/.config/opencode/`, shell rc files, `/etc/`). For a host already reachable over SSH, Spawnea-managed sessions require only the standard `tmux` command on the target; the configured agent command and its dependencies remain user-managed. Spawnea uses standard SSH, tmux, and POSIX utilities plus non-invasive inspections such as `tmux capture-pane`. No resident Spawnea process runs on the remote host.
+
+### Output-driven state detection
+
+Session attention state is inferred from observable runtime state and terminal output. Hermes status detection reads the tmux terminal tail, parses rendered prompts and responses, and maps them to normalized states. Hermes hooks, event files, and helper processes are not required by the base runtime.
+
+### Terminal privacy boundary
+
+The terminal view uses the open-source `@xterm/xterm` library, with `node-pty` and `ssh2` for PTY and SSH transport. Spawnea streams terminal bytes to the UI but does not record a terminal transcript or upload terminal data to a Spawnea service. Local operational metadata, logs, artifacts, and explicitly requested diagnostic reports remain separate persistence features.
 
 ### Native workspace isolation
 

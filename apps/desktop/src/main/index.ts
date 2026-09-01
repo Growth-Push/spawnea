@@ -814,6 +814,19 @@ function createWindow(): void {
     logger.error('Renderer failed to load', { errorCode, errorDescription, validatedURL });
   });
 
+  mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+    logger.error('Preload script failed to load', {
+      preloadPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (level >= 2) {
+      logger.warn('Renderer console message', { level, message, line, sourceId });
+    }
+  });
+
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     logger.error('Renderer process gone', { reason: details.reason, exitCode: details.exitCode });
   });

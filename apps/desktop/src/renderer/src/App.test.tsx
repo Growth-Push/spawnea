@@ -360,23 +360,17 @@ describe('App Desktop Shell', () => {
   });
 
   afterEach(() => {
-    // Keep the preload bridge from leaking between tests. Several tests
-    // intentionally exercise both bridge and standalone fallback modes.
+    // Keep the preload bridge from leaking between tests.
     // @ts-expect-error test cleanup
     delete window.spawneaApi;
   });
 
-  it('renders standalone fallback when window.spawneaApi is not present', () => {
+  it('renders a fatal startup error when window.spawneaApi is not present', () => {
     // @ts-expect-error test cleanup
     delete window.spawneaApi;
     render(<App />);
-    expect(screen.getAllByText('Spawnea').length).toBeGreaterThan(0);
-    expect(screen.getByText('Active Sessions (1)')).toBeDefined();
-    expect(screen.getByText('Terminal (tmux)')).toBeDefined();
-    expect(screen.getByText('Files')).toBeDefined();
-    expect(screen.getByText('Git Diff')).toBeDefined();
-    expect(screen.getByText('Artifacts')).toBeDefined();
-    expect(screen.getByText('Session Info')).toBeDefined();
+    expect(screen.getByText('The desktop bridge is unavailable')).toBeDefined();
+    expect(screen.getByText(/No fallback data was loaded/i)).toBeDefined();
   });
 
   it('loads sessions, servers, projects, and agents from window.spawneaApi', async () => {

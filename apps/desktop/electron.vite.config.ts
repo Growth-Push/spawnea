@@ -21,8 +21,12 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ['@spawnea/domain'] })],
     build: {
       rollupOptions: {
+        external: ['electron'],
         input: {
           index: resolve(__dirname, 'src/preload/index.ts'),
+        },
+        output: {
+          format: 'cjs',
         },
       },
     },

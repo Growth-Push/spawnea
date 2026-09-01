@@ -1,82 +1,103 @@
-# Spawnea
+<p align="center">
+  <img src="docs/assets/spawnea-logo.png" alt="Spawnea" width="152">
+</p>
 
-Spawnea is a local-first desktop IDE for operating AI coding agents across projects, worktrees, tmux sessions, and local or remote machines.
+<p align="center">
+  A local-first desktop workspace for running and coordinating AI coding agents.
+</p>
 
-It is designed to be harness-agnostic: Codex, Claude Code, Hermes, OpenCode, shell commands, and other CLI agents should all be able to run as first-class sessions.
+<p align="center">
+  <a href="https://github.com/Growth-Push/spawnea/actions/workflows/ci.yml"><img src="https://github.com/Growth-Push/spawnea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 license"></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D24-339933.svg" alt="Node.js 24 or newer">
+  <img src="https://img.shields.io/badge/pnpm-10-F69220.svg" alt="pnpm 10">
+</p>
 
-## Product direction
+<p align="center">
+  <img src="docs/assets/spawnea-session.png" alt="Spawnea desktop session" width="1100">
+</p>
 
-Spawnea combines:
+Spawnea brings terminals, persistent `tmux` sessions, Git worktrees, files, artifacts, and agent attention state into one desktop workspace. It is harness-agnostic: Codex, Hermes, Claude Code, Antigravity, OpenCode, shell commands, and other CLI agents can run as first-class sessions.
 
-- persistent `tmux` sessions;
-- Git workspace/worktree support;
-- SSH/SFTP access to remote hosts;
-- an integrated terminal;
-- session-aware files and Git changes;
-- input/output artifacts;
-- clipboard and file transfer to remote agents;
-- attention states such as working, needs input, done, and error.
+## Why Spawnea
 
-The active session is the current context: terminal, project, host, worktree, files, Git state, artifacts, and status all move together.
+AI coding sessions become difficult to operate when they are spread across terminal tabs, worktrees, servers, and disconnected status signals. Spawnea keeps the active context together: host, project, worktree, agent, terminal, files, Git state, artifacts, and attention state.
 
-## Status
+Its philosophy is deliberately simple:
 
-Early development. Public examples are intentionally fictional; operational catalogs, credentials, databases, logs, and other machine-specific runtime data must remain local.
+- **Local-first:** the desktop application is the control plane; there is no hosted Spawnea backend.
+- **tmux-native:** long-running sessions survive Spawnea closing, updating, or crashing.
+- **Harness-agnostic:** an agent is a configured command, not a closed vendor integration.
+- **Remote-light:** remote hosts need existing SSH access and `tmux`; Spawnea installs nothing there.
+- **Observable:** session state comes from process, tmux, and terminal output rather than hidden hooks.
 
-## Architecture direction
+## What it does
 
-Initial stack:
+- Run Codex, Hermes, Claude Code, Antigravity, OpenCode, and shell sessions.
+- Manage local and remote hosts through SSH/SFTP.
+- Create and operate Git worktrees and branch-aware workspaces.
+- Keep a persistent terminal attached to each session.
+- Browse project files and inspect Git changes in context.
+- Transfer files and clipboard content to remote agent sessions.
+- Collect explicit input/output artifacts.
+- Surface normalized states such as working, needs input, idle, done, and error.
+- Coordinate multiple sessions from one searchable desktop interface.
+- Expose an explicit local MCP control surface for approved automation.
 
-- Electron
-- React
-- TypeScript
-- xterm.js
-- SQLite
-- SSH/SFTP
-- tmux
-- pnpm workspaces
+## Remote hosts and terminal data
 
-See [`docs/vision.md`](docs/vision.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/control-api-mcp.md`](docs/control-api-mcp.md).
+Spawnea does not install a daemon, package, plugin, hook, service, or background process on VPSs or other remote hosts. For a host that is already reachable over SSH, Spawnea-managed sessions only expect `tmux` to be available. The agent command and its dependencies remain user-managed.
 
-## Build, test, and run
+Hermes and other harness states are inferred by reading terminal/tmux output and parsing rendered prompts and responses. No harness hook, event file, or resident helper process is required by the base runtime.
+
+The terminal view uses the open-source [`@xterm/xterm`](https://github.com/xtermjs/xterm.js) library, with `node-pty` and `ssh2` for PTY and SSH transport. Terminal bytes are streamed to the local UI; Spawnea does not record a conversation transcript or upload terminal data to a Spawnea service. Local configuration, session metadata, logs, artifacts, and explicitly requested diagnostic reports remain separate persistence features.
+
+## Quick start
 
 ```sh
-# Install the workspace dependencies from the repository root:
 pnpm install --frozen-lockfile
-# Build all workspace packages and the Electron desktop app:
-pnpm build
-# Run the automated tests:
-pnpm test
-# The additional development checks are:
-pnpm typecheck
-pnpm lint
-# Run the complete validation suite, including the privacy scan, type checks, tests, build, and Electron smoke test, with:
-pnpm validate
-# Start the app in development mode with hot reload:
 pnpm dev
 ```
 
-Spawnea requires the exact pnpm version declared in `package.json`. Before `pnpm run` or `pnpm exec`, pnpm automatically installs dependencies when `node_modules` is missing or out of sync with the workspace manifests and lockfile.
+For a production-style local build:
 
-Copy [`config/spawnea.example.yaml`](config/spawnea.example.yaml) to the per-user data directory shown by the application, then customize that local file. Spawnea does not load operational configuration from the repository working tree.
-
-Run `pnpm privacy:check` before publishing changes. Add private names, aliases, hostnames, and customer identifiers to a local `.privacy-denylist`, one value per line, to extend the automated scan.
-
-## Development workflow
-
-Work is organized as epics and small executable tasks:
-
-```text
-docs/architecture.md
-docs/control-api-mcp.md
+```sh
+pnpm build
+pnpm start
 ```
 
-Each task should be independently understandable by a coding agent and should include scope, acceptance criteria, dependencies, and validation steps.
+Operational configuration is user-owned runtime data and is documented separately. It is not loaded from the repository working tree.
 
-## Reference implementations
+## Project status
 
-Before reinventing infrastructure, we study mature open-source projects that already solve parts of the problem, including Agent Orchestrator, Emdash, Nimbalyst, Tabby, and tmux. We reuse ideas and patterns selectively, and copy code only when licensing and attribution requirements are understood and satisfied.
+Spawnea is early-stage and under active development. Interfaces and runtime behavior may evolve before the first stable release.
+
+## Documentation
+
+- [Vision](docs/vision.md)
+- [Architecture](docs/architecture.md)
+- [Local control API and MCP](docs/control-api-mcp.md)
+- [Public-source privacy boundary](docs/public-source-privacy.md)
+
+Configuration and harness-specific setup will live in the project wiki or a dedicated documentation update.
+
+## Development
+
+```sh
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm validate
+```
+
+Run `pnpm privacy:check` before publishing changes. Never commit credentials, SSH keys, tokens, private host configuration, or machine-specific runtime data.
 
 ## License
 
-Apache License 2.0. See [`LICENSE`](LICENSE).
+Spawnea is released under the [Apache License 2.0](LICENSE).
+
+## Wizard demo
+
+<p align="center">
+  <img src="docs/assets/spawnea-wizard.gif" alt="Spawnea wizard casting agent sessions" width="480">
+</p>

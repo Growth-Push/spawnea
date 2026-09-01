@@ -8,7 +8,7 @@ The product treats **persistent `tmux` sessions** as the execution surface, whil
 
 ### Core Architectural Axioms
 1. **tmux as the Execution Core (Crash-proof & Zero Lock-in):** Long-running agents live inside native `tmux` sessions on standard Linux/SSH machines. Closing, updating, or crashing Spawnea does not kill running agents.
-2. **Zero Required Remote Installation:** Spawnea operates on remote hosts without requiring the installation of background daemons, packages, plugins, or global configuration modifications (`~/.codex/`, `~/.claude/`, `~/.config/opencode/`, shell rc files, `/etc/`). It leverages standard tools (SSH, tmux, ps, POSIX utilities) and non-invasive inspections (`tmux capture-pane`), creating temporary/session-scoped state only when useful. Optional harness-specific integrations may be supported later, but base functionality works without them.
+2. **Zero Required Remote Installation:** Spawnea operates on remote hosts without installing Spawnea software, background daemons, packages, plugins, hooks, or global configuration modifications (`~/.codex/`, `~/.claude/`, `~/.config/opencode/`, shell rc files, `/etc/`). For an already reachable SSH host, Spawnea-managed sessions require only `tmux` on the target; the configured agent command and its dependencies remain user-managed. Spawnea uses standard SSH, tmux, ps, POSIX utilities, and non-invasive inspections such as `tmux capture-pane`. No resident Spawnea process runs on the remote host.
 3. **Zero Stored Credentials (Strict Security):** Spawnea **never** stores SSH private keys, server passwords, or secrets. All authentication delegates to `~/.ssh/config`, configured `IdentityAgent` or `SSH_AUTH_SOCK` sockets (SSH Agent / 1Password / GPG), and OS-level authentication. SSH server identity is verified strictly against the user's `~/.ssh/known_hosts`; unknown or changed keys fail the connection.
 4. **Strict Process & Layer Isolation:** The Electron renderer is pure presentation (React UI). All filesystem, SSH, SQLite, PTY, and child process logic lives exclusively in the Electron Main process behind typed IPC boundaries.
 5. **Multi-Agent TDD Baseline:** Because the codebase is developed by AI coding agents, all domain logic, state machines, database models, and adapter contracts are covered by automated unit/contract tests to prevent regressions.
@@ -22,7 +22,7 @@ graph TD
     subgraph UI ["Electron Renderer Process (React 19 + TypeScript + Tailwind)"]
         Nav[Sidebar & Navigation Rail]
         SessionContext[Active Session Context State]
-        XTermPanel[xterm.js Terminal View]
+        XTermPanel[@xterm/xterm Terminal View]
         FilePanel[Dired-Style File Tree]
         DiffPanel[Git Diff Viewer]
         ArtifactPanel[Artifact & Image Inspector]
@@ -100,20 +100,15 @@ spawnea/
 │   ├── domain/                  # Pure types, Zod schemas, constants (Zero external framework deps)
 │   ├── db/                      # SQLite database connection, Drizzle schema, migrations, repositories
 │   ├── hosts/                   # HostAdapter interface + LocalHost & SSHHost implementations (ssh2)
-│   ├── workspaces/              # WorkspaceManager interface + GitWorktreeManager
-│   ├── sessions/                # SessionManager lifecycle state machine and session orchestrator
-│   ├── terminal/                # PTY stream broker, Tabby FlowControl buffer, and xterm configurations
-│   ├── state/                   # Attention state detector heuristics (working, needs_input, idle, done)
-│   └── artifacts/               # Bidirectional artifact ingestion, SFTP upload/download, local cache
+│   └── state/                   # Attention state detector and harness output parsers
 │
 ├── docs/                        # Architecture specs, build strategy, backlog, task files
-└── tooling/                     # Shared configs (ESLint, Oxlint, Prettier, Vitest, TSConfig)
+└── tooling/                     # Shared TypeScript configuration
 ```
 
 ### Module Dependency Hierarchy (Strict Unidirectional Flow)
-* `apps/desktop` $\longrightarrow$ `packages/sessions`, `packages/terminal`, `packages/db`, `packages/domain`
-* `packages/sessions` $\longrightarrow$ `packages/hosts`, `packages/workspaces`, `packages/state`, `packages/artifacts`, `packages/db`, `packages/domain`
-* `packages/hosts`, `packages/workspaces`, `packages/state`, `packages/artifacts`, `packages/db` $\longrightarrow$ `packages/domain`
+* `apps/desktop` $\longrightarrow$ `packages/db`, `packages/hosts`, `packages/state`, `packages/domain`
+* `packages/db`, `packages/hosts`, `packages/state` $\longrightarrow$ `packages/domain`
 * `packages/domain` $\longrightarrow$ **No dependencies** (Pure TypeScript + Zod)
 
 ---
@@ -321,27 +316,10 @@ export interface HostAdapter {
 }
 ```
 
-### 5.2 Workspace Manager (`packages/workspaces`)
-The `WorkspaceManager` interface abstracts Git worktree and tmux window lifecycle management.
+### 5.2 Git and tmux services
+Git worktree operations and tmux lifecycle operations are implemented by services in `packages/hosts`; session orchestration lives in the Electron Main process.
 
-```typescript
-export interface WorkspaceInfo {
-  handle: string;
-  branch: string;
-  path: string;
-  tmuxTarget: string;
-  isMainWorktree: boolean;
-}
-
-export interface WorkspaceManager {
-  createWorkspace(host: HostAdapter, project: Project, task: string, baseBranch?: string): Promise<WorkspaceInfo>;
-  openWorkspace(host: HostAdapter, project: Project, handle: string): Promise<void>;
-  listWorkspaces(host: HostAdapter, project: Project): Promise<WorkspaceInfo[]>;
-  removeWorkspace(host: HostAdapter, project: Project, handle: string, force?: boolean): Promise<void>;
-  mergeWorkspace(host: HostAdapter, project: Project, handle: string, targetBranch?: string): Promise<void>;
-  getDiff(host: HostAdapter, workspacePath: string): Promise<string>;
-}
-```
+The current implementation exposes these operations through `GitService`, `TmuxManager`, and `SessionManager`; there is no standalone `WorkspaceManager` package in the repository.
 
 ### 5.3 Attention State Detector (`packages/state`)
 
@@ -352,9 +330,9 @@ SessionSignals
 ├── runtime / tmux state (session exists, pane dead/alive, foreground command, host reachable)
 ├── foreground process (agent process alive, shell process active, pid)
 ├── PTY activity (lastOutputAt, lastInputAt, recentOutputBytes)
-├── terminal snapshot (tmux capture-pane tail: prompt detection, generic/harness patterns)
+├── terminal output snapshot (tmux capture-pane tail: prompt detection, generic/harness patterns)
 ├── process exit result (exit code, pane_dead)
-└── optional harness event (optional hooks, @spawnea_status)
+└── no remote harness hook or event process required
 
 SessionSignals ──► StateDetector ──► SessionStatusResult (status, confidence, source, detectedPrompt)
 ```
@@ -365,9 +343,7 @@ export type StatusSource =
   | 'process'
   | 'pty_activity'
   | 'terminal_prompt'
-  | 'process_exit'
-  | 'harness_hook'
-  | 'harness_event';
+  | 'process_exit';
 
 export interface SessionSignals {
   sessionId: string;
@@ -403,11 +379,13 @@ export interface StateDetector {
 }
 ```
 
+The domain retains event-related source values for adapter and fixture compatibility, but the current desktop supervisor supplies no harness events. The runtime path is tmux/process inspection, PTY activity, and parsed terminal output.
+
 #### Signal Precedence & Confidence
 ```text
-explicit harness event/hook / exit code (Confidence: 0.95 - 1.0)
+process exit code (Confidence: 1.0)
         ↓
-harness-specific prompt detector / capture-pane pattern (Confidence: 0.85)
+harness-specific output parser / capture-pane pattern (Confidence: 0.85)
         ↓
 generic terminal prompt heuristics (Confidence: 0.75)
         ↓
@@ -447,7 +425,7 @@ sequenceDiagram
     TMUX->>AGENT: Agent process begins running
     SM-->>IPC: Session entity + PTY channel ID
     IPC-->>UI: Session active
-    UI->>UI: Bind xterm.js to PTY channel
+    UI->>UI: Bind @xterm/xterm to PTY channel
 
     %% Interactive Terminal Flow
     User->>UI: Type command / keyboard input
@@ -617,12 +595,15 @@ export interface IpcChannels {
 
 ---
 
-## 9. Terminal Data Flow & Flow Control
+## 9. Terminal Data Flow
 
-To prevent Electron IPC bottlenecks and UI freezing when an AI agent dumps large outputs:
-1. **Flow Control Queue (Tabby Pattern):** Data from the PTY stream is written through a watermark buffer queue. If pending writes exceed the high watermark, the stream pauses read events until the xterm buffer drains past the low watermark.
-2. **WebGL Rendering with DOM Fallback:** Renderer initializes `@xterm/addon-webgl` for 60fps hardware acceleration. If a GPU context loss occurs, it catches the error and falls back gracefully to standard canvas/DOM rendering.
-3. **Resize Synchronization:** The React UI debounces `fit` calculations (50ms) and sends dimensions (`cols`, `rows`) via IPC to the Main process, which updates the remote tmux window size via SSH PTY window change requests.
+The PTY broker forwards output and input between the host adapter and the renderer, while recording only transient activity metrics (`lastOutputAt`, `lastInputAt`, and byte counts) for status detection:
+1. **Open-source terminal emulator:** The renderer uses `@xterm/xterm` for terminal emulation and `@xterm/addon-fit` for sizing. `node-pty` provides the PTY bridge and `ssh2` provides SSH transport.
+2. **Resize synchronization:** The React UI sends dimensions via IPC to the Main process, which resizes the PTY/tmux attachment.
+
+### 9.1 Terminal data retention boundary
+
+PTY bytes are forwarded to the renderer for live display and used transiently for activity metrics. Spawnea does not record a terminal transcript, upload terminal output to a Spawnea service, or run a remote terminal recorder. Status checks inspect a bounded `tmux capture-pane` tail in memory; that tail is not persisted as terminal history. Explicit state-feedback reports may persist a recent tail when the user submits a diagnostic report, and artifact actions may persist files the user uploads or the detector registers.
 
 ---
 
@@ -655,12 +636,11 @@ To ensure multiple coding agents can implement features without regressions:
 * **Unit Tests (Vitest):**
   * `packages/domain`: Validation tests for Zod schemas and domain models.
   * `packages/state`: Pure unit tests verifying prompt pattern matching and status state transitions (`working` $\to$ `needs_input` $\to$ `idle` $\to$ `done`).
-  * `packages/terminal`: Buffer queue and flow control watermark logic.
 * **Database & Repository Tests:**
   * `packages/db`: In-memory SQLite (`:memory:`) migrations, foreign key cascading, and CRUD repository operations.
 * **Mocked Adapter Tests:**
   * `packages/hosts`: Mock `ssh2` server/client interactions testing connect, disconnect, execute, upload, download, and reconnection backoff.
-  * `packages/workspaces`: Mocked CLI responses for `git` commands.
+  * `packages/hosts`: Mocked CLI responses for `git` and tmux commands, plus local and SSH host behavior.
 * **Contract Tests:**
   * IPC handler validation ensuring main process handlers strictly match renderer channel schemas.
 
