@@ -161,6 +161,7 @@ references/
 out/
 dist/
 release/
+apps/desktop/build/THIRD-PARTY-NOTICES.txt
 *.tsbuildinfo
 
 # SQLite local databases

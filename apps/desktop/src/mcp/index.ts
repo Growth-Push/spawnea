@@ -55,6 +55,7 @@ async function main(): Promise<void> {
   }
   if (!descriptor) throw missingError ?? new Error('Spawnea control runtime was not found');
   const socket = createConnection(descriptor.socketPath);
+  let connectionFailed = false;
 
   socket.once('connect', () => {
     socket.write(`${JSON.stringify({ type: 'spawnea-auth', token: descriptor.token })}\n`);
@@ -64,13 +65,13 @@ async function main(): Promise<void> {
   });
   socket.once('error', (error) => {
     console.error(`Spawnea MCP bridge could not connect: ${error.message}`);
-    process.exitCode = 1;
+    connectionFailed = true;
   });
   socket.once('close', () => {
     if (!process.stdin.destroyed) process.stdin.pause();
     // The desktop gateway owns the socket. Once Spawnea exits, this one-shot
     // stdio bridge must exit too so the MCP client can restart it cleanly.
-    process.exit(0);
+    process.exit(connectionFailed ? 1 : 0);
   });
 
   const shutdown = () => {
@@ -83,5 +84,5 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error(`Spawnea MCP bridge failed: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+  process.exit(1);
 });
