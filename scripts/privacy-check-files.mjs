@@ -18,10 +18,10 @@ export async function collectRepositoryFiles(root) {
   const paths = stdout.split('\0').filter(Boolean);
   const files = await Promise.all(paths.map(async (rawFilePath) => {
     const filePath = normalizeRepositoryPath(rawFilePath);
-    const absolutePath = resolve(root, filePath);
+    const absolutePath = resolve(root, rawFilePath);
     try {
-      await lstat(absolutePath);
-      return { absolutePath, filePath };
+      const stat = await lstat(absolutePath);
+      return { absolutePath, filePath, isSymbolicLink: stat.isSymbolicLink() };
     } catch (error) {
       if (error?.code === 'ENOENT') return undefined;
       throw error;

@@ -63,7 +63,11 @@ function isAllowedIpv4(address) {
 const denylist = await loadDenylist();
 const files = await collectRepositoryFiles(root);
 
-for (const { absolutePath, filePath } of files) {
+for (const { absolutePath, filePath, isSymbolicLink } of files) {
+  if (isSymbolicLink) {
+    addFinding(filePath, 1, 'symbolic link requires explicit privacy review');
+    continue;
+  }
   const extension = extname(filePath).toLowerCase();
   if (visualAssetExtensions.has(extension)) {
     const approvedDigest = approvedVisualAssets.get(filePath);
