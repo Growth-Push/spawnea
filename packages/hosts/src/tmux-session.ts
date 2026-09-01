@@ -22,7 +22,6 @@ export interface PaneInspectionResult {
   panePid?: number;
   paneCurrentCommand?: string;
   paneDead: boolean;
-  tmuxLastEvent?: string;
 }
 
 function escapeShellArg(arg: string): string {
@@ -143,14 +142,14 @@ export class TmuxManager {
    * Inspects the foreground process and liveness of a specific session pane.
    */
   async getPaneInspection(host: HostAdapter, sessionName: string): Promise<PaneInspectionResult | null> {
-    const cmd = `tmux list-panes -t ${escapeShellArg(sessionName)} -F "#{pane_pid}:::#{pane_current_command}:::#{pane_dead}:::#{@spawnea_last_event}"`;
+    const cmd = `tmux list-panes -t ${escapeShellArg(sessionName)} -F "#{pane_pid}:::#{pane_current_command}:::#{pane_dead}"`;
     const result = await host.execute(cmd);
     if (result.exitCode !== 0 || !result.stdout.trim()) {
       return null;
     }
 
     const firstLine = result.stdout.trim().split('\n')[0];
-    const [pidStr, currentCommand, deadStr, lastEvent] = firstLine.split(':::');
+    const [pidStr, currentCommand, deadStr] = firstLine.split(':::');
     const pid = parseInt(pidStr, 10);
 
     return {
@@ -158,7 +157,6 @@ export class TmuxManager {
       panePid: isNaN(pid) ? undefined : pid,
       paneCurrentCommand: currentCommand || undefined,
       paneDead: deadStr === '1',
-      tmuxLastEvent: lastEvent && lastEvent.trim() !== '' ? lastEvent.trim() : undefined,
     };
   }
 
@@ -167,7 +165,7 @@ export class TmuxManager {
    */
   async listSessionPanes(host: HostAdapter): Promise<Map<string, PaneInspectionResult>> {
     const map = new Map<string, PaneInspectionResult>();
-    const cmd = `tmux list-panes -a -F "#{session_name}:::#{pane_pid}:::#{pane_current_command}:::#{pane_dead}:::#{@spawnea_last_event}"`;
+    const cmd = `tmux list-panes -a -F "#{session_name}:::#{pane_pid}:::#{pane_current_command}:::#{pane_dead}"`;
     const result = await host.execute(cmd);
     if (result.exitCode !== 0 || !result.stdout.trim()) {
       return map;
@@ -176,7 +174,7 @@ export class TmuxManager {
     const lines = result.stdout.trim().split('\n');
     for (const line of lines) {
       if (!line.trim()) continue;
-      const [sessName, pidStr, currentCommand, deadStr, lastEvent] = line.split(':::');
+      const [sessName, pidStr, currentCommand, deadStr] = line.split(':::');
       if (!sessName) continue;
       const pid = parseInt(pidStr, 10);
       map.set(sessName, {
@@ -184,7 +182,6 @@ export class TmuxManager {
         panePid: isNaN(pid) ? undefined : pid,
         paneCurrentCommand: currentCommand || undefined,
         paneDead: deadStr === '1',
-        tmuxLastEvent: lastEvent && lastEvent.trim() !== '' ? lastEvent.trim() : undefined,
       });
     }
 

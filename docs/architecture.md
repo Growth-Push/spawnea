@@ -361,8 +361,6 @@ export interface SessionSignals {
   matchedPrompt?: string;
   detectedPromptKind?: 'confirmation' | 'choice' | 'text_input' | 'shell_prompt' | 'none';
   exitCode?: number;
-  harnessStatus?: string;
-  harnessStatusSource?: string;
 }
 
 export interface SessionStatusResult {

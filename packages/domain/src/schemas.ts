@@ -18,8 +18,6 @@ export const StatusSourceSchema = z.enum([
   'pty_activity',
   'terminal_prompt',
   'process_exit',
-  'harness_hook',
-  'harness_event',
 ]);
 
 export const SessionSignalsSchema = z.object({
@@ -40,8 +38,6 @@ export const SessionSignalsSchema = z.object({
     .enum(['confirmation', 'choice', 'text_input', 'shell_prompt', 'none'])
     .optional(),
   exitCode: z.number().int().optional(),
-  harnessStatus: z.string().optional(),
-  harnessStatusSource: z.string().optional(),
 });
 
 export const SessionStatusResultSchema = z.object({

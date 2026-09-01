@@ -1,7 +1,6 @@
 import type {
   SessionSignals,
   SessionStatusResult,
-  HarnessLifecycleEvent,
 } from '@spawnea/domain';
 import type { PatternRule } from '../rules/types.js';
 
@@ -15,17 +14,10 @@ export interface HarnessStatusAdapter {
   readonly displayName: string;
 
   /**
-   * Parses raw string lines into typed lifecycle events (if supported by the harness).
-   */
-  parseRawEvents?(rawJsonLines: string[]): HarnessLifecycleEvent[];
-
-  /**
-   * Evaluates normalized session attention state from signals, events, and non-invasive fallback heuristics.
+   * Evaluates normalized session attention state from observable runtime signals and terminal output.
    */
   evaluateStatus(
     signals: SessionSignals,
-    recentEvents?: HarnessLifecycleEvent[],
     options?: HarnessStatusAdapterOptions
   ): SessionStatusResult;
 }
-

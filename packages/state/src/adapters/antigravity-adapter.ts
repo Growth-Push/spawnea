@@ -1,7 +1,6 @@
 import type {
   SessionSignals,
   SessionStatusResult,
-  HarnessLifecycleEvent,
 } from '@spawnea/domain';
 import type {
   HarnessStatusAdapter,
@@ -13,42 +12,8 @@ export class AntigravityStatusAdapter implements HarnessStatusAdapter {
   readonly harnessId = 'antigravity';
   readonly displayName = 'Antigravity CLI Adapter';
 
-  parseRawEvents(rawJsonLines: string[]): HarnessLifecycleEvent[] {
-    const events: HarnessLifecycleEvent[] = [];
-    for (const line of rawJsonLines) {
-      if (!line || !line.trim()) continue;
-      try {
-        const parsed = JSON.parse(line.trim());
-        if (parsed && typeof parsed === 'object') {
-          let summary: string | undefined = undefined;
-          if (parsed.rawPayload && typeof parsed.rawPayload === 'string') {
-            try {
-              const payloadObj = JSON.parse(parsed.rawPayload);
-              summary = payloadObj['last-assistant-message'] || payloadObj.summary;
-            } catch {
-              // Ignore payload parse errors
-            }
-          }
-
-          events.push({
-            sessionId: parsed.sessionId || '',
-            harness: 'antigravity',
-            eventType: parsed.eventType || 'turn_complete',
-            timestamp: parsed.timestamp || new Date().toISOString(),
-            rawPayload: parsed.rawPayload || parsed.payload,
-            summary,
-          });
-        }
-      } catch {
-        // Ignore invalid line
-      }
-    }
-    return events;
-  }
-
   evaluateStatus(
     signals: SessionSignals,
-    recentEvents: HarnessLifecycleEvent[],
     options: HarnessStatusAdapterOptions = {}
   ): SessionStatusResult {
     const now = Date.now();
@@ -99,102 +64,7 @@ export class AntigravityStatusAdapter implements HarnessStatusAdapter {
       };
     }
 
-    // 3. Check native events (highest confidence when present)
-    const latestEvent = recentEvents.length > 0 ? recentEvents[recentEvents.length - 1] : undefined;
-    if (latestEvent) {
-      const type = latestEvent.eventType.toLowerCase();
-      if (
-        type === 'turn_complete' ||
-        type === 'agent-turn-complete' ||
-        type === 'sessionstart' ||
-        type === 'session_start' ||
-        type === 'idle'
-      ) {
-        return {
-          status: 'idle',
-          confidence: 0.98,
-          source: 'native_hook',
-          reason: `Antigravity lifecycle hook reported turn completion${
-            latestEvent.summary ? `: "${latestEvent.summary.substring(0, 60)}..."` : ''
-          }`,
-          lastEvent: latestEvent,
-          updatedAt: new Date(),
-        };
-      }
-
-      if (
-        type === 'userpromptsubmit' ||
-        type === 'user_prompt_submit' ||
-        type === 'tool_start' ||
-        type === 'turn_start' ||
-        type === 'working'
-      ) {
-        return {
-          status: 'working',
-          confidence: 0.95,
-          source: 'native_hook',
-          reason: `Antigravity lifecycle hook reported active execution (${latestEvent.eventType})`,
-          lastEvent: latestEvent,
-          updatedAt: new Date(),
-        };
-      }
-
-      if (type === 'permission_requested' || type === 'choice_required' || type === 'question') {
-        return {
-          status: 'needs_input',
-          confidence: 0.98,
-          source: 'native_hook',
-          reason: 'Antigravity lifecycle hook reported user interaction required',
-          lastEvent: latestEvent,
-          updatedAt: new Date(),
-        };
-      }
-    }
-
-    // 4. Check tmux option marker if passed directly via signals
-    if (signals.tmuxLastEvent && signals.tmuxLastEvent.startsWith('turn_complete')) {
-      return {
-        status: 'idle',
-        confidence: 0.95,
-        source: 'native_hook',
-        reason: `Antigravity tmux option marker reported turn completion`,
-        updatedAt: new Date(),
-      };
-    }
-
-    // 5. Explicit harness status (if passed)
-    if (signals.harnessStatus) {
-      const hStatus = signals.harnessStatus.toLowerCase();
-      if (hStatus === 'working' || hStatus === 'busy') {
-        return {
-          status: 'working',
-          confidence: 0.95,
-          source: 'harness_hook',
-          reason: 'Explicit harness status reported working',
-          updatedAt: new Date(),
-        };
-      }
-      if (hStatus === 'needs_input' || hStatus === 'waiting' || hStatus === 'prompt') {
-        return {
-          status: 'needs_input',
-          confidence: 0.95,
-          source: 'harness_hook',
-          reason: 'Explicit harness status reported waiting for input',
-          updatedAt: new Date(),
-        };
-      }
-      if (hStatus === 'idle') {
-        return {
-          status: 'idle',
-          confidence: 0.95,
-          source: 'harness_hook',
-          reason: 'Explicit harness status reported idle',
-          updatedAt: new Date(),
-        };
-      }
-    }
-
-    // 6. Terminal tail heuristics (capture-pane inspection)
+    // 3. Terminal tail heuristics (capture-pane inspection)
     const tailLines = signals.tailLines || [];
     if (tailLines.length > 0) {
       const cleaned = tailLines.map((l) => stripAnsi(l).trimEnd());

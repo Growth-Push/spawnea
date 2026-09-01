@@ -112,7 +112,7 @@ describe('TmuxManager', () => {
     host.customRules.push({
       pattern: 'tmux list-panes -t',
       response: {
-        stdout: '12345:::claude:::0:::needs_input::1710000000\n',
+        stdout: '12345:::claude:::0\n',
         stderr: '',
         exitCode: 0,
       },
@@ -120,7 +120,7 @@ describe('TmuxManager', () => {
     host.customRules.push({
       pattern: 'tmux list-panes -a',
       response: {
-        stdout: 'sess-1:::12345:::claude:::0:::needs_input::1710000000\nsess-2:::23456:::bash:::0:::working::1710000001\n',
+        stdout: 'sess-1:::12345:::claude:::0\nsess-2:::23456:::bash:::0\n',
         stderr: '',
         exitCode: 0,
       },
@@ -143,16 +143,13 @@ describe('TmuxManager', () => {
       panePid: 12345,
       paneCurrentCommand: 'claude',
       paneDead: false,
-      tmuxLastEvent: 'needs_input::1710000000',
     });
 
     // 2. Batch pane inspection
     const allPanes = await tmux.listSessionPanes(host);
     expect(allPanes.size).toBe(2);
     expect(allPanes.get('sess-1')?.paneCurrentCommand).toBe('claude');
-    expect(allPanes.get('sess-1')?.tmuxLastEvent).toBe('needs_input::1710000000');
     expect(allPanes.get('sess-2')?.paneCurrentCommand).toBe('bash');
-    expect(allPanes.get('sess-2')?.tmuxLastEvent).toBe('working::1710000001');
 
     // 3. Tail buffer capture
     const tail = await tmux.capturePaneTail(host, 'sess-1', 10);

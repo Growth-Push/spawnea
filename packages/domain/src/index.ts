@@ -5,12 +5,9 @@ export * from './hosts.js';
 export * from './ipc.js';
 export * from './logger.js';
 export * from './repositories.js';
-export * from './harness.js';
 export * from './secret-reference.js';
 export * from './control.js';
 export * from './path-security.js';
-import type { HarnessLifecycleEvent } from './harness.js';
-
 export type SessionStatus =
   | 'starting'
   | 'working'
@@ -25,10 +22,7 @@ export type StatusSource =
   | 'process'
   | 'pty_activity'
   | 'terminal_prompt'
-  | 'process_exit'
-  | 'harness_hook'
-  | 'harness_event'
-  | 'native_hook';
+  | 'process_exit';
 
 export interface SessionSignals {
   sessionId: string;
@@ -46,10 +40,6 @@ export interface SessionSignals {
   matchedPrompt?: string;
   detectedPromptKind?: 'confirmation' | 'choice' | 'text_input' | 'shell_prompt' | 'none';
   exitCode?: number;
-  harnessStatus?: string;
-  harnessStatusSource?: string;
-  tmuxLastEvent?: string;
-  events?: HarnessLifecycleEvent[];
 }
 
 export interface SessionStatusResult {
@@ -58,7 +48,6 @@ export interface SessionStatusResult {
   source: StatusSource;
   detectedPrompt?: string;
   reason: string;
-  lastEvent?: HarnessLifecycleEvent;
   updatedAt: Date;
 }
 

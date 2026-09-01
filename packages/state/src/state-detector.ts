@@ -1,7 +1,6 @@
 import type {
   SessionSignals,
   SessionStatusResult,
-  HarnessLifecycleEvent,
 } from '@spawnea/domain';
 import type { PatternRule } from './rules/types.js';
 import { HarnessStatusAdapterRegistry } from './adapters/registry.js';
@@ -36,13 +35,11 @@ export class StateDetector {
    */
   detectStatus(
     signals: SessionSignals,
-    harnessName?: string,
-    recentEvents: HarnessLifecycleEvent[] = []
+    harnessName?: string
   ): SessionStatusResult {
-    const events = signals.events || recentEvents;
     const adapter = this.registry.getAdapter(harnessName || signals.paneCurrentCommand);
 
-    return adapter.evaluateStatus(signals, events, {
+    return adapter.evaluateStatus(signals, {
       activeOutputWindowMs: this.activeOutputWindowMs,
       customRules: this.customRules,
     });

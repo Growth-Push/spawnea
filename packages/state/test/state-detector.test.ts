@@ -288,20 +288,4 @@ describe('StateDetector', () => {
     expect(res.source).toBe('terminal_prompt');
   });
 
-  it('respects explicit harness status over generic heuristics', () => {
-    const signals: SessionSignals = {
-      sessionId: 'sess-1',
-      hostReachable: true,
-      tmuxSessionExists: true,
-      paneExists: true,
-      paneDead: false,
-      isPtyAttached: true,
-      harnessStatus: 'working',
-      tailLines: ['Some random prompt-like text: Confirm? [y/N]'],
-    };
-    const res = detector.detectStatus(signals);
-    expect(res.status).toBe('working');
-    expect(res.confidence).toBe(0.95);
-    expect(res.source).toBe('harness_hook');
-  });
 });

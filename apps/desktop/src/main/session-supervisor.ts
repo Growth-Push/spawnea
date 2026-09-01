@@ -140,8 +140,6 @@ export class SessionSupervisor {
     let paneCurrentCommand: string | undefined = undefined;
     let panePid: number | undefined = undefined;
     let tailLines: string[] = [];
-    let tmuxLastEvent: string | undefined = undefined;
-    let recentEvents: import('@spawnea/domain').HarnessLifecycleEvent[] = [];
 
     let harnessName: string | undefined = undefined;
     if (session.agentId) {
@@ -164,7 +162,6 @@ export class SessionSupervisor {
           paneDead = pane.paneDead;
           paneCurrentCommand = pane.paneCurrentCommand;
           panePid = pane.panePid;
-          tmuxLastEvent = pane.tmuxLastEvent;
         }
 
         if (!paneDead) {
@@ -193,11 +190,9 @@ export class SessionSupervisor {
       lastInputAt: ptyMetrics?.lastInputAt,
       recentOutputBytes: ptyMetrics?.recentOutputBytes,
       tailLines,
-      tmuxLastEvent,
-      events: recentEvents,
     };
 
-    const result = this.stateDetector.detectStatus(signals, harnessName, recentEvents);
+    const result = this.stateDetector.detectStatus(signals, harnessName);
 
     // Auto-detect candidate output artifacts from terminal tail lines
     if (this.artifactManager && tailLines && tailLines.length > 0) {
@@ -358,8 +353,6 @@ export class SessionSupervisor {
     let panePid: number | undefined = undefined;
     let tailLines: string[] = [];
 
-    let tmuxLastEvent: string | undefined = undefined;
-    let recentEvents: import('@spawnea/domain').HarnessLifecycleEvent[] = [];
 
     try {
       const host = await this.sessionManager.getHostAdapter(session.serverId);
@@ -372,7 +365,6 @@ export class SessionSupervisor {
           paneDead = pane.paneDead;
           paneCurrentCommand = pane.paneCurrentCommand;
           panePid = pane.panePid;
-          tmuxLastEvent = pane.tmuxLastEvent;
         }
 
         if (!paneDead) {
@@ -401,11 +393,9 @@ export class SessionSupervisor {
       lastInputAt: ptyMetrics?.lastInputAt,
       recentOutputBytes: ptyMetrics?.recentOutputBytes,
       tailLines,
-      tmuxLastEvent,
-      events: recentEvents,
     };
 
-    const result = this.stateDetector.detectStatus(signals, harnessName, recentEvents);
+    const result = this.stateDetector.detectStatus(signals, harnessName);
 
     return {
       sessionId: session.id,

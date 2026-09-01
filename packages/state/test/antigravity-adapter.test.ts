@@ -14,7 +14,7 @@ describe('AntigravityStatusAdapter', () => {
       paneDead: false,
       isPtyAttached: true,
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('disconnected');
     expect(res.confidence).toBe(1.0);
   });
@@ -28,7 +28,7 @@ describe('AntigravityStatusAdapter', () => {
       paneDead: false,
       isPtyAttached: false,
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('done');
   });
 
@@ -42,13 +42,13 @@ describe('AntigravityStatusAdapter', () => {
       exitCode: 0,
       isPtyAttached: true,
     };
-    expect(adapter.evaluateStatus(okSignals, []).status).toBe('done');
+    expect(adapter.evaluateStatus(okSignals).status).toBe('done');
 
     const errSignals: SessionSignals = {
       ...okSignals,
       exitCode: 1,
     };
-    expect(adapter.evaluateStatus(errSignals, []).status).toBe('error');
+    expect(adapter.evaluateStatus(errSignals).status).toBe('error');
   });
 
   it('detects working when Antigravity displays rotating Braille spinner (⣯ Analyzing...) and esc to cancel (screenshot case)', () => {
@@ -80,7 +80,7 @@ describe('AntigravityStatusAdapter', () => {
         'esc to cancel',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('working');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Analyzing Banner Behavior...');
@@ -103,7 +103,7 @@ describe('AntigravityStatusAdapter', () => {
           'esc to cancel',
         ],
       };
-      const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
       expect(res.status).toBe('working');
     }
   });
@@ -131,7 +131,7 @@ describe('AntigravityStatusAdapter', () => {
         '  esc to cancel',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('needs_input');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Question 1/1:');
@@ -162,7 +162,7 @@ describe('AntigravityStatusAdapter', () => {
         'esc to cancel',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('needs_input');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Accept this file edit?');
@@ -191,7 +191,7 @@ describe('AntigravityStatusAdapter', () => {
         '  esc to cancel',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('needs_input');
     expect(res.source).toBe('terminal_prompt');
   });
@@ -214,7 +214,7 @@ describe('AntigravityStatusAdapter', () => {
         '? for shortcuts',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
   });
@@ -249,7 +249,7 @@ describe('AntigravityStatusAdapter', () => {
         '? for shortcuts                                                                                                                   accept-edits · Gemini 3.7 Flash · high',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
   });
@@ -266,32 +266,9 @@ describe('AntigravityStatusAdapter', () => {
       lastOutputAt: new Date(Date.now() - 10000),
       tailLines: [],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('tmux');
   });
 
-  it('handles structured lifecycle events from notify hooks', () => {
-    const signals: SessionSignals = {
-      sessionId: 'antigravity-1',
-      hostReachable: true,
-      tmuxSessionExists: true,
-      paneExists: true,
-      paneDead: false,
-      isPtyAttached: true,
-    };
-
-    const turnCompleteEvt = {
-      sessionId: 'antigravity-1',
-      harness: 'antigravity',
-      eventType: 'turn_complete',
-      timestamp: new Date().toISOString(),
-      summary: 'Completed refactoring status detector',
-    };
-
-    const res = adapter.evaluateStatus(signals, [turnCompleteEvt]);
-    expect(res.status).toBe('idle');
-    expect(res.source).toBe('native_hook');
-    expect(res.reason).toContain('Completed refactoring status detector');
-  });
 });

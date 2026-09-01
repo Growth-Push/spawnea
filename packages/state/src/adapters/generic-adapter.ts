@@ -1,7 +1,6 @@
 import type {
   SessionSignals,
   SessionStatusResult,
-  HarnessLifecycleEvent,
 } from '@spawnea/domain';
 import type {
   HarnessStatusAdapter,
@@ -13,32 +12,8 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
   readonly harnessId = 'generic';
   readonly displayName = 'Generic / Shell Adapter';
 
-  parseRawEvents(rawJsonLines: string[]): HarnessLifecycleEvent[] {
-    const events: HarnessLifecycleEvent[] = [];
-    for (const line of rawJsonLines) {
-      if (!line || !line.trim()) continue;
-      try {
-        const parsed = JSON.parse(line.trim());
-        if (parsed && typeof parsed === 'object') {
-          events.push({
-            sessionId: parsed.sessionId || '',
-            harness: parsed.harness || 'generic',
-            eventType: parsed.eventType || 'custom',
-            timestamp: parsed.timestamp || new Date().toISOString(),
-            rawPayload: parsed.payload || parsed.rawPayload,
-            summary: parsed.summary,
-          });
-        }
-      } catch {
-        // Ignore malformed lines
-      }
-    }
-    return events;
-  }
-
   evaluateStatus(
     signals: SessionSignals,
-    recentEvents: HarnessLifecycleEvent[],
     options: HarnessStatusAdapterOptions = {}
   ): SessionStatusResult {
     const now = Date.now();
@@ -89,48 +64,7 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
       };
     }
 
-    // 3. Explicit harness hook / metadata (if present)
-    if (signals.harnessStatus) {
-      const hStatus = signals.harnessStatus.toLowerCase();
-      if (hStatus === 'working' || hStatus === 'busy') {
-        return {
-          status: 'working',
-          confidence: 0.95,
-          source: 'harness_hook',
-          reason: 'Explicit harness status reported working',
-          updatedAt: new Date(),
-        };
-      }
-      if (hStatus === 'needs_input' || hStatus === 'waiting' || hStatus === 'prompt') {
-        return {
-          status: 'needs_input',
-          confidence: 0.95,
-          source: 'harness_hook',
-          reason: 'Explicit harness status reported waiting for input',
-          updatedAt: new Date(),
-        };
-      }
-      if (hStatus === 'idle') {
-        return {
-          status: 'idle',
-          confidence: 0.95,
-          source: 'harness_hook',
-          reason: 'Explicit harness status reported idle',
-          updatedAt: new Date(),
-        };
-      }
-      if (hStatus === 'done' || hStatus === 'complete') {
-        return {
-          status: 'done',
-          confidence: 0.95,
-          source: 'harness_hook',
-          reason: 'Explicit harness status reported done',
-          updatedAt: new Date(),
-        };
-      }
-    }
-
-    // 4. Terminal tail snapshot heuristics (tmux capture-pane) - Primary real-time source
+    // 3. Terminal tail snapshot heuristics (tmux capture-pane) - Primary real-time source
     const tailLines = signals.tailLines || [];
     if (tailLines.length > 0) {
       const promptResult = detectPromptInTail(tailLines, {
@@ -188,9 +122,7 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
       }
     }
 
-    // 5. Check recent structured events (fallback when tailLines is empty or not conclusive)
-
-    // 6. PTY Activity streaming
+    // 5. PTY Activity streaming
     const msSinceOutput = signals.lastOutputAt ? now - signals.lastOutputAt.getTime() : Infinity;
     const isActivelyStreaming =
       signals.lastOutputAt !== undefined && msSinceOutput <= activeOutputWindowMs;

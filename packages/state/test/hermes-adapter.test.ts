@@ -14,7 +14,7 @@ describe('HermesStatusAdapter', () => {
       paneDead: false,
       isPtyAttached: true,
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('disconnected');
     expect(res.confidence).toBe(1.0);
   });
@@ -28,7 +28,7 @@ describe('HermesStatusAdapter', () => {
       paneDead: false,
       isPtyAttached: false,
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('done');
   });
 
@@ -42,13 +42,13 @@ describe('HermesStatusAdapter', () => {
       exitCode: 0,
       isPtyAttached: true,
     };
-    expect(adapter.evaluateStatus(okSignals, []).status).toBe('done');
+    expect(adapter.evaluateStatus(okSignals).status).toBe('done');
 
     const errSignals: SessionSignals = {
       ...okSignals,
       exitCode: 1,
     };
-    expect(adapter.evaluateStatus(errSignals, []).status).toBe('error');
+    expect(adapter.evaluateStatus(errSignals).status).toBe('error');
   });
 
   it('detects working when Hermes displays interrupt footer bar in terminal tail', () => {
@@ -66,7 +66,7 @@ describe('HermesStatusAdapter', () => {
         '> msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('working');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('msg=interrupt');
@@ -88,7 +88,7 @@ describe('HermesStatusAdapter', () => {
         '⚡ gpt-5.6-sol | 76.3K/128K | [|||||||||] 60% | 9 1 | 1',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('working');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('formulating...');
@@ -119,7 +119,7 @@ describe('HermesStatusAdapter', () => {
         '? >',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('needs_input');
     expect(res.source).toBe('terminal_prompt');
   });
@@ -145,7 +145,7 @@ describe('HermesStatusAdapter', () => {
         'gp-dev > Draft a reply to the last email in my inbox',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
   });
@@ -165,7 +165,7 @@ describe('HermesStatusAdapter', () => {
         'gp-dev >',
       ],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
   });
@@ -182,32 +182,9 @@ describe('HermesStatusAdapter', () => {
       lastOutputAt: new Date(Date.now() - 10000), // quiet for 10s
       tailLines: ['Some unstructured general logs...'],
     };
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('tmux');
   });
 
-  it('handles structured lifecycle events when present', () => {
-    const signals: SessionSignals = {
-      sessionId: 'hermes-1',
-      hostReachable: true,
-      tmuxSessionExists: true,
-      paneExists: true,
-      paneDead: false,
-      isPtyAttached: true,
-    };
-
-    const turnCompleteEvt = {
-      sessionId: 'hermes-1',
-      harness: 'hermes',
-      eventType: 'turn_complete',
-      timestamp: new Date().toISOString(),
-      summary: 'Changes published to git',
-    };
-
-    const res = adapter.evaluateStatus(signals, [turnCompleteEvt]);
-    expect(res.status).toBe('idle');
-    expect(res.source).toBe('native_hook');
-    expect(res.reason).toContain('Changes published to git');
-  });
 });

@@ -1,87 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { CodexStatusAdapter } from '../src/adapters/codex-adapter.js';
-import type { SessionSignals, HarnessLifecycleEvent } from '@spawnea/domain';
+import type { SessionSignals } from '@spawnea/domain';
 
 describe('CodexStatusAdapter', () => {
   const adapter = new CodexStatusAdapter();
-
-  it('parses raw JSON lines from events.jsonl', () => {
-    const lines = [
-      JSON.stringify({
-        sessionId: 'sess-abc',
-        harness: 'codex',
-        eventType: 'agent-turn-complete',
-        timestamp: '2026-08-24T17:00:00Z',
-        rawPayload: JSON.stringify({
-          type: 'agent-turn-complete',
-          'turn-id': 'turn-1',
-          'last-assistant-message': 'Task finished successfully.',
-        }),
-      }),
-      '', // empty line
-      'invalid json line',
-    ];
-
-    const events = adapter.parseRawEvents(lines);
-    expect(events).toHaveLength(1);
-    expect(events[0].sessionId).toBe('sess-abc');
-    expect(events[0].eventType).toBe('agent-turn-complete');
-    expect(events[0].summary).toBe('Task finished successfully.');
-  });
-
-  it('evaluates status as IDLE with high confidence when agent-turn-complete event is present', () => {
-    const signals: SessionSignals = {
-      sessionId: 'sess-abc',
-      hostReachable: true,
-      tmuxSessionExists: true,
-      paneExists: true,
-      paneDead: false,
-      isPtyAttached: true,
-      paneCurrentCommand: 'codex',
-    };
-
-    const events: HarnessLifecycleEvent[] = [
-      {
-        sessionId: 'sess-abc',
-        harness: 'codex',
-        eventType: 'agent-turn-complete',
-        timestamp: '2026-08-24T17:00:00Z',
-        summary: 'Refactoring completed',
-      },
-    ];
-
-    const res = adapter.evaluateStatus(signals, events);
-    expect(res.status).toBe('idle');
-    expect(res.confidence).toBe(0.98);
-    expect(res.source).toBe('native_hook');
-    expect(res.reason).toContain('Refactoring completed');
-  });
-
-  it('evaluates status as WORKING when tool_start or user_prompt_submit event is present', () => {
-    const signals: SessionSignals = {
-      sessionId: 'sess-abc',
-      hostReachable: true,
-      tmuxSessionExists: true,
-      paneExists: true,
-      paneDead: false,
-      isPtyAttached: true,
-      paneCurrentCommand: 'codex',
-    };
-
-    const events: HarnessLifecycleEvent[] = [
-      {
-        sessionId: 'sess-abc',
-        harness: 'codex',
-        eventType: 'tool_start',
-        timestamp: '2026-08-24T17:01:00Z',
-      },
-    ];
-
-    const res = adapter.evaluateStatus(signals, events);
-    expect(res.status).toBe('working');
-    expect(res.confidence).toBe(0.95);
-    expect(res.source).toBe('native_hook');
-  });
 
   it('falls back to terminal prompt heuristics for WAITING_INPUT when interactive prompt is displayed', () => {
     const signals: SessionSignals = {
@@ -98,7 +20,7 @@ describe('CodexStatusAdapter', () => {
       ],
     };
 
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('needs_input');
     expect(res.confidence).toBeGreaterThanOrEqual(0.85);
     expect(res.source).toBe('terminal_prompt');
@@ -123,7 +45,7 @@ describe('CodexStatusAdapter', () => {
       ],
     };
 
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
 
     expect(res.status).toBe('needs_input');
     expect(res.confidence).toBe(0.98);
@@ -146,7 +68,7 @@ describe('CodexStatusAdapter', () => {
       ],
     };
 
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
   });
@@ -176,7 +98,7 @@ describe('CodexStatusAdapter', () => {
       ],
     };
 
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('working');
     expect(res.confidence).toBe(0.98);
     expect(res.source).toBe('terminal_prompt');
@@ -199,7 +121,7 @@ describe('CodexStatusAdapter', () => {
       ],
     };
 
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('working');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Reviewing approval request');
@@ -224,17 +146,7 @@ describe('CodexStatusAdapter', () => {
       ],
     };
 
-    const staleTurnEvents: HarnessLifecycleEvent[] = [
-      {
-        sessionId: 'sess-abc',
-        harness: 'codex',
-        eventType: 'agent-turn-complete',
-        timestamp: '2026-08-24T16:50:00Z',
-        summary: 'Previous turn finished 10 minutes ago',
-      },
-    ];
-
-    const res = adapter.evaluateStatus(signals, staleTurnEvents);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('working');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Working');
@@ -260,7 +172,7 @@ describe('CodexStatusAdapter', () => {
       ],
     };
 
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
   });
@@ -283,7 +195,7 @@ describe('CodexStatusAdapter', () => {
       ],
     };
 
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Ask Codex to do anything');
@@ -305,7 +217,7 @@ describe('CodexStatusAdapter', () => {
       ],
     };
 
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.detectedPrompt).toContain('Ask Codex to do anything');
   });
@@ -328,7 +240,7 @@ describe('CodexStatusAdapter', () => {
       ],
     };
 
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Ask Codex to do anything');
@@ -344,7 +256,7 @@ describe('CodexStatusAdapter', () => {
       isPtyAttached: false,
     };
 
-    const res = adapter.evaluateStatus(signals, []);
+    const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('disconnected');
     expect(res.confidence).toBe(1.0);
   });
