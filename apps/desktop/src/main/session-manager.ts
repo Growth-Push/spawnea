@@ -11,6 +11,7 @@ import type {
   HostAdapter,
   HostSystemInfo,
   HostConnectionState,
+  HostConnectionEndpoint,
   FileEntry,
   FileContentResult,
   GitStatusResult,
@@ -342,7 +343,7 @@ export class SessionManager {
       throw new Error(`Host profile '${serverId}' not found in catalog or database`);
     }
 
-    if (dbServer.host === 'localhost' || dbServer.id === 'local') {
+    if (!dbServer.sshConfigAlias && (dbServer.host === 'localhost' || dbServer.host === '127.0.0.1' || dbServer.host === '::1')) {
       const localAdapter = new LocalHostAdapter({
         serverId,
         logger: this.logger.child(`local:${serverId}`),
@@ -385,6 +386,17 @@ export class SessionManager {
       attempt: 0,
       maxAttempts: 5,
     };
+  }
+
+  /**
+   * Resolves the actual connection endpoint for renderer-side transport decisions.
+   */
+  async getHostConnectionEndpoint(serverId: string): Promise<HostConnectionEndpoint | null> {
+    const host = await this.getHostAdapter(serverId);
+    if (typeof host.getConnectionEndpoint !== 'function') {
+      return null;
+    }
+    return host.getConnectionEndpoint();
   }
 
   /**

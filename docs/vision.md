@@ -52,6 +52,8 @@ The terminal accepts OSC 52 clipboard writes so copy mode works through SSH and
 nested tmux sessions. Spawnea decodes at most 1 MiB of UTF-8 text and writes it
 through the context-isolated Electron clipboard bridge. Clipboard read queries
 from terminal applications are consumed without exposing local clipboard data.
+The tmux selection fallback is enabled only for resolved local loopback sessions;
+SSH aliases and forwarded ports remain OSC 52-only.
 
 ### Native workspace isolation
 

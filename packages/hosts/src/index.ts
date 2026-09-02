@@ -23,6 +23,8 @@ export type {
   HostSystemInfo,
   HostConnectionStatus,
   HostConnectionState,
+  HostConnectionTransport,
+  HostConnectionEndpoint,
   GitStatusResult,
   GitFileStatus,
   GitDiffResult,

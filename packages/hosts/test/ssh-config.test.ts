@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseSshConfigFile, resolveSshTarget } from '../src/ssh-config.js';
+import { SSHHostAdapter } from '../src/ssh-host.js';
 
 describe('ssh-config parser', () => {
   const sampleConfig = `
@@ -51,5 +52,41 @@ Host *
     expect(resolved.hostname).toBe('192.0.2.1');
     expect(resolved.user).toBe('admin');
     expect(resolved.port).toBe(2200);
+  });
+
+  it('resolves an SSH alias to its actual hostname and forwarded port', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'spawnea-ssh-config-'));
+    try {
+      const configPath = join(tempDir, 'config');
+      writeFileSync(configPath, 'Host remote-forward\n  HostName 127.0.0.1\n  Port 22022\n', 'utf8');
+
+      const resolved = resolveSshTarget('remote-forward', undefined, undefined, configPath);
+
+      expect(resolved.hostname).toBe('127.0.0.1');
+      expect(resolved.port).toBe(22022);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports the resolved endpoint from an SSH adapter', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'spawnea-ssh-config-'));
+    try {
+      const configPath = join(tempDir, 'config');
+      writeFileSync(configPath, 'Host remote-forward\n  HostName 127.0.0.1\n  Port 22022\n', 'utf8');
+      const adapter = new SSHHostAdapter({
+        serverId: 'remote-forward',
+        target: 'remote-forward',
+        configPath,
+      });
+
+      await expect(adapter.getConnectionEndpoint()).resolves.toEqual({
+        transport: 'ssh',
+        hostname: '127.0.0.1',
+        port: 22022,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

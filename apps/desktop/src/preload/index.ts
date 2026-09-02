@@ -18,6 +18,7 @@ import type {
 
   HostSystemInfo,
   HostConnectionState,
+  HostConnectionEndpoint,
 
   GitBranchDiscoveryResult,
   StateFeedbackSnapshot,
@@ -57,6 +58,8 @@ export const api = {
   checkHostHealth: (id?: string): Promise<Record<string, HostHealthResult>> => ipcRenderer.invoke('hosts:checkHealth', id),
   getHostSystemInfo: (id: string): Promise<HostSystemInfo | null> => ipcRenderer.invoke('hosts:getSystemInfo', id),
   getHostConnectionState: (id: string): Promise<HostConnectionState> => ipcRenderer.invoke('hosts:getConnectionState', id),
+  getHostConnectionEndpoint: (id: string): Promise<HostConnectionEndpoint | null> =>
+    ipcRenderer.invoke('hosts:getConnectionEndpoint', id),
   retryHostConnection: (id: string): Promise<HostConnectionState> => ipcRenderer.invoke('hosts:retryConnection', id),
   discoverExternalSessions: (serverId: string): Promise<DiscoveredTmuxSession[]> =>
     ipcRenderer.invoke('hosts:discoverExternalSessions', serverId),

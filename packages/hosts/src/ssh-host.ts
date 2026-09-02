@@ -13,6 +13,7 @@ import type {
   FileContentResult,
   FileStat,
   HostConnectionState,
+  HostConnectionEndpoint,
   Logger,
 } from '@spawnea/domain';
 import { createLogger, maskSensitiveString } from '@spawnea/domain';
@@ -76,6 +77,36 @@ export class SSHHostAdapter implements HostAdapter {
 
   getConnectionState(): HostConnectionState {
     return this.supervisor.getState(this.serverId);
+  }
+
+  async getConnectionEndpoint(): Promise<HostConnectionEndpoint | null> {
+    let release: () => void = () => {};
+    try {
+      const supplied = this.connectionOptionsProvider
+        ? await this.connectionOptionsProvider()
+        : {
+            target: this.target,
+            user: this.explicitUser,
+            port: this.explicitPort,
+            release: () => undefined,
+          };
+      release = supplied.release;
+      const resolved = resolveSshTarget(
+        supplied.target,
+        supplied.user,
+        supplied.port,
+        this.configPath
+      );
+      return {
+        transport: 'ssh',
+        hostname: resolved.hostname,
+        port: resolved.port ?? 22,
+      };
+    } catch {
+      return null;
+    } finally {
+      release();
+    }
   }
 
   onConnectionStateChange(listener: (state: HostConnectionState) => void): () => void {

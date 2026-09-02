@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { WorkspaceTabs } from './WorkspaceTabs';
 import type { Session, Server, Artifact } from '@spawnea/domain';
@@ -78,8 +78,10 @@ describe('WorkspaceTabs Component', () => {
   };
 
   let artifactCreatedCb: (sessionId: string, artifact: Artifact) => void = () => {};
+  let originalClipboardDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
+    originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     (window as any).spawneaApi = {
       getArtifacts: vi.fn().mockResolvedValue([]),
       getGitStatus: vi.fn().mockResolvedValue({
@@ -108,6 +110,11 @@ describe('WorkspaceTabs Component', () => {
         attempt: 0,
         maxAttempts: 5,
       }),
+      getHostConnectionEndpoint: vi.fn().mockResolvedValue({
+        transport: 'local',
+        hostname: '127.0.0.1',
+        port: 0,
+      }),
       retryHostConnection: vi.fn().mockResolvedValue({
         serverId: 'srv-1',
         status: 'connected',
@@ -125,6 +132,29 @@ describe('WorkspaceTabs Component', () => {
       }),
     };
   });
+
+  afterEach(() => {
+    if (originalClipboardDescriptor) {
+      Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor);
+    } else {
+      delete (navigator as { clipboard?: Clipboard }).clipboard;
+    }
+  });
+
+  function mockClipboardReadText(readText: () => Promise<string>): void {
+    const originalClipboard = navigator.clipboard;
+    const mockedClipboard = originalClipboard
+      ? Object.create(Object.getPrototypeOf(originalClipboard), {
+          ...Object.getOwnPropertyDescriptors(originalClipboard),
+          readText: { configurable: true, writable: true, value: readText },
+        })
+      : { readText };
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: mockedClipboard,
+    });
+  }
 
   it('renders DetectedOutputBanner only in terminal tab and not in files or diff tabs', async () => {
     const onTabChange = vi.fn();
@@ -266,10 +296,7 @@ describe('WorkspaceTabs Component', () => {
     const readClipboardText = vi.fn()
       .mockResolvedValueOnce('clipboard-before-selection')
       .mockResolvedValueOnce('remote-selection');
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { readText: readClipboardText },
-    });
+    mockClipboardReadText(readClipboardText);
     const remoteServerWithLocalId: Server = {
       id: 'local',
       name: 'Misidentified Remote',
@@ -278,6 +305,11 @@ describe('WorkspaceTabs Component', () => {
       enabled: true,
       createdAt: new Date('2026-01-01T00:00:00Z'),
     };
+    (window as any).spawneaApi.getHostConnectionEndpoint.mockResolvedValue({
+      transport: 'ssh',
+      hostname: 'remote.example.test',
+      port: 22,
+    });
 
     render(
       <WorkspaceTabs
@@ -288,6 +320,50 @@ describe('WorkspaceTabs Component', () => {
       />
     );
 
+    const terminalViewport = screen.getByTestId('xterm-container').parentElement;
+    expect(terminalViewport).not.toBeNull();
+    fireEvent.mouseDown(terminalViewport!, { button: 0 });
+    fireEvent.mouseMove(terminalViewport!, { buttons: 1 });
+    fireEvent.mouseUp(terminalViewport!, { button: 0 });
+    fireEvent.contextMenu(terminalViewport!);
+
+    await waitFor(() => {
+      expect(readClipboardText).not.toHaveBeenCalled();
+      expect((screen.getByTestId('context-menu-copy') as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
+
+  it('uses the resolved SSH endpoint for aliases and forwarded ports', async () => {
+    const readClipboardText = vi.fn()
+      .mockResolvedValueOnce('clipboard-before-selection')
+      .mockResolvedValueOnce('remote-selection');
+    mockClipboardReadText(readClipboardText);
+    const serverConfiguredAsLocal: Server = {
+      id: 'srv-1',
+      name: 'Forwarded SSH Host',
+      host: 'localhost',
+      sshConfigAlias: 'remote-forward',
+      sshPort: 22,
+      enabled: true,
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    };
+    const getHostConnectionEndpoint = vi.fn().mockResolvedValue({
+      transport: 'ssh',
+      hostname: '127.0.0.1',
+      port: 22022,
+    });
+    (window as any).spawneaApi.getHostConnectionEndpoint = getHostConnectionEndpoint;
+
+    render(
+      <WorkspaceTabs
+        session={mockSession}
+        server={serverConfiguredAsLocal}
+        activeTab="terminal"
+        onTabChange={vi.fn()}
+      />
+    );
+
+    expect(getHostConnectionEndpoint).toHaveBeenCalledWith('srv-1');
     const terminalViewport = screen.getByTestId('xterm-container').parentElement;
     expect(terminalViewport).not.toBeNull();
     fireEvent.mouseDown(terminalViewport!, { button: 0 });

@@ -95,6 +95,14 @@ export interface HostConnectionState {
   lastConnectedAt?: string;
 }
 
+export type HostConnectionTransport = 'local' | 'ssh';
+
+export interface HostConnectionEndpoint {
+  transport: HostConnectionTransport;
+  hostname: string;
+  port: number;
+}
+
 export interface HostAdapter {
   readonly serverId: string;
   connect(): Promise<void>;
@@ -111,6 +119,7 @@ export interface HostAdapter {
   writeFile(remotePath: string, data: Buffer | Uint8Array | string): Promise<void>;
   mkdir(dirPath: string): Promise<void>;
   getConnectionState?(): HostConnectionState;
+  getConnectionEndpoint?(): Promise<HostConnectionEndpoint | null>;
   onConnectionStateChange?(listener: (state: HostConnectionState) => void): () => void;
   reconnect?(): Promise<void>;
 }

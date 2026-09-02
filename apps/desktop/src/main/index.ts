@@ -354,6 +354,9 @@ function registerIpcHandlers(
   });
   ipcMain.handle('hosts:getSystemInfo', async (_event, id: string) => sessManager.getHostSystemInfo(id));
   ipcMain.handle('hosts:getConnectionState', async (_event, serverId: string) => sessManager.getHostConnectionState(serverId));
+  ipcMain.handle('hosts:getConnectionEndpoint', async (_event, serverId: string) =>
+    sessManager.getHostConnectionEndpoint(serverId)
+  );
   ipcMain.handle('hosts:retryConnection', async (_event, serverId: string) => sessManager.retryHostConnection(serverId));
   ipcMain.handle('hosts:discoverExternalSessions', async (_event, serverId: string) =>
     sessManager.discoverExternalSessions(serverId)

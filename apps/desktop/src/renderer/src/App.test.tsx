@@ -319,6 +319,11 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       attempt: 0,
       maxAttempts: 5,
     }),
+    getHostConnectionEndpoint: vi.fn().mockResolvedValue({
+      transport: 'local',
+      hostname: '127.0.0.1',
+      port: 0,
+    }),
     retryHostConnection: vi.fn().mockResolvedValue({
       serverId: 'srv-1',
       status: 'connected',
