@@ -10,7 +10,7 @@ import type {
   GitStatusResult,
   GitDiffResult,
 } from '@spawnea/domain';
-import { isLoopbackHost } from '@spawnea/domain';
+import { isLoopbackHost } from '@spawnea/domain/hosts';
 import { TerminalView } from './TerminalView';
 import { FileBrowser } from './FileBrowser';
 import { GitStatusView } from './GitStatusView';

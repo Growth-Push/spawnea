@@ -9,6 +9,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./hosts": {
+      "types": "./src/hosts.ts",
+      "import": "./src/hosts.ts"
     }
   },
   "scripts": {

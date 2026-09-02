@@ -31,6 +31,7 @@ import { ControlMcpGateway } from './control-mcp-gateway.js';
 import { isControlMcpEnabled } from './control-config.js';
 import { initializeProcessPath } from './process-path.js';
 import { resolveSpawneaUserDataPath } from './product-paths.js';
+import { resolveDesktopRuntimePaths } from './runtime-paths.js';
 import {
   sanitizeCatalogResultForRenderer,
   sanitizeCatalogStateForRenderer,
@@ -65,8 +66,6 @@ try {
 } catch {
   // Ignore in CommonJS
 }
-
-const mainDir = dirname(fileURLToPath(import.meta.url));
 
 process.on('unhandledRejection', (reason) => {
   console.error('[Spawnea Fatal Unhandled Rejection]:', reason);
@@ -771,28 +770,13 @@ function registerIpcHandlers(
 
 
 
-function getPreloadPath(): string {
-  const candidates = [
-    join(mainDir, '../preload/index.mjs'),
-    join(mainDir, '../preload/index.js'),
-    join(mainDir, '../preload/index.cjs'),
-    resolve(process.cwd(), 'apps/desktop/out/preload/index.mjs'),
-    resolve(process.cwd(), 'apps/desktop/out/preload/index.js'),
-    resolve(process.cwd(), 'out/preload/index.mjs'),
-    resolve(process.cwd(), 'out/preload/index.js'),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      logger.info('Preload script resolved at path', { path: candidate });
-      return candidate;
-    }
-  }
-  logger.warn('Preload candidate not found on disk, using default fallback', { path: candidates[0] });
-  return candidates[0];
-}
-
 function createWindow(): void {
-  const preloadPath = getPreloadPath();
+  const { preloadPath, rendererPath } = resolveDesktopRuntimePaths(app.getAppPath(), existsSync);
+  if (existsSync(preloadPath)) {
+    logger.info('Preload script resolved at path', { path: preloadPath });
+  } else {
+    logger.warn('Preload script not found on disk', { path: preloadPath });
+  }
   const mainWindow = new BrowserWindow({
     width: 1360,
     height: 880,
@@ -854,7 +838,7 @@ function createWindow(): void {
   if (process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
   } else {
-    mainWindow.loadFile(join(mainDir, '../renderer/index.html'));
+    mainWindow.loadFile(rendererPath);
   }
 
   mainWindow.show();
