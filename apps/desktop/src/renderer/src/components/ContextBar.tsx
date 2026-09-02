@@ -50,7 +50,7 @@ export function ContextBar({
   agent,
   hostInfo,
   hasUncommittedChanges = false,
-  gitChangeCount = 0,
+  gitChangeCount = hasUncommittedChanges ? 1 : 0,
   onDetach,
   onStop,
   onAttach,

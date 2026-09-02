@@ -111,7 +111,7 @@ export function WorkspaceTabs({
   project,
   agent,
   hasUncommittedChanges = false,
-  gitChangeCount = 0,
+  gitChangeCount = hasUncommittedChanges ? 1 : 0,
   activeTab,
   onTabChange,
   onAttach,
@@ -146,6 +146,7 @@ export function WorkspaceTabs({
 
   // Git State
   const [gitStatus, setGitStatus] = useState<GitStatusResult | null>(null);
+  const [gitStatusSessionId, setGitStatusSessionId] = useState<string | null>(null);
   const [gitDiff, setGitDiff] = useState<GitDiffResult | null>(null);
   const [selectedDiffFilePath, setSelectedDiffFilePath] = useState<string | null>(null);
   const [isLoadingGit, setIsLoadingGit] = useState(false);
@@ -197,6 +198,7 @@ export function WorkspaceTabs({
         untracked: [],
         totalChanges: 1,
       });
+      setGitStatusSessionId(sessionId);
       return;
     }
 
@@ -206,6 +208,7 @@ export function WorkspaceTabs({
     try {
       const status = await window.spawneaApi.getGitStatus(sessionId);
       setGitStatus(status);
+      setGitStatusSessionId(sessionId);
 
       const diff = await window.spawneaApi.getGitDiff(sessionId, {
         filePath: filePath || undefined,
@@ -214,6 +217,7 @@ export function WorkspaceTabs({
     } catch (err: any) {
       setGitError(err.message || 'Failed to inspect Git repository');
       setGitStatus(null);
+      setGitStatusSessionId(null);
       setGitDiff(null);
     } finally {
       setIsLoadingGit(false);
@@ -226,6 +230,7 @@ export function WorkspaceTabs({
       setArtifacts([]);
       setHostInfo(null);
       setGitStatus(null);
+      setGitStatusSessionId(null);
       setGitDiff(null);
       setSelectedDiffFilePath(null);
       setDetectedOutput(null);
@@ -442,7 +447,9 @@ export function WorkspaceTabs({
     {
       id: 'diff',
       label: 'Git Diff',
-      badge: gitStatus && gitStatus.totalChanges > 0 ? gitStatus.totalChanges : (gitChangeCount > 0 ? gitChangeCount : undefined),
+      badge: gitStatusSessionId === session?.id && gitStatus && gitStatus.totalChanges > 0
+        ? gitStatus.totalChanges
+        : (gitChangeCount > 0 ? gitChangeCount : undefined),
       icon: GitBranch,
       shortcut: 'Alt+3',
     },
