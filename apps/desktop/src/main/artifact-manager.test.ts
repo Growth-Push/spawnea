@@ -359,6 +359,32 @@ describe('ArtifactManager', () => {
     expect(await repos.artifacts.findById(artifact.id)).toBeNull();
   });
 
+  it('serializes cache-filling reads with clearing', async () => {
+    const artifact = await artifactManager.createTextArtifact(sessionId, 'read-through.txt', 'content');
+    expect(artifact.cachedLocalPath).toBeDefined();
+    rmSync(artifact.cachedLocalPath!, { force: true });
+
+    let releaseRead!: () => void;
+    const readPaused = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const originalReadFile = mockHost.readFile.bind(mockHost);
+    vi.spyOn(mockHost, 'readFile').mockImplementation(async (...args) => {
+      await readPaused;
+      return originalReadFile(...args);
+    });
+
+    const reading = artifactManager.getArtifactContent(sessionId, artifact.id);
+    await new Promise((resolve) => setImmediate(resolve));
+    const clearing = artifactManager.clearArtifacts(sessionId);
+    releaseRead();
+
+    await expect(reading).resolves.toMatchObject({ content: 'content' });
+    await expect(clearing).resolves.toBe(1);
+    expect(existsSync(artifact.cachedLocalPath!)).toBe(false);
+    expect(await repos.artifacts.findById(artifact.id)).toBeNull();
+  });
+
   it('enforces artifact ownership for reads and deletes', async () => {
     const otherSession = await repos.sessions.save({
       id: 'sess-art-other',

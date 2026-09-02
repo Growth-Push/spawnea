@@ -500,6 +500,16 @@ export class ArtifactManager {
     artifactId: string,
     maxBytes = 10 * 1024 * 1024
   ): Promise<FileContentResult> {
+    return this.withSessionArtifactLock(sessionId, () =>
+      this.getArtifactContentUnlocked(sessionId, artifactId, maxBytes)
+    );
+  }
+
+  private async getArtifactContentUnlocked(
+    sessionId: string,
+    artifactId: string,
+    maxBytes = 10 * 1024 * 1024
+  ): Promise<FileContentResult> {
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
