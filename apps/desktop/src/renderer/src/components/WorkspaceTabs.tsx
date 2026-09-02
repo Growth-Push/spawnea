@@ -38,6 +38,12 @@ import {
 
 export type WorkspaceTabType = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details';
 
+const LOCAL_LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+function isLocalClipboardBridgeHost(server?: Server): boolean {
+  return server !== undefined && LOCAL_LOOPBACK_HOSTS.has(server.host.toLowerCase());
+}
+
 interface WorkspaceTabsProps {
   session: Session | null;
   server?: Server;
@@ -535,9 +541,7 @@ export function WorkspaceTabs({
               <TerminalView
                 session={session}
                 agent={agent}
-                clipboardBridgeAvailable={
-                  server?.id === 'local' || server?.host === 'localhost' || server?.host === '127.0.0.1'
-                }
+                clipboardBridgeAvailable={isLocalClipboardBridgeHost(server)}
                 onAttach={onAttach}
                 onDetach={onDetach}
                 onDelete={onDelete}

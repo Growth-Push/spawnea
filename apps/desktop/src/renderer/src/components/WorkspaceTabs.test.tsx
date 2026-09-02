@@ -1,8 +1,8 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { WorkspaceTabs } from './WorkspaceTabs';
-import type { Session, Artifact } from '@spawnea/domain';
+import type { Session, Server, Artifact } from '@spawnea/domain';
 
 // Polyfill matchMedia, ResizeObserver, Canvas
 if (typeof window !== 'undefined') {
@@ -260,6 +260,45 @@ describe('WorkspaceTabs Component', () => {
 
     expect(screen.getByTestId('workspace-worktree-badge')).toBeDefined();
     expect(screen.queryByLabelText('Uncommitted Git changes')).toBeNull();
+  });
+
+  it('does not enable clipboard fallback for a remote host using the local server id', async () => {
+    const readClipboardText = vi.fn()
+      .mockResolvedValueOnce('clipboard-before-selection')
+      .mockResolvedValueOnce('remote-selection');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { readText: readClipboardText },
+    });
+    const remoteServerWithLocalId: Server = {
+      id: 'local',
+      name: 'Misidentified Remote',
+      host: 'remote.example.test',
+      sshPort: 22,
+      enabled: true,
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    };
+
+    render(
+      <WorkspaceTabs
+        session={mockSession}
+        server={remoteServerWithLocalId}
+        activeTab="terminal"
+        onTabChange={vi.fn()}
+      />
+    );
+
+    const terminalViewport = screen.getByTestId('xterm-container').parentElement;
+    expect(terminalViewport).not.toBeNull();
+    fireEvent.mouseDown(terminalViewport!, { button: 0 });
+    fireEvent.mouseMove(terminalViewport!, { buttons: 1 });
+    fireEvent.mouseUp(terminalViewport!, { button: 0 });
+    fireEvent.contextMenu(terminalViewport!);
+
+    await waitFor(() => {
+      expect(readClipboardText).not.toHaveBeenCalled();
+      expect((screen.getByTestId('context-menu-copy') as HTMLButtonElement).disabled).toBe(true);
+    });
   });
 
   it('navigates to artifacts tab and dismisses banner when Artifacts Tab button is clicked', async () => {
