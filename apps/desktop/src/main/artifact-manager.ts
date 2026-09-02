@@ -403,6 +403,21 @@ export class ArtifactManager {
         return null;
       }
 
+      const host = await this.sessionManager.getHostAdapter(session.serverId);
+      const worktreeForGit = await this.sessionManager.resolveSessionWorktreePath(session);
+      try {
+        const tracked = await host.execute(
+          `git ls-files --error-unmatch -- ${quoteShellArgument(promotablePath)}`,
+          { cwd: worktreeForGit.value }
+        );
+        if (tracked.exitCode === 0) {
+          this.logger.info('Ignoring detected versioned file', { sessionId, path: promotablePath });
+          return null;
+        }
+      } finally {
+        worktreeForGit.release();
+      }
+
       // Check if already registered
       const existing = await this.repos.artifacts.findBySessionId(sessionId);
       const persistedTargetPath = `${session.worktreePath.replace(/\/+$/, '')}/${promotablePath}`;
@@ -410,7 +425,6 @@ export class ArtifactManager {
         return null; // Already tracked
       }
 
-      const host = await this.sessionManager.getHostAdapter(session.serverId);
       const runtimeTargetPath = await this.sessionManager.resolvePersistedSessionPath(session, persistedTargetPath);
       try {
         const rstat = await host.stat(runtimeTargetPath.value).catch(() => null);
@@ -540,6 +554,24 @@ export class ArtifactManager {
     this.logger.info('Deleted artifact record', { sessionId, artifactId });
     return this.repos.artifacts.delete(artifactId);
   }
+
+  /** Clears the session registry and local cache without touching remote files. */
+  async clearArtifacts(sessionId: string): Promise<number> {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session) {
+      throw new Error(`Session '${sessionId}' not found`);
+    }
+
+    const artifacts = await this.repos.artifacts.findBySessionId(sessionId);
+    const deleted = await Promise.all(
+      artifacts.map((artifact) => this.deleteArtifact(sessionId, artifact.id))
+    );
+    return deleted.filter(Boolean).length;
+  }
+}
+
+function quoteShellArgument(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function getMimeType(filePath: string): string {

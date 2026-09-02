@@ -270,6 +270,7 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       mimeType: 'application/json',
     }),
     deleteArtifact: vi.fn().mockResolvedValue(true),
+    clearArtifacts: vi.fn().mockResolvedValue(0),
     saveArtifactAs: vi.fn().mockResolvedValue(true),
     openArtifactInOs: vi.fn().mockResolvedValue(true),
     openSnippetInEditor: vi.fn().mockResolvedValue(true),

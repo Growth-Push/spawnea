@@ -51,6 +51,7 @@ describe('ArtifactGallery Component', () => {
         mimeType: 'text/markdown',
       }),
       deleteArtifact: vi.fn().mockResolvedValue(true),
+      clearArtifacts: vi.fn().mockResolvedValue(2),
       saveArtifactAs: vi.fn().mockResolvedValue(true),
       openArtifactInOs: vi.fn().mockResolvedValue(true),
     };
@@ -141,5 +142,31 @@ describe('ArtifactGallery Component', () => {
 
     fireEvent.click(screen.getByTestId('artifact-context-blacklist-exact'));
     expect(addBlacklistMock).toHaveBeenCalledWith('screenshot.png');
+  });
+
+  it('requires confirmation before clearing and refreshes after accepting', async () => {
+    const confirmMock = vi.fn().mockReturnValue(false);
+    vi.stubGlobal('confirm', confirmMock);
+    const refresh = vi.fn();
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={refresh} />);
+
+    fireEvent.click(screen.getByTestId('clear-artifacts-button'));
+    expect(confirmMock).toHaveBeenCalledWith(
+      'Clear all 2 artifacts from this session? Remote files will not be deleted.'
+    );
+    expect(window.spawneaApi.clearArtifacts).not.toHaveBeenCalled();
+
+    confirmMock.mockReturnValue(true);
+    fireEvent.click(screen.getByTestId('clear-artifacts-button'));
+    await waitFor(() => {
+      expect(window.spawneaApi.clearArtifacts).toHaveBeenCalledWith('sess-1');
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it('uses a dense responsive grid for many artifacts', () => {
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    expect(screen.getByTestId('artifact-grid').className).toContain('xl:grid-cols-6');
   });
 });

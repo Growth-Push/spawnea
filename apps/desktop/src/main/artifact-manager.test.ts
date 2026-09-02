@@ -174,6 +174,10 @@ describe('ArtifactManager', () => {
       mimeType: 'text/markdown',
       size: 16,
     });
+    mockHost.customRules.push({
+      pattern: 'git ls-files --error-unmatch',
+      response: { stdout: '', stderr: 'pathspec did not match any files', exitCode: 1 },
+    });
 
     const artifact = await artifactManager.handleDetectedOutput(
       sessionId,
@@ -190,6 +194,44 @@ describe('ArtifactManager', () => {
       '/workspace/spawnea/nonexistent.md'
     );
     expect(missing).toBeNull();
+  });
+
+  it('ignores automatically detected files that are tracked by Git', async () => {
+    mockHost.mockFiles.set('/workspace/spawnea/README.md', {
+      content: '# Tracked file',
+      mimeType: 'text/markdown',
+      size: 14,
+    });
+    mockHost.customRules.push({
+      pattern: 'git ls-files --error-unmatch',
+      response: { stdout: 'README.md\n', stderr: '', exitCode: 0 },
+    });
+
+    const artifact = await artifactManager.handleDetectedOutput(sessionId, '/workspace/spawnea/README.md');
+
+    expect(artifact).toBeNull();
+    expect(await repos.artifacts.findBySessionId(sessionId)).toHaveLength(0);
+  });
+
+  it('ignores tracked UTF-8 filenames when Git quotes its output', async () => {
+    const filename = 'résumé.md';
+    mockHost.mockFiles.set(`/workspace/spawnea/${filename}`, {
+      content: '# Tracked UTF-8 file',
+      mimeType: 'text/markdown',
+      size: 20,
+    });
+    mockHost.customRules.push({
+      pattern: 'git ls-files --error-unmatch',
+      response: { stdout: '"r\\303\\251sum\\303\\251.md"\n', stderr: '', exitCode: 0 },
+    });
+
+    const artifact = await artifactManager.handleDetectedOutput(
+      sessionId,
+      `/workspace/spawnea/${filename}`
+    );
+
+    expect(artifact).toBeNull();
+    expect(await repos.artifacts.findBySessionId(sessionId)).toHaveLength(0);
   });
 
   it('rejects artifact path traversal and unsafe filenames', async () => {
@@ -226,6 +268,24 @@ describe('ArtifactManager', () => {
 
     const check = await repos.artifacts.findById(artifact.id);
     expect(check).toBeNull();
+  });
+
+  it('clears all session artifacts without deleting remote files', async () => {
+    const first = await artifactManager.createTextArtifact(sessionId, 'first.txt', 'first');
+    const second = await artifactManager.createTextArtifact(sessionId, 'second.txt', 'second');
+
+    expect(first.cachedLocalPath).toBeDefined();
+    expect(second.cachedLocalPath).toBeDefined();
+    expect(existsSync(first.cachedLocalPath!)).toBe(true);
+    expect(existsSync(second.cachedLocalPath!)).toBe(true);
+
+    await expect(artifactManager.clearArtifacts(sessionId)).resolves.toBe(2);
+    expect(await repos.artifacts.findBySessionId(sessionId)).toHaveLength(0);
+    expect(existsSync(first.cachedLocalPath!)).toBe(false);
+    expect(existsSync(second.cachedLocalPath!)).toBe(false);
+    expect(mockHost.mockFiles.has(first.remotePath)).toBe(true);
+    expect(mockHost.mockFiles.has(second.remotePath)).toBe(true);
+    expect(mockHost.executedCommands.some(({ command }) => command.includes('rm '))).toBe(false);
   });
 
   it('enforces artifact ownership for reads and deletes', async () => {
