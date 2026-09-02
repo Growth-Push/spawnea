@@ -316,7 +316,11 @@ export function App(): React.JSX.Element {
         }))
       );
 
-      if (cancelled || requestGeneration !== gitRequestGeneration.current) return;
+      if (cancelled) return;
+      if (requestGeneration !== gitRequestGeneration.current) {
+        pollTimer = setTimeout(refreshGitStatus, 15_000);
+        return;
+      }
 
       setGitDirtyBySessionId((current) => {
         const next: Record<string, boolean> = {};
