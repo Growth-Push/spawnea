@@ -23,8 +23,8 @@ describe('desktop runtime paths', () => {
 
   it('resolves sibling output directories when Electron starts from out/main', () => {
     const appPath = '/workspace/apps/desktop/out/main';
-    const rendererPath = '/workspace/apps/desktop/out/renderer/index.html';
-    const preloadPath = '/workspace/apps/desktop/out/preload/index.cjs';
+    const rendererPath = join('/workspace/apps/desktop', 'out/renderer/index.html');
+    const preloadPath = join('/workspace/apps/desktop', 'out/preload/index.cjs');
     const existingPaths = new Set([rendererPath, preloadPath]);
 
     expect(resolveDesktopRuntimePaths(appPath, (path) => existingPaths.has(path))).toEqual({
