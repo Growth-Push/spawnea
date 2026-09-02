@@ -231,10 +231,32 @@ describe('ArtifactManager', () => {
     );
 
     expect(mockHost.executedCommands.some(({ command }) =>
-      command === `git ls-files --error-unmatch -- '${filename}'`
+      command === `git ls-files --error-unmatch -- ':(literal)${filename}'`
     )).toBe(true);
     expect(artifact).toBeNull();
     expect(await repos.artifacts.findBySessionId(sessionId)).toHaveLength(0);
+  });
+
+  it('uses literal Git pathspecs for detected filenames containing wildcards', async () => {
+    mockHost.mockFiles.set('/workspace/spawnea/report*.txt', {
+      content: 'literal filename',
+      mimeType: 'text/plain',
+      size: 16,
+    });
+    mockHost.customRules.push({
+      pattern: 'git ls-files --error-unmatch',
+      response: { stdout: '', stderr: 'pathspec did not match any files', exitCode: 1 },
+    });
+
+    const artifact = await artifactManager.handleDetectedOutput(
+      sessionId,
+      '/workspace/spawnea/report*.txt'
+    );
+
+    expect(mockHost.executedCommands.some(({ command }) =>
+      command === "git ls-files --error-unmatch -- ':(literal)report*.txt'"
+    )).toBe(true);
+    expect(artifact?.filename).toBe('report*.txt');
   });
 
   it('does not promote a detected file when Git status cannot be determined', async () => {

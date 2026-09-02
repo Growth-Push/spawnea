@@ -449,7 +449,7 @@ export class ArtifactManager {
       const worktreeForGit = await this.sessionManager.resolveSessionWorktreePath(session);
       try {
         const tracked = await host.execute(
-          `git ls-files --error-unmatch -- ${quoteShellArgument(promotablePath)}`,
+          `git ls-files --error-unmatch -- ${quoteShellArgument(`:(literal)${promotablePath}`)}`,
           { cwd: worktreeForGit.value }
         );
         if (tracked.exitCode === 0) {
