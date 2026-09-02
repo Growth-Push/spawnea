@@ -253,6 +253,21 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('hermes-idle-completion-checkmark');
   });
 
+  it('accepts millisecond completion durations and rejects incomplete Hermes bars', () => {
+    const withMilliseconds = detectPromptInTail([
+      '⚕ model │ 28K/128K │ ✓9ms',
+    ], { harness: 'hermes' });
+    expect(withMilliseconds.matchedRuleId).toBe('hermes-idle-completion-checkmark');
+
+    const withoutMetricsPrefix = detectPromptInTail(['│ ✓9ms'], { harness: 'hermes' });
+    expect(withoutMetricsPrefix.matchedRuleId).not.toBe('hermes-idle-completion-checkmark');
+
+    const withoutCompletionCheckmark = detectPromptInTail([
+      '⚕ model │ 28K/128K │ ⏲ 3m 45s',
+    ], { harness: 'hermes' });
+    expect(withoutCompletionCheckmark.matchedRuleId).not.toBe('hermes-idle-completion-checkmark');
+  });
+
   it('detects Hermes active execution interrupt footer', () => {
     const tail = [
       'Inspecting files...',

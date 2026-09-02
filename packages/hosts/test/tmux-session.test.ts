@@ -166,6 +166,53 @@ describe('TmuxManager', () => {
     expect(host.executedCommands.at(-1)?.command).toContain("-t 'sess-1:1'");
   });
 
+  it('falls back to the session target when no valid first window index is returned', async () => {
+    const host = new MockHostAdapter('host-1');
+    host.customRules.push({
+      pattern: 'tmux list-windows -t',
+      response: { stdout: '1garbage\n-1\n9007199254740992\n', stderr: '', exitCode: 0 },
+    });
+    host.customRules.push({
+      pattern: 'tmux capture-pane',
+      response: { stdout: 'tail\n', stderr: '', exitCode: 0 },
+    });
+
+    const tmux = new TmuxManager();
+    await tmux.capturePaneTail(host, 'sess-1');
+
+    expect(host.executedCommands.at(-1)?.command).toContain("-t 'sess-1'");
+  });
+
+  it('normalizes line-count requests before building the tmux capture command', async () => {
+    const host = new MockHostAdapter('host-1');
+    host.customRules.push({
+      pattern: 'tmux list-windows -t',
+      response: { stdout: '', stderr: '', exitCode: 0 },
+    });
+    host.customRules.push({
+      pattern: 'tmux capture-pane',
+      response: { stdout: 'tail\n', stderr: '', exitCode: 0 },
+    });
+
+    const tmux = new TmuxManager();
+    await tmux.capturePaneTail(host, 'sess-1', Number.NaN);
+    await tmux.capturePaneTail(host, 'sess-1', Number.POSITIVE_INFINITY);
+    await tmux.capturePaneTail(host, 'sess-1', -10);
+    await tmux.capturePaneTail(host, 'sess-1', 10.9);
+    await tmux.capturePaneTail(host, 'sess-1', 3_000_000_000);
+
+    const captureCommands = host.executedCommands
+      .filter(({ command }) => command.includes('tmux capture-pane'))
+      .map(({ command }) => command);
+    expect(captureCommands).toEqual([
+      "tmux capture-pane -p -t 'sess-1' -S -25",
+      "tmux capture-pane -p -t 'sess-1' -S -25",
+      "tmux capture-pane -p -t 'sess-1' -S -0",
+      "tmux capture-pane -p -t 'sess-1' -S -10",
+      "tmux capture-pane -p -t 'sess-1' -S -2147483647",
+    ]);
+  });
+
   it('discovers external tmux sessions and filters out already known Spawnea sessions (FG-7.2.1)', async () => {
     const host = new MockHostAdapter('host-1');
     host.customRules.push({

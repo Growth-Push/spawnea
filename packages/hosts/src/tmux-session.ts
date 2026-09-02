@@ -200,11 +200,13 @@ export class TmuxManager {
     );
     const firstWindow = windowsResult.stdout
       .split('\n')
-      .map((value) => Number.parseInt(value.trim(), 10))
-      .filter((value) => Number.isInteger(value))
+      .map((value) => value.trim())
+      .filter((value) => /^\d+$/.test(value))
+      .map((value) => Number(value))
+      .filter((value) => Number.isSafeInteger(value) && value >= 0)
       .sort((a, b) => a - b)[0];
     const target = firstWindow === undefined ? sessionName : `${sessionName}:${firstWindow}`;
-    const safeLines = Number.isFinite(lines) ? Math.max(0, Math.trunc(lines)) : 25;
+    const safeLines = Number.isFinite(lines) ? Math.min(Math.max(0, Math.trunc(lines)), 2_147_483_647) : 25;
     const cmd = `tmux capture-pane -p -t ${escapeShellArg(target)} -S -${safeLines}`;
     const result = await host.execute(cmd);
     if (result.exitCode !== 0) {
