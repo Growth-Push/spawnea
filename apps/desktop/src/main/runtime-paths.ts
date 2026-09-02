@@ -5,6 +5,12 @@ export interface DesktopRuntimePaths {
   rendererPath: string;
 }
 
+/**
+ * Resolves the preload script and renderer entry paths for the desktop runtime.
+ *
+ * @param appPath - The application path used to locate the runtime output directory
+ * @returns The resolved preload script path and renderer HTML path
+ */
 export function resolveDesktopRuntimePaths(
   appPath: string,
   fileExists: (path: string) => boolean,
