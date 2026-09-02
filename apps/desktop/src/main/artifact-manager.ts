@@ -414,6 +414,15 @@ export class ArtifactManager {
           this.logger.info('Ignoring detected versioned file', { sessionId, path: promotablePath });
           return null;
         }
+        if (tracked.exitCode !== 1) {
+          this.logger.warn('Could not determine whether detected file is versioned', {
+            sessionId,
+            path: promotablePath,
+            exitCode: tracked.exitCode,
+            stderr: tracked.stderr,
+          });
+          return null;
+        }
       } finally {
         worktreeForGit.release();
       }

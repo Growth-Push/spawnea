@@ -230,6 +230,29 @@ describe('ArtifactManager', () => {
       `/workspace/spawnea/${filename}`
     );
 
+    expect(mockHost.executedCommands.some(({ command }) =>
+      command === `git ls-files --error-unmatch -- '${filename}'`
+    )).toBe(true);
+    expect(artifact).toBeNull();
+    expect(await repos.artifacts.findBySessionId(sessionId)).toHaveLength(0);
+  });
+
+  it('does not promote a detected file when Git status cannot be determined', async () => {
+    mockHost.mockFiles.set('/workspace/spawnea/unknown.md', {
+      content: '# Unknown Git status',
+      mimeType: 'text/markdown',
+      size: 20,
+    });
+    mockHost.customRules.push({
+      pattern: 'git ls-files --error-unmatch',
+      response: { stdout: '', stderr: 'fatal: not a git repository', exitCode: 128 },
+    });
+
+    const artifact = await artifactManager.handleDetectedOutput(
+      sessionId,
+      '/workspace/spawnea/unknown.md'
+    );
+
     expect(artifact).toBeNull();
     expect(await repos.artifacts.findBySessionId(sessionId)).toHaveLength(0);
   });

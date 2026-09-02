@@ -28,7 +28,7 @@ export interface ArtifactGalleryProps {
   sessionId: string;
   artifacts: Artifact[];
   isLoading?: boolean;
-  onRefresh?: () => void;
+  onRefresh: () => void;
   onUploadFile?: (file: File) => Promise<void>;
   onPasteImage?: () => Promise<void>;
   onDeleteArtifact?: (artifactId: string) => Promise<void>;
@@ -223,7 +223,8 @@ export function ArtifactGallery({
         await window.spawneaApi.clearArtifacts(sessionId);
         setSelectedArtifact(null);
         setHiddenArtifactIds(new Set());
-        onRefresh?.();
+        localStorage.removeItem(`spawnea:hiddenArtifacts:${sessionId}`);
+        onRefresh();
         showToast('Cleared session artifacts');
       }
     } catch (err: any) {

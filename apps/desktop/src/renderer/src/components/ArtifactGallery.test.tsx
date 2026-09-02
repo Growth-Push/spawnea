@@ -61,7 +61,7 @@ describe('ArtifactGallery Component', () => {
   });
 
   it('renders artifact cards and counts in filter chips', () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     expect(screen.getByText('All (2)')).toBeDefined();
     expect(screen.getByText('Inputs (1)')).toBeDefined();
@@ -71,7 +71,7 @@ describe('ArtifactGallery Component', () => {
   });
 
   it('filters artifacts by direction', () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     fireEvent.click(screen.getByTestId('filter-artifacts-input'));
     expect(screen.getByText('screenshot.png')).toBeDefined();
@@ -83,7 +83,7 @@ describe('ArtifactGallery Component', () => {
   });
 
   it('searches artifacts by filename', () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     const searchInput = screen.getByTestId('search-artifacts-input');
     fireEvent.change(searchInput, { target: { value: 'README' } });
@@ -93,7 +93,7 @@ describe('ArtifactGallery Component', () => {
   });
 
   it('opens preview modal when clicking an artifact card', async () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     fireEvent.click(screen.getByTestId('artifact-card-art-2'));
 
@@ -107,7 +107,7 @@ describe('ArtifactGallery Component', () => {
   });
 
   it('supports hiding and unhiding an artifact card', async () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     expect(screen.getByText('screenshot.png')).toBeDefined();
 
@@ -132,7 +132,7 @@ describe('ArtifactGallery Component', () => {
     const addBlacklistMock = vi.fn().mockResolvedValue(['package-lock.json', 'screenshot.png']);
     (window as any).spawneaApi.addArtifactToBlacklist = addBlacklistMock;
 
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     const card = screen.getByTestId('artifact-card-art-1');
     fireEvent.contextMenu(card, { clientX: 100, clientY: 100 });
@@ -148,6 +148,7 @@ describe('ArtifactGallery Component', () => {
     const confirmMock = vi.fn().mockReturnValue(false);
     vi.stubGlobal('confirm', confirmMock);
     const refresh = vi.fn();
+    localStorage.setItem('spawnea:hiddenArtifacts:sess-1', JSON.stringify(['art-1']));
     render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={refresh} />);
 
     fireEvent.click(screen.getByTestId('clear-artifacts-button'));
@@ -162,11 +163,12 @@ describe('ArtifactGallery Component', () => {
       expect(window.spawneaApi.clearArtifacts).toHaveBeenCalledWith('sess-1');
       expect(refresh).toHaveBeenCalledTimes(1);
     });
+    expect(localStorage.getItem('spawnea:hiddenArtifacts:sess-1')).toBeNull();
     vi.unstubAllGlobals();
   });
 
   it('uses a dense responsive grid for many artifacts', () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
     expect(screen.getByTestId('artifact-grid').className).toContain('xl:grid-cols-6');
   });
 });
