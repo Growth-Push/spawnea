@@ -145,6 +145,7 @@ interface SidebarProps {
   hostHealthMap?: Record<string, HostHealthResult>;
   statusDetailsMap?: Record<string, SessionStatusResult>;
   gitDirtyBySessionId?: Record<string, boolean>;
+  gitChangeCountBySessionId?: Record<string, number>;
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
   onOpenCreateModal: () => void;
@@ -320,6 +321,7 @@ export function Sidebar({
   hostHealthMap = {},
   statusDetailsMap = {},
   gitDirtyBySessionId = {},
+  gitChangeCountBySessionId = {},
   activeSessionId,
   onSelectSession,
   onOpenCreateModal,
@@ -657,6 +659,7 @@ export function Sidebar({
     // Project root / worktree path
     const displayPath = session.worktreePath || project?.rootPath || session.projectId;
     const hasUncommittedChanges = gitDirtyBySessionId[session.id] === true;
+    const gitChangeCount = gitChangeCountBySessionId[session.id] ?? (hasUncommittedChanges ? 1 : 0);
     const formattedPath = formatSessionPath(displayPath);
 
     return (
@@ -733,20 +736,18 @@ export function Sidebar({
               <GitFork className="w-2.5 h-2.5" />
               <span>Worktree</span>
               {hasUncommittedChanges && (
-                <FileDiff
-                  data-testid={`session-worktree-dirty-indicator-${session.id}`}
-                  aria-label="Uncommitted Git changes"
-                  className="w-2.5 h-2.5 text-amber-300"
-                />
+                <span className="inline-flex items-center gap-0.5 text-amber-300" title={`${gitChangeCount} uncommitted Git change${gitChangeCount === 1 ? '' : 's'}`}>
+                  <FileDiff data-testid={`session-worktree-dirty-indicator-${session.id}`} aria-label="Uncommitted Git changes" className="w-2.5 h-2.5" />
+                  <span data-testid={`session-worktree-change-count-${session.id}`}>{gitChangeCount}</span>
+                </span>
               )}
             </span>
           )}
           {!session.managedWorktree && hasUncommittedChanges && (
-            <FileDiff
-              data-testid={`session-git-dirty-indicator-${session.id}`}
-              aria-label="Uncommitted Git changes"
-              className="w-3 h-3 text-amber-300 shrink-0"
-            />
+            <span className="inline-flex items-center gap-0.5 text-amber-300" title={`${gitChangeCount} uncommitted Git change${gitChangeCount === 1 ? '' : 's'}`}>
+              <FileDiff data-testid={`session-git-dirty-indicator-${session.id}`} aria-label="Uncommitted Git changes" className="w-3 h-3" />
+              <span data-testid={`session-git-change-count-${session.id}`}>{gitChangeCount}</span>
+            </span>
           )}
           {session.isExternal && (
             <span
@@ -812,6 +813,7 @@ export function Sidebar({
     const displayProject = project?.name || session.projectId;
     const displayPath = session.worktreePath || project?.rootPath || session.projectId;
     const hasUncommittedChanges = gitDirtyBySessionId[session.id] === true;
+    const gitChangeCount = gitChangeCountBySessionId[session.id] ?? (hasUncommittedChanges ? 1 : 0);
     const descriptionId = `session-dense-description-${session.id}`;
 
     return (
@@ -861,20 +863,18 @@ export function Sidebar({
                 >
                   <GitFork className="w-2.5 h-2.5" />
                   {hasUncommittedChanges && (
-                    <FileDiff
-                      data-testid={`session-dense-worktree-dirty-indicator-${session.id}`}
-                      aria-label="Uncommitted Git changes"
-                      className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-sm bg-[#12161c] text-amber-300"
-                    />
+                    <span className="absolute -top-1 -right-1 inline-flex items-center rounded-sm bg-[#12161c] text-amber-300">
+                      <FileDiff data-testid={`session-dense-worktree-dirty-indicator-${session.id}`} aria-label="Uncommitted Git changes" className="w-2.5 h-2.5" />
+                      <span data-testid={`session-dense-worktree-change-count-${session.id}`} className="text-[8px]">{gitChangeCount}</span>
+                    </span>
                   )}
                 </span>
               )}
               {!session.managedWorktree && hasUncommittedChanges && (
-                <FileDiff
-                  data-testid={`session-dense-git-dirty-indicator-${session.id}`}
-                  aria-label="Uncommitted Git changes"
-                  className="w-3 h-3 text-amber-300 shrink-0"
-                />
+                <span className="inline-flex items-center gap-0.5 text-amber-300" title={`${gitChangeCount} uncommitted Git change${gitChangeCount === 1 ? '' : 's'}`}>
+                  <FileDiff data-testid={`session-dense-git-dirty-indicator-${session.id}`} aria-label="Uncommitted Git changes" className="w-3 h-3" />
+                  <span data-testid={`session-dense-git-change-count-${session.id}`} className="text-[8px]">{gitChangeCount}</span>
+                </span>
               )}
               {session.isExternal && (
                 <span className="text-[8px] font-bold text-cyan-300">EXT</span>

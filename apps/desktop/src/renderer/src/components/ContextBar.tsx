@@ -31,6 +31,7 @@ interface ContextBarProps {
   agent?: Agent;
   hostInfo?: HostSystemInfo;
   hasUncommittedChanges?: boolean;
+  gitChangeCount?: number;
   onDetach?: (sessionId: string) => void;
   onStop?: (sessionId: string) => void;
   onAttach?: (sessionId: string) => void;
@@ -49,6 +50,7 @@ export function ContextBar({
   agent,
   hostInfo,
   hasUncommittedChanges = false,
+  gitChangeCount = 0,
   onDetach,
   onStop,
   onAttach,
@@ -256,21 +258,19 @@ export function ContextBar({
               <GitFork className="w-3 h-3 shrink-0" />
               <span>Worktree</span>
               {hasUncommittedChanges && (
-                <FileDiff
-                  data-testid="contextbar-worktree-dirty-indicator"
-                  aria-label="Uncommitted Git changes"
-                  className="w-3 h-3 text-amber-300 shrink-0"
-                />
+                <>
+                  <FileDiff data-testid="contextbar-worktree-dirty-indicator" aria-label="Uncommitted Git changes" className="w-3 h-3 text-amber-300 shrink-0" />
+                  <span data-testid="contextbar-worktree-change-count">{gitChangeCount}</span>
+                </>
               )}
             </span>
           )}
 
           {!session.managedWorktree && hasUncommittedChanges && (
-            <FileDiff
-              data-testid="contextbar-git-dirty-indicator"
-              aria-label="Uncommitted Git changes"
-              className="w-3.5 h-3.5 text-amber-300 shrink-0"
-            />
+            <>
+              <FileDiff data-testid="contextbar-git-dirty-indicator" aria-label="Uncommitted Git changes" className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <span data-testid="contextbar-git-change-count">{gitChangeCount}</span>
+            </>
           )}
 
           <span

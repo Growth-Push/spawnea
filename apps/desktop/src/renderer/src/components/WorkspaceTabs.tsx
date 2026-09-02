@@ -50,6 +50,7 @@ interface WorkspaceTabsProps {
   project?: Project;
   agent?: Agent;
   hasUncommittedChanges?: boolean;
+  gitChangeCount?: number;
   activeTab: WorkspaceTabType;
   onTabChange: (tab: WorkspaceTabType) => void;
   onAttach?: (sessionId: string) => void;
@@ -110,6 +111,7 @@ export function WorkspaceTabs({
   project,
   agent,
   hasUncommittedChanges = false,
+  gitChangeCount = 0,
   activeTab,
   onTabChange,
   onAttach,
@@ -440,7 +442,7 @@ export function WorkspaceTabs({
     {
       id: 'diff',
       label: 'Git Diff',
-      badge: gitStatus && gitStatus.totalChanges > 0 ? gitStatus.totalChanges : undefined,
+      badge: gitStatus && gitStatus.totalChanges > 0 ? gitStatus.totalChanges : (gitChangeCount > 0 ? gitChangeCount : undefined),
       icon: GitBranch,
       shortcut: 'Alt+3',
     },
@@ -538,20 +540,18 @@ export function WorkspaceTabs({
               <GitFork className="w-3 h-3" />
               <span>Worktree</span>
               {hasUncommittedChanges && (
-                <FileDiff
-                  data-testid="workspace-worktree-dirty-indicator"
-                  aria-label="Uncommitted Git changes"
-                  className="w-3 h-3 text-amber-300"
-                />
+                <>
+                  <FileDiff data-testid="workspace-worktree-dirty-indicator" aria-label="Uncommitted Git changes" className="w-3 h-3 text-amber-300" />
+                  <span data-testid="workspace-worktree-change-count">{gitChangeCount}</span>
+                </>
               )}
             </span>
           )}
           {!session.managedWorktree && hasUncommittedChanges && (
-            <FileDiff
-              data-testid="workspace-git-dirty-indicator"
-              aria-label="Uncommitted Git changes"
-              className="w-3.5 h-3.5 text-amber-300"
-            />
+            <>
+              <FileDiff data-testid="workspace-git-dirty-indicator" aria-label="Uncommitted Git changes" className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <span data-testid="workspace-git-change-count">{gitChangeCount}</span>
+            </>
           )}
           <span>tmux: {session.tmuxSessionName}</span>
         </div>

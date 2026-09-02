@@ -40,6 +40,8 @@ export function App(): React.JSX.Element {
   const [hostInfoMap, setHostInfoMap] = useState<Record<string, HostSystemInfo>>({});
   const [hostHealthMap, setHostHealthMap] = useState<Record<string, HostHealthResult>>({});
   const [gitDirtyBySessionId, setGitDirtyBySessionId] = useState<Record<string, boolean>>({});
+  const [gitChangeCountBySessionId, setGitChangeCountBySessionId] = useState<Record<string, number>>({});
+  const [gitRefreshNonce, setGitRefreshNonce] = useState(0);
   const [statusDetailsMap, setStatusDetailsMap] = useState<Record<string, import('@spawnea/domain').SessionStatusResult>>({});
   const [catalog, setCatalog] = useState<OperationalCatalog | null>(null);
   const [catalogPath, setCatalogPath] = useState<string | undefined>(undefined);
@@ -203,6 +205,7 @@ export function App(): React.JSX.Element {
         if (result) {
           setStatusDetailsMap((prev) => ({ ...prev, [sessionId]: result }));
         }
+        setGitRefreshNonce((current) => current + 1);
       });
       unsubs.push(unStatus);
     }
@@ -276,6 +279,7 @@ export function App(): React.JSX.Element {
     const getGitStatus = window.spawneaApi?.getGitStatus;
     if (!getGitStatus || !sessionIdsKey) {
       setGitDirtyBySessionId({});
+      setGitChangeCountBySessionId({});
       return;
     }
 
@@ -306,6 +310,19 @@ export function App(): React.JSX.Element {
         return next;
       });
 
+      setGitChangeCountBySessionId((current) => {
+        const next: Record<string, number> = {};
+        results.forEach((result, index) => {
+          const sessionId = sessionIds[index];
+          if (result.status === 'fulfilled') {
+            next[sessionId] = result.value.status.isGitRepo ? result.value.status.totalChanges : 0;
+          } else if (sessionId in current) {
+            next[sessionId] = current[sessionId];
+          }
+        });
+        return next;
+      });
+
       pollTimer = setTimeout(refreshGitStatus, 15_000);
     };
 
@@ -315,7 +332,7 @@ export function App(): React.JSX.Element {
       cancelled = true;
       if (pollTimer !== undefined) clearTimeout(pollTimer);
     };
-  }, [sessionIdsKey]);
+  }, [sessionIdsKey, gitRefreshNonce]);
 
   const handleControlFinalizationDecision = async (
     requestId: string,
@@ -664,6 +681,7 @@ export function App(): React.JSX.Element {
         setServers(loadedServers);
         setProjects(loadedProjects);
         setAgents(loadedAgents);
+        setGitRefreshNonce((current) => current + 1);
       } else {
         await loadData();
       }
@@ -819,6 +837,7 @@ export function App(): React.JSX.Element {
         hostHealthMap={hostHealthMap}
         statusDetailsMap={statusDetailsMap}
         gitDirtyBySessionId={gitDirtyBySessionId}
+        gitChangeCountBySessionId={gitChangeCountBySessionId}
         activeSessionId={activeSessionId}
         onSelectSession={setActiveSessionId}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
@@ -909,6 +928,7 @@ export function App(): React.JSX.Element {
               agent={activeAgent}
               hostInfo={activeSession ? hostInfoMap[activeSession.serverId] : undefined}
               hasUncommittedChanges={activeSession ? gitDirtyBySessionId[activeSession.id] : false}
+              gitChangeCount={activeSession ? gitChangeCountBySessionId[activeSession.id] : 0}
               onDetach={handleDetachSession}
               onStop={handleRequestStopSession}
               onAttach={handleAttachSession}
@@ -927,6 +947,7 @@ export function App(): React.JSX.Element {
               project={activeProject}
               agent={activeAgent}
               hasUncommittedChanges={activeSession ? gitDirtyBySessionId[activeSession.id] : false}
+              gitChangeCount={activeSession ? gitChangeCountBySessionId[activeSession.id] : 0}
               activeTab={activeTab}
               onTabChange={handleTabChange}
               onAttach={handleAttachSession}
