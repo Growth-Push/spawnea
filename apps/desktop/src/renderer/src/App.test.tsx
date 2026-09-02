@@ -136,6 +136,7 @@ const mockSessions: Session[] = [
 
 function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Window['spawneaApi'] {
   return {
+    writeClipboardText: vi.fn().mockResolvedValue(undefined),
     listSessions: vi.fn().mockResolvedValue(mockSessions),
     reconcileSessions: vi.fn().mockResolvedValue(mockSessions),
     listServers: vi.fn().mockResolvedValue(mockServers),
@@ -317,6 +318,11 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       status: 'connected',
       attempt: 0,
       maxAttempts: 5,
+    }),
+    getHostConnectionEndpoint: vi.fn().mockResolvedValue({
+      transport: 'local',
+      hostname: '127.0.0.1',
+      port: 0,
     }),
     retryHostConnection: vi.fn().mockResolvedValue({
       serverId: 'srv-1',

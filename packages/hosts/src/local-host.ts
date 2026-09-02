@@ -9,6 +9,7 @@ import type {
   ExecResult,
   HostTestResult,
   Logger,
+  HostConnectionEndpoint,
 } from '@spawnea/domain';
 import { createLogger } from '@spawnea/domain';
 
@@ -43,6 +44,14 @@ export class LocalHostAdapter implements HostAdapter {
       status: this.connected ? 'connected' : 'disconnected',
       attempt: 0,
       maxAttempts: 5,
+    };
+  }
+
+  async getConnectionEndpoint(): Promise<HostConnectionEndpoint> {
+    return {
+      transport: 'local',
+      hostname: '127.0.0.1',
+      port: 0,
     };
   }
 
@@ -363,4 +372,3 @@ function isLocalBinaryBuffer(buf: Buffer): boolean {
   }
   return false;
 }
-

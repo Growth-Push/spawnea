@@ -95,6 +95,22 @@ export interface HostConnectionState {
   lastConnectedAt?: string;
 }
 
+export type HostConnectionTransport = 'local' | 'ssh';
+
+export interface HostConnectionEndpoint {
+  transport: HostConnectionTransport;
+  hostname: string;
+  port: number;
+}
+
+export function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  const unbracketed = normalized.startsWith('[') && normalized.endsWith(']')
+    ? normalized.slice(1, -1)
+    : normalized;
+  return unbracketed === 'localhost' || unbracketed === '127.0.0.1' || unbracketed === '::1';
+}
+
 export interface HostAdapter {
   readonly serverId: string;
   connect(): Promise<void>;
@@ -111,6 +127,7 @@ export interface HostAdapter {
   writeFile(remotePath: string, data: Buffer | Uint8Array | string): Promise<void>;
   mkdir(dirPath: string): Promise<void>;
   getConnectionState?(): HostConnectionState;
+  getConnectionEndpoint?(): Promise<HostConnectionEndpoint | null>;
   onConnectionStateChange?(listener: (state: HostConnectionState) => void): () => void;
   reconnect?(): Promise<void>;
 }

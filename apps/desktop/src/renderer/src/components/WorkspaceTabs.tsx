@@ -6,9 +6,11 @@ import type {
   Agent,
   Artifact,
   HostSystemInfo,
+  HostConnectionEndpoint,
   GitStatusResult,
   GitDiffResult,
 } from '@spawnea/domain';
+import { isLoopbackHost } from '@spawnea/domain';
 import { TerminalView } from './TerminalView';
 import { FileBrowser } from './FileBrowser';
 import { GitStatusView } from './GitStatusView';
@@ -37,6 +39,10 @@ import {
 } from 'lucide-react';
 
 export type WorkspaceTabType = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details';
+
+function isLocalClipboardBridgeEndpoint(endpoint?: HostConnectionEndpoint | null): boolean {
+  return endpoint?.transport === 'local' && isLoopbackHost(endpoint.hostname);
+}
 
 interface WorkspaceTabsProps {
   session: Session | null;
@@ -115,6 +121,10 @@ export function WorkspaceTabs({
   const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(false);
   const [hostInfo, setHostInfo] = useState<HostSystemInfo | null>(null);
   const [isLoadingHostInfo, setIsLoadingHostInfo] = useState(false);
+  const [clipboardBridgeState, setClipboardBridgeState] = useState<{
+    sessionId: string | null;
+    available: boolean;
+  }>({ sessionId: null, available: false });
 
   // Output detection banner and modal preview
   const [detectedOutput, setDetectedOutput] = useState<Artifact | null>(null);
@@ -210,6 +220,7 @@ export function WorkspaceTabs({
 
   useEffect(() => {
     if (!session) {
+      setClipboardBridgeState({ sessionId: null, available: false });
       setArtifacts([]);
       setHostInfo(null);
       setGitStatus(null);
@@ -222,6 +233,37 @@ export function WorkspaceTabs({
     setDetectedOutput(null);
     fetchArtifacts(session.id);
   }, [session?.id, fetchArtifacts]);
+
+  useEffect(() => {
+    let isCurrent = true;
+    const sessionId = session?.id ?? null;
+    setClipboardBridgeState({ sessionId: null, available: false });
+
+    if (!session || typeof window.spawneaApi?.getHostConnectionEndpoint !== 'function') {
+      return () => {
+        isCurrent = false;
+      };
+    }
+
+    void window.spawneaApi.getHostConnectionEndpoint(session.serverId)
+      .then((endpoint) => {
+        if (isCurrent) {
+          setClipboardBridgeState({
+            sessionId,
+            available: isLocalClipboardBridgeEndpoint(endpoint),
+          });
+        }
+      })
+      .catch(() => {
+        if (isCurrent) {
+          setClipboardBridgeState({ sessionId, available: false });
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [session?.id, session?.serverId]);
 
   useEffect(() => {
     if (!session) return;
@@ -535,6 +577,7 @@ export function WorkspaceTabs({
               <TerminalView
                 session={session}
                 agent={agent}
+                clipboardBridgeAvailable={clipboardBridgeState.sessionId === session?.id && clipboardBridgeState.available}
                 onAttach={onAttach}
                 onDetach={onDetach}
                 onDelete={onDelete}

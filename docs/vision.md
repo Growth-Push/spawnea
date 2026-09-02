@@ -48,6 +48,13 @@ Session attention state is inferred from observable runtime state and terminal o
 
 The terminal view uses the open-source `@xterm/xterm` library, with `node-pty` and `ssh2` for PTY and SSH transport. Spawnea streams terminal bytes to the UI but does not record a terminal transcript or upload terminal data to a Spawnea service. Local operational metadata, logs, artifacts, and explicitly requested diagnostic reports remain separate persistence features.
 
+The terminal accepts OSC 52 clipboard writes so copy mode works through SSH and
+nested tmux sessions. Spawnea decodes at most 1 MiB of UTF-8 text and writes it
+through the context-isolated Electron clipboard bridge. Clipboard read queries
+from terminal applications are consumed without exposing local clipboard data.
+The tmux selection fallback is enabled only for resolved local loopback sessions;
+SSH aliases and forwarded ports remain OSC 52-only.
+
 ### Native workspace isolation
 
 Each session operates in its configured project folder or native Git worktree, keeping agent environments cleanly separated without third-party toolchains.

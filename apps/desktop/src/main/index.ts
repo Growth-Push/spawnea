@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, dialog, type WebContents } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, shell, dialog, type WebContents } from 'electron';
 import { join, resolve, dirname } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import {
   createCatalogProjectPathLocator,
   isOnePasswordReference,
   maskSensitiveData,
+  isLoopbackHost,
   type CreateSessionInput,
   type Session,
   type LogLevel,
@@ -354,6 +355,9 @@ function registerIpcHandlers(
   });
   ipcMain.handle('hosts:getSystemInfo', async (_event, id: string) => sessManager.getHostSystemInfo(id));
   ipcMain.handle('hosts:getConnectionState', async (_event, serverId: string) => sessManager.getHostConnectionState(serverId));
+  ipcMain.handle('hosts:getConnectionEndpoint', async (_event, serverId: string) =>
+    sessManager.getHostConnectionEndpoint(serverId)
+  );
   ipcMain.handle('hosts:retryConnection', async (_event, serverId: string) => sessManager.retryHostConnection(serverId));
   ipcMain.handle('hosts:discoverExternalSessions', async (_event, serverId: string) =>
     sessManager.discoverExternalSessions(serverId)
@@ -372,8 +376,15 @@ function registerIpcHandlers(
   );
   ipcMain.handle('projects:choosePath', async (_event, serverId: string, currentPath?: string) => {
     const server = await repos.servers.findById(serverId);
-    const isLocalHost = server?.host === 'localhost' || server?.host === '127.0.0.1';
-    if (!server || !isLocalHost) {
+    if (!server) {
+      return {
+        canceled: false,
+        error: 'Folder selection is available for local hosts only. Enter the remote path manually.',
+      };
+    }
+    const hasDirectSshSettings = Boolean(server.sshConfigAlias || server.sshUser || server.sshPort !== 22);
+    const isLocalHost = isLoopbackHost(server.host) && !hasDirectSshSettings;
+    if (!isLocalHost) {
       return {
         canceled: false,
         error: 'Folder selection is available for local hosts only. Enter the remote path manually.',
@@ -402,6 +413,12 @@ function registerIpcHandlers(
     }
     const error = await shell.openPath(configPath);
     return error ? { success: false, error: `Could not open configuration file: ${error}` } : { success: true };
+  });
+  ipcMain.handle('clipboard:writeText', async (_event, text: unknown) => {
+    if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 1024 * 1024) {
+      throw new Error('Clipboard text must be a string no larger than 1 MiB');
+    }
+    clipboard.writeText(text);
   });
 
   // Session Lifecycle & Status Supervision

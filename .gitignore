@@ -178,3 +178,5 @@ config/config.yaml
 # Private planning notes
 docs/task/
 docs/tasks/
+
+/.agents/

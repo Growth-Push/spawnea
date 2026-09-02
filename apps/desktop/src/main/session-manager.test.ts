@@ -1266,6 +1266,33 @@ up 1 day, 5 hours
     expect(retriedState.attempt).toBe(0);
   });
 
+  it('routes loopback profiles with SSH settings through the SSH adapter', async () => {
+    await repos.servers.save({
+      id: 'loopback-ssh',
+      name: 'Loopback SSH Host',
+      host: '::1',
+      sshUser: 'remote-user',
+      sshPort: 2222,
+      enabled: true,
+    });
+    const fallbackManager = new SessionManager({
+      repositories: repos,
+      catalogManager: catManager,
+      contextStore,
+      ptyBroker,
+    });
+
+    try {
+      await expect(fallbackManager.getHostConnectionEndpoint('loopback-ssh')).resolves.toEqual({
+        transport: 'ssh',
+        hostname: '::1',
+        port: 2222,
+      });
+    } finally {
+      await fallbackManager.dispose();
+    }
+  });
+
   it('transparently re-attaches PTY stream and notifies renderer when host connection recovers', async () => {
     const session = await sessionManager.createSession({
       serverId: 'dev-workstation',
