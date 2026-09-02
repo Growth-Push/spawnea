@@ -210,8 +210,18 @@ export function WorkspaceTabs({
       setGitStatus(status);
       setGitStatusSessionId(sessionId);
 
+      const changedFilePaths = new Set([
+        ...status.staged,
+        ...status.unstaged,
+        ...status.untracked,
+      ].map((file) => file.path));
+      const requestedFilePath = filePath && changedFilePaths.has(filePath) ? filePath : undefined;
+      if (filePath && !requestedFilePath) {
+        setSelectedDiffFilePath(null);
+      }
+
       const diff = await window.spawneaApi.getGitDiff(sessionId, {
-        filePath: filePath || undefined,
+        filePath: requestedFilePath,
       });
       setGitDiff(diff);
     } catch (err: any) {
@@ -447,9 +457,17 @@ export function WorkspaceTabs({
     {
       id: 'diff',
       label: 'Git Diff',
-      badge: gitStatusSessionId === session?.id && gitStatus && gitStatus.totalChanges > 0
-        ? gitStatus.totalChanges
-        : (gitChangeCount > 0 ? gitChangeCount : undefined),
+      badge: (() => {
+        const currentGitStatus = gitStatusSessionId === session?.id ? gitStatus : null;
+        const badgeParts = [
+          currentGitStatus && currentGitStatus.totalChanges > 0
+            ? String(currentGitStatus.totalChanges)
+            : (gitChangeCount > 0 ? String(gitChangeCount) : null),
+          currentGitStatus?.ahead ? `↑${currentGitStatus.ahead}` : null,
+          currentGitStatus?.behind ? `↓${currentGitStatus.behind}` : null,
+        ].filter((part): part is string => part !== null);
+        return badgeParts.length > 0 ? badgeParts.join(' ') : undefined;
+      })(),
       icon: GitBranch,
       shortcut: 'Alt+3',
     },
