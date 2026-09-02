@@ -41,6 +41,7 @@ export function App(): React.JSX.Element {
   const [hostHealthMap, setHostHealthMap] = useState<Record<string, HostHealthResult>>({});
   const [gitDirtyBySessionId, setGitDirtyBySessionId] = useState<Record<string, boolean>>({});
   const [gitChangeCountBySessionId, setGitChangeCountBySessionId] = useState<Record<string, number>>({});
+  const [gitSyncBySessionId, setGitSyncBySessionId] = useState<Record<string, { ahead: number; behind: number }>>({});
   const [gitRefreshNonce, setGitRefreshNonce] = useState(0);
   const [statusDetailsMap, setStatusDetailsMap] = useState<Record<string, import('@spawnea/domain').SessionStatusResult>>({});
   const [catalog, setCatalog] = useState<OperationalCatalog | null>(null);
@@ -280,6 +281,7 @@ export function App(): React.JSX.Element {
     if (!getGitStatus || !sessionIdsKey) {
       setGitDirtyBySessionId({});
       setGitChangeCountBySessionId({});
+      setGitSyncBySessionId({});
       return;
     }
 
@@ -316,6 +318,22 @@ export function App(): React.JSX.Element {
           const sessionId = sessionIds[index];
           if (result.status === 'fulfilled') {
             next[sessionId] = result.value.status.isGitRepo ? result.value.status.totalChanges : 0;
+          } else if (sessionId in current) {
+            next[sessionId] = current[sessionId];
+          }
+        });
+        return next;
+      });
+
+      setGitSyncBySessionId((current) => {
+        const next: Record<string, { ahead: number; behind: number }> = {};
+        results.forEach((result, index) => {
+          const sessionId = sessionIds[index];
+          if (result.status === 'fulfilled') {
+            next[sessionId] = {
+              ahead: result.value.status.ahead,
+              behind: result.value.status.behind,
+            };
           } else if (sessionId in current) {
             next[sessionId] = current[sessionId];
           }
@@ -681,10 +699,10 @@ export function App(): React.JSX.Element {
         setServers(loadedServers);
         setProjects(loadedProjects);
         setAgents(loadedAgents);
-        setGitRefreshNonce((current) => current + 1);
       } else {
         await loadData();
       }
+      setGitRefreshNonce((current) => current + 1);
     } catch (err) {
       console.error('Failed to refresh/reconcile data:', err);
     } finally {
@@ -948,6 +966,8 @@ export function App(): React.JSX.Element {
               agent={activeAgent}
               hasUncommittedChanges={activeSession ? gitDirtyBySessionId[activeSession.id] : false}
               gitChangeCount={activeSession ? gitChangeCountBySessionId[activeSession.id] : 0}
+              gitAhead={activeSession ? gitSyncBySessionId[activeSession.id]?.ahead : 0}
+              gitBehind={activeSession ? gitSyncBySessionId[activeSession.id]?.behind : 0}
               activeTab={activeTab}
               onTabChange={handleTabChange}
               onAttach={handleAttachSession}

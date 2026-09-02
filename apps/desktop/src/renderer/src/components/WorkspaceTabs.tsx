@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type {
   Session,
   Server,
@@ -51,6 +51,8 @@ interface WorkspaceTabsProps {
   agent?: Agent;
   hasUncommittedChanges?: boolean;
   gitChangeCount?: number;
+  gitAhead?: number;
+  gitBehind?: number;
   activeTab: WorkspaceTabType;
   onTabChange: (tab: WorkspaceTabType) => void;
   onAttach?: (sessionId: string) => void;
@@ -112,6 +114,8 @@ export function WorkspaceTabs({
   agent,
   hasUncommittedChanges = false,
   gitChangeCount = hasUncommittedChanges ? 1 : 0,
+  gitAhead = 0,
+  gitBehind = 0,
   activeTab,
   onTabChange,
   onAttach,
@@ -151,6 +155,7 @@ export function WorkspaceTabs({
   const [selectedDiffFilePath, setSelectedDiffFilePath] = useState<string | null>(null);
   const [isLoadingGit, setIsLoadingGit] = useState(false);
   const [gitError, setGitError] = useState<string | null>(null);
+  const gitRequestGeneration = useRef(0);
 
   const fetchArtifacts = useCallback(async (sessionId: string) => {
     if (!window.spawneaApi?.getArtifacts) {
@@ -186,7 +191,11 @@ export function WorkspaceTabs({
   }, []);
 
   const fetchGitData = useCallback(async (sessionId: string, filePath?: string | null) => {
+    const requestGeneration = ++gitRequestGeneration.current;
+    const isCurrentRequest = () => requestGeneration === gitRequestGeneration.current;
+
     if (!window.spawneaApi?.getGitStatus) {
+      if (!isCurrentRequest()) return;
       setGitStatus({
         isGitRepo: true,
         branch: session?.branch || 'main',
@@ -207,6 +216,7 @@ export function WorkspaceTabs({
 
     try {
       const status = await window.spawneaApi.getGitStatus(sessionId);
+      if (!isCurrentRequest()) return;
       setGitStatus(status);
       setGitStatusSessionId(sessionId);
 
@@ -223,18 +233,21 @@ export function WorkspaceTabs({
       const diff = await window.spawneaApi.getGitDiff(sessionId, {
         filePath: requestedFilePath,
       });
+      if (!isCurrentRequest()) return;
       setGitDiff(diff);
     } catch (err: any) {
+      if (!isCurrentRequest()) return;
       setGitError(err.message || 'Failed to inspect Git repository');
       setGitStatus(null);
       setGitStatusSessionId(null);
       setGitDiff(null);
     } finally {
-      setIsLoadingGit(false);
+      if (isCurrentRequest()) setIsLoadingGit(false);
     }
   }, [session?.branch]);
 
   useEffect(() => {
+    gitRequestGeneration.current += 1;
     if (!session) {
       setClipboardBridgeState({ sessionId: null, available: false });
       setArtifacts([]);
@@ -460,11 +473,11 @@ export function WorkspaceTabs({
       badge: (() => {
         const currentGitStatus = gitStatusSessionId === session?.id ? gitStatus : null;
         const badgeParts = [
-          currentGitStatus && currentGitStatus.totalChanges > 0
-            ? String(currentGitStatus.totalChanges)
+          currentGitStatus
+            ? (currentGitStatus.totalChanges > 0 ? String(currentGitStatus.totalChanges) : null)
             : (gitChangeCount > 0 ? String(gitChangeCount) : null),
-          currentGitStatus?.ahead ? `↑${currentGitStatus.ahead}` : null,
-          currentGitStatus?.behind ? `↓${currentGitStatus.behind}` : null,
+          (currentGitStatus?.ahead ?? gitAhead) > 0 ? `↑${currentGitStatus?.ahead ?? gitAhead}` : null,
+          (currentGitStatus?.behind ?? gitBehind) > 0 ? `↓${currentGitStatus?.behind ?? gitBehind}` : null,
         ].filter((part): part is string => part !== null);
         return badgeParts.length > 0 ? badgeParts.join(' ') : undefined;
       })(),
