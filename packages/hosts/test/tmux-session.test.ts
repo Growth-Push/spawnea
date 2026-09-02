@@ -126,6 +126,14 @@ describe('TmuxManager', () => {
       },
     });
     host.customRules.push({
+      pattern: 'tmux list-windows -t',
+      response: {
+        stdout: '2\n1\n',
+        stderr: '',
+        exitCode: 0,
+      },
+    });
+    host.customRules.push({
       pattern: 'tmux capture-pane',
       response: {
         stdout: 'line 1\nline 2\nDo you want to proceed? [y/N]',
@@ -155,6 +163,7 @@ describe('TmuxManager', () => {
     const tail = await tmux.capturePaneTail(host, 'sess-1', 10);
     expect(tail.length).toBe(3);
     expect(tail[2]).toContain('[y/N]');
+    expect(host.executedCommands.at(-1)?.command).toContain("-t 'sess-1:1'");
   });
 
   it('discovers external tmux sessions and filters out already known Spawnea sessions (FG-7.2.1)', async () => {

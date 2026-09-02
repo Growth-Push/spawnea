@@ -192,7 +192,19 @@ export class TmuxManager {
    * Captures the tail buffer lines of a tmux pane without altering terminal state.
    */
   async capturePaneTail(host: HostAdapter, sessionName: string, lines: number = 25): Promise<string[]> {
-    const cmd = `tmux capture-pane -p -t ${escapeShellArg(sessionName)} -S -${lines}`;
+    // A session target without a window selects whichever tab the user last
+    // viewed. Hermes can leave its metrics footer in the first tab while a
+    // later tab is focused, so resolve the first window explicitly.
+    const windowsResult = await host.execute(
+      `tmux list-windows -t ${escapeShellArg(sessionName)} -F '#{window_index}'`
+    );
+    const firstWindow = windowsResult.stdout
+      .split('\n')
+      .map((value) => Number.parseInt(value.trim(), 10))
+      .filter((value) => Number.isInteger(value))
+      .sort((a, b) => a - b)[0];
+    const target = firstWindow === undefined ? sessionName : `${sessionName}:${firstWindow}`;
+    const cmd = `tmux capture-pane -p -t ${escapeShellArg(target)} -S -${lines}`;
     const result = await host.execute(cmd);
     if (result.exitCode !== 0) {
       return [];
