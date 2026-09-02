@@ -28,11 +28,14 @@ import { LocalDiscoveryService } from './local-discovery-service.js';
 import { AgentControlService } from './agent-control-service.js';
 import { ControlMcpGateway } from './control-mcp-gateway.js';
 import { isControlMcpEnabled } from './control-config.js';
+import { initializeProcessPath } from './process-path.js';
 import { resolveSpawneaUserDataPath } from './product-paths.js';
 import {
   sanitizeCatalogResultForRenderer,
   sanitizeCatalogStateForRenderer,
 } from './catalog-redaction.js';
+
+initializeProcessPath();
 
 const derivedLegacyUserDataPath = app.getPath('userData');
 const smokeUserDataPath = process.env.SPAWNEA_SMOKE_TEST === '1' || process.argv.includes('--smoke-test')

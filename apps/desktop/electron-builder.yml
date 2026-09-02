@@ -1,0 +1,62 @@
+appId: com.spawnea.desktop
+productName: Spawnea
+executableName: Spawnea
+directories:
+  output: ../../release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+  - '!node_modules/**'
+  - node_modules/better-sqlite3/**
+  - node_modules/node-pty/**
+  - node_modules/ssh2/**
+  - node_modules/cpu-features/**
+  - node_modules/node-addon-api/**
+  - node_modules/asn1/**
+  - node_modules/safer-buffer/**
+  - node_modules/bcrypt-pbkdf/**
+  - node_modules/tweetnacl/**
+  - node_modules/nan/**
+  - '!**/*.map'
+  - '!**/*.ts'
+  - '!**/*.{test,spec}.{js,ts,tsx}'
+  - '!**/{test,tests,__tests__}{,/**}'
+  - '!**/*.{db,sqlite,sqlite3}'
+  - '!**/.env*'
+  - '!**/config/*.yaml'
+  - '!**/config/*.yml'
+extraResources:
+  - from: ../../LICENSE
+    to: LICENSE
+  - from: build/THIRD-PARTY-NOTICES.txt
+    to: THIRD-PARTY-NOTICES.txt
+asar: true
+asarUnpack:
+  - '**/*.node'
+npmRebuild: false
+buildDependenciesFromSource: false
+artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+mac:
+  target:
+    - dmg
+  category: public.app-category.developer-tools
+  extraResources:
+    - from: build/spawnea-mcp
+      to: spawnea-mcp
+win:
+  target:
+    - nsis
+  requestedExecutionLevel: asInvoker
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+linux:
+  target:
+    - AppImage
+  category: Development
+  synopsis: Operate AI coding agents from a local desktop workspace
+  description: A local-first desktop workspace for operating AI coding agents.
+  extraResources:
+    - from: build/spawnea-mcp
+      to: spawnea-mcp

@@ -1838,16 +1838,19 @@ describe('App Desktop Shell', () => {
   });
 
   it('navigates workspace tabs using Alt+1 through Alt+5 keyboard shortcuts (Task 3.2)', async () => {
+    const setActiveSession = vi.fn();
     window.spawneaApi = createMockSpawneaApi({
       listFiles: vi.fn().mockResolvedValue([
         { name: 'main.py', path: 'main.py', isDirectory: false, isFile: true, size: 1024, modifiedAt: new Date() },
       ]),
+      setActiveSession,
     });
 
     render(<App />);
 
     await waitFor(() => {
       expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+      expect(setActiveSession).toHaveBeenCalledWith('sess-1');
     });
 
     // Default tab is terminal
