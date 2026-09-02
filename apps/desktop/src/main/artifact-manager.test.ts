@@ -311,6 +311,32 @@ describe('ArtifactManager', () => {
     expect(mockHost.executedCommands.some(({ command }) => command.includes('rm '))).toBe(false);
   });
 
+  it('serializes artifact creation with clearing', async () => {
+    const artifact = await artifactManager.createTextArtifact(sessionId, 'during-clear.txt', 'content');
+    const originalFind = repos.artifacts.findBySessionId.bind(repos.artifacts);
+    let releaseSnapshot!: () => void;
+    const snapshotPaused = new Promise<void>((resolve) => {
+      releaseSnapshot = resolve;
+    });
+    vi.spyOn(repos.artifacts, 'findBySessionId').mockImplementation(async (id) => {
+      const result = await originalFind(id);
+      if (id === sessionId) {
+        await snapshotPaused;
+      }
+      return result;
+    });
+
+    const clearing = artifactManager.clearArtifacts(sessionId);
+    await new Promise((resolve) => setImmediate(resolve));
+    const creating = artifactManager.createTextArtifact(sessionId, 'after-clear.txt', 'content');
+    releaseSnapshot();
+
+    await expect(clearing).resolves.toBe(1);
+    await expect(creating).resolves.toMatchObject({ filename: 'after-clear.txt' });
+    expect(await repos.artifacts.findBySessionId(sessionId)).toHaveLength(1);
+    expect(await repos.artifacts.findById(artifact.id)).toBeNull();
+  });
+
   it('enforces artifact ownership for reads and deletes', async () => {
     const otherSession = await repos.sessions.save({
       id: 'sess-art-other',
