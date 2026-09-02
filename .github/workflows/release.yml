@@ -1,0 +1,159 @@
+name: Desktop release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: 10.15.0
+  NODE_VERSION: 24.9.0
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Check tag and application version
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          app_version="$(node -p "require('./apps/desktop/package.json').version")"
+          test "$tag_version" = "$app_version" || {
+            echo "Release tag $GITHUB_REF_NAME does not match apps/desktop/package.json version $app_version" >&2
+            exit 1
+          }
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run quality gates
+        run: |
+          pnpm privacy:check
+          pnpm license:check
+          pnpm license:notices
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+          pnpm build
+          pnpm smoke
+
+  package:
+    needs: validate
+    name: Package ${{ matrix.platform }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            arch: arm64
+            runner: macos-15
+            builder_args: --mac dmg --arm64
+          - platform: macos
+            arch: x64
+            runner: macos-15-intel
+            builder_args: --mac dmg --x64
+          - platform: windows
+            arch: x64
+            runner: windows-2025
+            builder_args: --win nsis --x64
+          - platform: linux
+            arch: x64
+            runner: ubuntu-24.04
+            builder_args: --linux AppImage --x64
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify runner architecture
+        shell: bash
+        run: |
+          actual_arch="$(node -p 'process.arch')"
+          test "$actual_arch" = "${{ matrix.arch }}" || {
+            echo "Runner architecture $actual_arch does not match target ${{ matrix.arch }}" >&2
+            exit 1
+          }
+
+      - name: Package application
+        run: pnpm license:notices && pnpm --filter @spawnea/desktop exec electron-rebuild -f --only better-sqlite3,node-pty --arch=${{ matrix.arch }} && pnpm --filter @spawnea/desktop exec electron-vite build && pnpm --filter @spawnea/desktop exec electron-builder --config electron-builder.yml --publish never ${{ matrix.builder_args }}
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          rm -rf artifact
+          mkdir artifact
+          for file in release/*; do
+            [ -f "$file" ] || continue
+            [ "${file##*/}" = 'builder-debug.yml' ] && continue
+            cp "$file" artifact/
+          done
+          cd artifact
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum * > "SHA256SUMS-${{ matrix.platform }}-${{ matrix.arch }}.txt"
+          else
+            shasum -a 256 * > "SHA256SUMS-${{ matrix.platform }}-${{ matrix.arch }}.txt"
+          fi
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: spawnea-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            artifact/*
+          if-no-files-found: error
+          retention-days: 7
+
+  draft-release:
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --draft \
+            --verify-tag \
+            --title "Spawnea $GITHUB_REF_NAME" \
+            --notes "Download the artifact for your operating system and architecture. This draft requires human review before publication."

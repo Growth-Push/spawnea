@@ -10,7 +10,7 @@ export default defineConfig({
       rollupOptions: {
         external: ['electron', 'better-sqlite3', 'ssh2', 'cpu-features', 'node-pty'],
         input: {
-          index: resolve(__dirname, 'src/main/index.ts'),
+          index: resolve(__dirname, 'src/main/entry.ts'),
           'spawnea-mcp': resolve(__dirname, 'src/mcp/index.ts'),
           'spawnea-mcp-watchdog': resolve(__dirname, 'src/mcp/watchdog.ts'),
         },

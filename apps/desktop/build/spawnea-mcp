@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+resource_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+app_dir=$(CDPATH= cd -- "$resource_dir/.." && pwd)
+if [ -x "$app_dir/MacOS/Spawnea" ]; then
+  electron_binary="$app_dir/MacOS/Spawnea"
+else
+  electron_binary="$app_dir/Spawnea"
+fi
+
+if [ ! -x "$electron_binary" ]; then
+  printf '%s\n' "Spawnea Electron executable was not found relative to $0" >&2
+  exit 1
+fi
+
+exec "$electron_binary" --spawnea-mcp "$@"

@@ -1,25 +1,51 @@
 # Spawnea local control API / MCP v1
 
-Spawnea exposes a local MCP surface for inspecting sessions, renaming session display titles, creating session batches, navigating the desktop UI, and requesting guarded worktree finalization. It is enabled by default and does not open an HTTP or network port.
+Spawnea exposes a local MCP surface for inspecting sessions, renaming session display titles, creating session batches, navigating the desktop UI, and requesting guarded worktree finalization. It is enabled by default on Unix-like systems and does not open an HTTP or network port. Windows support is deferred until named-pipe transport is implemented.
 
 ## Enable and connect
 
-1. Build Spawnea with `pnpm build`.
-2. Start the desktop app with `pnpm app`.
-3. Configure the MCP client to launch the stdio bridge:
+1. Build and package Spawnea with `pnpm package:desktop:host`.
+2. Start the installed desktop app.
+3. Configure the MCP client to launch the installed stdio bridge helper:
 
 ```json
 {
   "mcpServers": {
     "spawnea": {
-      "command": "node",
-      "args": ["/absolute/path/to/spawnea/apps/desktop/out/main/spawnea-mcp.js"]
+      "command": "/Applications/Spawnea.app/Contents/Resources/spawnea-mcp",
+      "args": []
     }
   }
 }
 ```
 
-The bridge finds the active desktop process through `${XDG_RUNTIME_DIR}/spawnea/control-runtime.json`. Set `SPAWNEA_CONTROL_RUNTIME_FILE` in both processes only when a non-default runtime file is required. Stop the desktop app to disable the integration; without an active app, the bridge exits because its owner socket closes. Set `SPAWNEA_CONTROL_ENABLED=0`, `false`, `off`, `no`, or `disabled` only when the local MCP socket should be disabled intentionally.
+The packaged application starts the bridge in a dedicated MCP mode; Node.js and
+a Spawnea source checkout are not required. Supported launch paths are:
+
+- macOS: `/Applications/Spawnea.app/Contents/Resources/spawnea-mcp`
+- Linux AppImage: use the absolute AppImage path as `command` and pass
+  `--spawnea-mcp` as its only initial argument. Directory-style Linux packages
+  expose the equivalent helper at `resources/spawnea-mcp`.
+- Windows: MCP control is not currently available.
+
+For example, an AppImage configuration is:
+
+```json
+{
+  "mcpServers": {
+    "spawnea": {
+      "command": "/absolute/path/to/Spawnea-0.1.0-linux-x86_64.AppImage",
+      "args": ["--spawnea-mcp"]
+    }
+  }
+}
+```
+
+The macOS example uses the default install location. If Spawnea is installed
+elsewhere, replace only the helper path. On Unix-like systems, ensure the helper
+or AppImage is executable.
+
+The bridge finds the active desktop process through `${XDG_RUNTIME_DIR}/spawnea/control-runtime.json`. Set `SPAWNEA_CONTROL_RUNTIME_FILE` in both processes only when a non-default runtime file is required. Stop the desktop app to disable the integration; without an active app, the bridge exits because its owner socket closes. Set `SPAWNEA_CONTROL_ENABLED=0`, `false`, `off`, `no`, or `disabled` only when the local MCP socket should be disabled intentionally. The integration is currently disabled on Windows because named-pipe transport is not implemented yet.
 
 The v1 bridge exposes only the canonical `spawnea_*` tools documented below; no legacy MCP tool aliases are currently registered. `SPAWNEA_CONTROL_*` environment variables remain fallbacks, the legacy runtime descriptor location is discovered by the bridge, and both local authentication message names are accepted. New integrations should use the canonical Spawnea names.
 
@@ -28,7 +54,7 @@ The v1 bridge exposes only the canonical `spawnea_*` tools documented below; no 
 - The MCP client communicates with a dedicated stdio bridge. Protocol output is written only to stdout; diagnostics go to stderr.
 - The bridge connects to a Unix-domain socket owned by the current OS user. The runtime directory is mode `0700`; the socket and ephemeral-token descriptor are mode `0600`.
 - A detached same-user watchdog removes the descriptor and socket after abrupt Electron termination, but only while the protected descriptor still names the exited Electron PID.
-- The gateway starts by default with the desktop app. Set `SPAWNEA_CONTROL_ENABLED=0` (or `false`, `off`, `no`, `disabled`) to disable it. There is no TCP listener, public API, remote daemon, or remote host installation.
+- The gateway starts by default with the desktop app on Unix-like systems. It is disabled on Windows until named-pipe transport is implemented. Set `SPAWNEA_CONTROL_ENABLED=0` (or `false`, `off`, `no`, `disabled`) to disable it elsewhere. There is no TCP listener, public API, remote daemon, or remote host installation.
 - Every socket connection must authenticate with the random 256-bit token from the protected runtime descriptor before MCP messages are accepted.
 - The read model returns host IDs and display names, never SSH targets, usernames, passwords, tokens, secret references, or resolved credentials.
 - Zod schemas reject malformed tool input before the control service can call a host adapter, tmux, or Git.

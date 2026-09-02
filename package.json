@@ -14,17 +14,18 @@
     "start": "pnpm build && ./apps/desktop/node_modules/.bin/electron --ozone-platform-hint=auto apps/desktop/out/main/index.js",
     "app": "./apps/desktop/node_modules/.bin/electron --ozone-platform-hint=auto apps/desktop/out/main/index.js",
     "build": "pnpm -r build",
-
-
+    "license:notices": "pnpm --filter @spawnea/desktop third-party-notices",
+    "package:desktop": "pnpm --filter @spawnea/desktop package",
+    "package:desktop:host": "pnpm --filter @spawnea/desktop package:host",
     "smoke": "pnpm --filter @spawnea/desktop smoke",
-
     "test:smoke": "pnpm smoke",
     "privacy:check": "node scripts/privacy-check.mjs",
     "secret:scan": "node scripts/secret-scan.mjs",
     "license:check": "node scripts/license-check.mjs",
     "typecheck": "pnpm -r typecheck",
     "lint": "oxlint apps packages scripts --deny-warnings",
-    "test": "pnpm --filter @spawnea/db rebuild better-sqlite3 && pnpm -r test",
+    "test": "pnpm test:scripts && pnpm --filter @spawnea/db rebuild better-sqlite3 && pnpm -r test",
+    "test:scripts": "node --test scripts/*.test.mjs",
     "validate": "pnpm privacy:check && pnpm typecheck && pnpm test && pnpm build && pnpm smoke",
     "ci": "pnpm validate"
   },

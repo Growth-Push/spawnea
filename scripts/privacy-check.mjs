@@ -1,26 +1,24 @@
-import { readFile, readdir } from 'node:fs/promises';
-import { extname, relative, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { extname, resolve } from 'node:path';
 import process from 'node:process';
+import { collectRepositoryFiles } from './privacy-check-files.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const ignoredNames = new Set([
-  '.git',
-  '.pnpm-store',
-  '.references',
-  'coverage',
-  'dist',
-  'node_modules',
-  'out',
-  'references',
-  'release',
-]);
 const ignoredFiles = new Set(['scripts/privacy-check.mjs', '.privacy-denylist']);
-const ignoredExtensions = new Set([
+const dependencyMetadataFiles = new Set(['pnpm-lock.yaml']);
+const approvedVisualAssets = new Map([
+  ['docs/assets/spawnea-logo.png', '6654abb9ba846f0042d561f9fb281e1c0e49698b9395e5471cb19f350bec7518'],
+  ['docs/assets/spawnea-wizard.gif', 'a33d1c56422a194912973a5d80ef31d96116545ce26c3c88d54a43ce7e4218c3'],
+]);
+const visualAssetExtensions = new Set([
   '.png',
   '.jpg',
   '.jpeg',
   '.gif',
   '.webp',
+]);
+const ignoredExtensions = new Set([
   '.ico',
   '.pdf',
   '.woff',
@@ -51,18 +49,6 @@ async function loadDenylist() {
   }
 }
 
-async function collectFiles(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    if (ignoredNames.has(entry.name)) continue;
-    const absolutePath = resolve(directory, entry.name);
-    if (entry.isDirectory()) files.push(...await collectFiles(absolutePath));
-    else if (entry.isFile()) files.push(absolutePath);
-  }
-  return files;
-}
-
 function addFinding(filePath, lineNumber, message) {
   findings.push(`${filePath}:${lineNumber}: ${message}`);
 }
@@ -75,15 +61,27 @@ function isAllowedIpv4(address) {
 }
 
 const denylist = await loadDenylist();
-const files = await collectFiles(root);
+const files = await collectRepositoryFiles(root);
 
-for (const absolutePath of files) {
-  const filePath = relative(root, absolutePath);
+for (const { absolutePath, filePath, isSymbolicLink } of files) {
+  if (isSymbolicLink) {
+    addFinding(filePath, 1, 'symbolic link requires explicit privacy review');
+    continue;
+  }
+  const extension = extname(filePath).toLowerCase();
+  if (visualAssetExtensions.has(extension)) {
+    const approvedDigest = approvedVisualAssets.get(filePath);
+    const actualDigest = createHash('sha256').update(await readFile(absolutePath)).digest('hex');
+    if (actualDigest !== approvedDigest) {
+      addFinding(filePath, 1, 'visual asset requires explicit privacy review');
+    }
+    continue;
+  }
   if (
     ignoredFiles.has(filePath)
     || filePath.endsWith('.log')
     || filePath.endsWith('log.txt')
-    || ignoredExtensions.has(extname(filePath).toLowerCase())
+    || ignoredExtensions.has(extension)
   ) continue;
 
   let content;
@@ -114,10 +112,12 @@ for (const absolutePath of files) {
       addFinding(filePath, lineNumber, 'internal-looking hostname');
     }
 
-    for (const match of line.matchAll(/([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})/giu)) {
-      if (match[1].toLowerCase() === 'git') continue;
-      if (!allowedEmailDomains.has(match[2].toLowerCase())) {
-        addFinding(filePath, lineNumber, `non-example email domain: ${match[2]}`);
+    if (!dependencyMetadataFiles.has(filePath)) {
+      for (const match of line.matchAll(/([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})/giu)) {
+        if (match[1].toLowerCase() === 'git') continue;
+        if (!allowedEmailDomains.has(match[2].toLowerCase())) {
+          addFinding(filePath, lineNumber, `non-example email domain: ${match[2]}`);
+        }
       }
     }
 
