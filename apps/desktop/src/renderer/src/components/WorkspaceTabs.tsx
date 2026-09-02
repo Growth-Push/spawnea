@@ -150,7 +150,6 @@ export function WorkspaceTabs({
 
   // Git State
   const [gitStatus, setGitStatus] = useState<GitStatusResult | null>(null);
-  const [gitStatusSessionId, setGitStatusSessionId] = useState<string | null>(null);
   const [gitDiff, setGitDiff] = useState<GitDiffResult | null>(null);
   const [selectedDiffFilePath, setSelectedDiffFilePath] = useState<string | null>(null);
   const [isLoadingGit, setIsLoadingGit] = useState(false);
@@ -207,7 +206,6 @@ export function WorkspaceTabs({
         untracked: [],
         totalChanges: 1,
       });
-      setGitStatusSessionId(sessionId);
       return;
     }
 
@@ -218,7 +216,6 @@ export function WorkspaceTabs({
       const status = await window.spawneaApi.getGitStatus(sessionId);
       if (!isCurrentRequest()) return;
       setGitStatus(status);
-      setGitStatusSessionId(sessionId);
 
       const changedFilePaths = new Set([
         ...status.staged,
@@ -239,7 +236,6 @@ export function WorkspaceTabs({
       if (!isCurrentRequest()) return;
       setGitError(err.message || 'Failed to inspect Git repository');
       setGitStatus(null);
-      setGitStatusSessionId(null);
       setGitDiff(null);
     } finally {
       if (isCurrentRequest()) setIsLoadingGit(false);
@@ -253,7 +249,6 @@ export function WorkspaceTabs({
       setArtifacts([]);
       setHostInfo(null);
       setGitStatus(null);
-      setGitStatusSessionId(null);
       setGitDiff(null);
       setSelectedDiffFilePath(null);
       setDetectedOutput(null);
@@ -471,13 +466,10 @@ export function WorkspaceTabs({
       id: 'diff',
       label: 'Git Diff',
       badge: (() => {
-        const currentGitStatus = gitStatusSessionId === session?.id ? gitStatus : null;
         const badgeParts = [
-          currentGitStatus
-            ? (currentGitStatus.totalChanges > 0 ? String(currentGitStatus.totalChanges) : null)
-            : (gitChangeCount > 0 ? String(gitChangeCount) : null),
-          (currentGitStatus?.ahead ?? gitAhead) > 0 ? `↑${currentGitStatus?.ahead ?? gitAhead}` : null,
-          (currentGitStatus?.behind ?? gitBehind) > 0 ? `↓${currentGitStatus?.behind ?? gitBehind}` : null,
+          gitChangeCount > 0 ? String(gitChangeCount) : null,
+          gitAhead > 0 ? `↑${gitAhead}` : null,
+          gitBehind > 0 ? `↓${gitBehind}` : null,
         ].filter((part): part is string => part !== null);
         return badgeParts.length > 0 ? badgeParts.join(' ') : undefined;
       })(),
