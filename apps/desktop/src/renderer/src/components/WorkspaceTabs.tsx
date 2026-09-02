@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type {
   Session,
   Server,
@@ -50,6 +50,10 @@ interface WorkspaceTabsProps {
   project?: Project;
   agent?: Agent;
   hasUncommittedChanges?: boolean;
+  gitChangeCount?: number;
+  gitAhead?: number;
+  gitBehind?: number;
+  onGitStatusChange?: (sessionId: string, status: GitStatusResult) => void;
   activeTab: WorkspaceTabType;
   onTabChange: (tab: WorkspaceTabType) => void;
   onAttach?: (sessionId: string) => void;
@@ -110,6 +114,10 @@ export function WorkspaceTabs({
   project,
   agent,
   hasUncommittedChanges = false,
+  gitChangeCount = hasUncommittedChanges ? 1 : 0,
+  gitAhead = 0,
+  gitBehind = 0,
+  onGitStatusChange,
   activeTab,
   onTabChange,
   onAttach,
@@ -148,6 +156,7 @@ export function WorkspaceTabs({
   const [selectedDiffFilePath, setSelectedDiffFilePath] = useState<string | null>(null);
   const [isLoadingGit, setIsLoadingGit] = useState(false);
   const [gitError, setGitError] = useState<string | null>(null);
+  const gitRequestGeneration = useRef(0);
 
   const fetchArtifacts = useCallback(async (sessionId: string) => {
     if (!window.spawneaApi?.getArtifacts) {
@@ -183,7 +192,11 @@ export function WorkspaceTabs({
   }, []);
 
   const fetchGitData = useCallback(async (sessionId: string, filePath?: string | null) => {
+    const requestGeneration = ++gitRequestGeneration.current;
+    const isCurrentRequest = () => requestGeneration === gitRequestGeneration.current;
+
     if (!window.spawneaApi?.getGitStatus) {
+      if (!isCurrentRequest()) return;
       setGitStatus({
         isGitRepo: true,
         branch: session?.branch || 'main',
@@ -203,22 +216,37 @@ export function WorkspaceTabs({
 
     try {
       const status = await window.spawneaApi.getGitStatus(sessionId);
+      if (!isCurrentRequest()) return;
       setGitStatus(status);
+      onGitStatusChange?.(sessionId, status);
+
+      const changedFilePaths = new Set([
+        ...status.staged,
+        ...status.unstaged,
+        ...status.untracked,
+      ].map((file) => file.path));
+      const requestedFilePath = filePath && changedFilePaths.has(filePath) ? filePath : undefined;
+      if (filePath && !requestedFilePath) {
+        setSelectedDiffFilePath(null);
+      }
 
       const diff = await window.spawneaApi.getGitDiff(sessionId, {
-        filePath: filePath || undefined,
+        filePath: requestedFilePath,
       });
+      if (!isCurrentRequest()) return;
       setGitDiff(diff);
     } catch (err: any) {
+      if (!isCurrentRequest()) return;
       setGitError(err.message || 'Failed to inspect Git repository');
       setGitStatus(null);
       setGitDiff(null);
     } finally {
-      setIsLoadingGit(false);
+      if (isCurrentRequest()) setIsLoadingGit(false);
     }
-  }, [session?.branch]);
+  }, [onGitStatusChange, session?.branch]);
 
   useEffect(() => {
+    gitRequestGeneration.current += 1;
     if (!session) {
       setClipboardBridgeState({ sessionId: null, available: false });
       setArtifacts([]);
@@ -440,7 +468,14 @@ export function WorkspaceTabs({
     {
       id: 'diff',
       label: 'Git Diff',
-      badge: gitStatus && gitStatus.totalChanges > 0 ? gitStatus.totalChanges : undefined,
+      badge: (() => {
+        const badgeParts = [
+          gitChangeCount > 0 ? String(gitChangeCount) : null,
+          gitAhead > 0 ? `↑${gitAhead}` : null,
+          gitBehind > 0 ? `↓${gitBehind}` : null,
+        ].filter((part): part is string => part !== null);
+        return badgeParts.length > 0 ? badgeParts.join(' ') : undefined;
+      })(),
       icon: GitBranch,
       shortcut: 'Alt+3',
     },
@@ -538,20 +573,18 @@ export function WorkspaceTabs({
               <GitFork className="w-3 h-3" />
               <span>Worktree</span>
               {hasUncommittedChanges && (
-                <FileDiff
-                  data-testid="workspace-worktree-dirty-indicator"
-                  aria-label="Uncommitted Git changes"
-                  className="w-3 h-3 text-amber-300"
-                />
+                <>
+                  <FileDiff data-testid="workspace-worktree-dirty-indicator" aria-label="Uncommitted Git changes" className="w-3 h-3 text-amber-300" />
+                  <span data-testid="workspace-worktree-change-count">{gitChangeCount}</span>
+                </>
               )}
             </span>
           )}
           {!session.managedWorktree && hasUncommittedChanges && (
-            <FileDiff
-              data-testid="workspace-git-dirty-indicator"
-              aria-label="Uncommitted Git changes"
-              className="w-3.5 h-3.5 text-amber-300"
-            />
+            <>
+              <FileDiff data-testid="workspace-git-dirty-indicator" aria-label="Uncommitted Git changes" className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <span data-testid="workspace-git-change-count">{gitChangeCount}</span>
+            </>
           )}
           <span>tmux: {session.tmuxSessionName}</span>
         </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type {
   Session,
   Server,
@@ -10,6 +10,7 @@ import type {
   CatalogValidationError,
   HostSystemInfo,
   HostHealthResult,
+  GitStatusResult,
   FinishSessionAction,
   FinishSessionOptions,
   AddProjectToCatalogInput,
@@ -40,6 +41,9 @@ export function App(): React.JSX.Element {
   const [hostInfoMap, setHostInfoMap] = useState<Record<string, HostSystemInfo>>({});
   const [hostHealthMap, setHostHealthMap] = useState<Record<string, HostHealthResult>>({});
   const [gitDirtyBySessionId, setGitDirtyBySessionId] = useState<Record<string, boolean>>({});
+  const [gitChangeCountBySessionId, setGitChangeCountBySessionId] = useState<Record<string, number>>({});
+  const [gitSyncBySessionId, setGitSyncBySessionId] = useState<Record<string, { ahead: number; behind: number }>>({});
+  const [gitRefreshNonce, setGitRefreshNonce] = useState(0);
   const [statusDetailsMap, setStatusDetailsMap] = useState<Record<string, import('@spawnea/domain').SessionStatusResult>>({});
   const [catalog, setCatalog] = useState<OperationalCatalog | null>(null);
   const [catalogPath, setCatalogPath] = useState<string | undefined>(undefined);
@@ -64,6 +68,23 @@ export function App(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
   const [controlFinalizationRequests, setControlFinalizationRequests] = useState<ControlFinalizationRequest[]>([]);
+  const gitRequestGeneration = useRef(0);
+
+  const handleGitStatusChange = useCallback((sessionId: string, status: GitStatusResult) => {
+    gitRequestGeneration.current += 1;
+    setGitDirtyBySessionId((current) => ({
+      ...current,
+      [sessionId]: status.isGitRepo && !status.isClean,
+    }));
+    setGitChangeCountBySessionId((current) => ({
+      ...current,
+      [sessionId]: status.isGitRepo ? status.totalChanges : 0,
+    }));
+    setGitSyncBySessionId((current) => ({
+      ...current,
+      [sessionId]: { ahead: status.ahead, behind: status.behind },
+    }));
+  }, []);
 
   // Tab persistence helper
   const getSavedTab = (sessionId: string | null): WorkspaceTabType => {
@@ -203,6 +224,7 @@ export function App(): React.JSX.Element {
         if (result) {
           setStatusDetailsMap((prev) => ({ ...prev, [sessionId]: result }));
         }
+        setGitRefreshNonce((current) => current + 1);
       });
       unsubs.push(unStatus);
     }
@@ -276,6 +298,8 @@ export function App(): React.JSX.Element {
     const getGitStatus = window.spawneaApi?.getGitStatus;
     if (!getGitStatus || !sessionIdsKey) {
       setGitDirtyBySessionId({});
+      setGitChangeCountBySessionId({});
+      setGitSyncBySessionId({});
       return;
     }
 
@@ -284,6 +308,7 @@ export function App(): React.JSX.Element {
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
     const refreshGitStatus = async (): Promise<void> => {
+      const requestGeneration = ++gitRequestGeneration.current;
       const results = await Promise.allSettled(
         sessionIds.map(async (sessionId) => ({
           sessionId,
@@ -292,6 +317,10 @@ export function App(): React.JSX.Element {
       );
 
       if (cancelled) return;
+      if (requestGeneration !== gitRequestGeneration.current) {
+        pollTimer = setTimeout(refreshGitStatus, 15_000);
+        return;
+      }
 
       setGitDirtyBySessionId((current) => {
         const next: Record<string, boolean> = {};
@@ -299,6 +328,35 @@ export function App(): React.JSX.Element {
           const sessionId = sessionIds[index];
           if (result.status === 'fulfilled') {
             next[sessionId] = result.value.status.isGitRepo && !result.value.status.isClean;
+          } else if (sessionId in current) {
+            next[sessionId] = current[sessionId];
+          }
+        });
+        return next;
+      });
+
+      setGitChangeCountBySessionId((current) => {
+        const next: Record<string, number> = {};
+        results.forEach((result, index) => {
+          const sessionId = sessionIds[index];
+          if (result.status === 'fulfilled') {
+            next[sessionId] = result.value.status.isGitRepo ? result.value.status.totalChanges : 0;
+          } else if (sessionId in current) {
+            next[sessionId] = current[sessionId];
+          }
+        });
+        return next;
+      });
+
+      setGitSyncBySessionId((current) => {
+        const next: Record<string, { ahead: number; behind: number }> = {};
+        results.forEach((result, index) => {
+          const sessionId = sessionIds[index];
+          if (result.status === 'fulfilled') {
+            next[sessionId] = {
+              ahead: result.value.status.ahead,
+              behind: result.value.status.behind,
+            };
           } else if (sessionId in current) {
             next[sessionId] = current[sessionId];
           }
@@ -315,7 +373,7 @@ export function App(): React.JSX.Element {
       cancelled = true;
       if (pollTimer !== undefined) clearTimeout(pollTimer);
     };
-  }, [sessionIdsKey]);
+  }, [sessionIdsKey, gitRefreshNonce]);
 
   const handleControlFinalizationDecision = async (
     requestId: string,
@@ -667,6 +725,7 @@ export function App(): React.JSX.Element {
       } else {
         await loadData();
       }
+      setGitRefreshNonce((current) => current + 1);
     } catch (err) {
       console.error('Failed to refresh/reconcile data:', err);
     } finally {
@@ -819,6 +878,7 @@ export function App(): React.JSX.Element {
         hostHealthMap={hostHealthMap}
         statusDetailsMap={statusDetailsMap}
         gitDirtyBySessionId={gitDirtyBySessionId}
+        gitChangeCountBySessionId={gitChangeCountBySessionId}
         activeSessionId={activeSessionId}
         onSelectSession={setActiveSessionId}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
@@ -909,6 +969,7 @@ export function App(): React.JSX.Element {
               agent={activeAgent}
               hostInfo={activeSession ? hostInfoMap[activeSession.serverId] : undefined}
               hasUncommittedChanges={activeSession ? gitDirtyBySessionId[activeSession.id] : false}
+              gitChangeCount={activeSession ? gitChangeCountBySessionId[activeSession.id] : 0}
               onDetach={handleDetachSession}
               onStop={handleRequestStopSession}
               onAttach={handleAttachSession}
@@ -927,6 +988,10 @@ export function App(): React.JSX.Element {
               project={activeProject}
               agent={activeAgent}
               hasUncommittedChanges={activeSession ? gitDirtyBySessionId[activeSession.id] : false}
+              gitChangeCount={activeSession ? gitChangeCountBySessionId[activeSession.id] : 0}
+              gitAhead={activeSession ? gitSyncBySessionId[activeSession.id]?.ahead : 0}
+              gitBehind={activeSession ? gitSyncBySessionId[activeSession.id]?.behind : 0}
+              onGitStatusChange={handleGitStatusChange}
               activeTab={activeTab}
               onTabChange={handleTabChange}
               onAttach={handleAttachSession}
