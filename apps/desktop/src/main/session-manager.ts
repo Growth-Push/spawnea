@@ -36,6 +36,7 @@ import {
   maskSensitiveString,
   parseCatalogPathLocator,
   resolveContainedPath,
+  isLoopbackHost,
 } from '@spawnea/domain';
 import type { Repositories } from '@spawnea/db';
 import {
@@ -343,7 +344,8 @@ export class SessionManager {
       throw new Error(`Host profile '${serverId}' not found in catalog or database`);
     }
 
-    if (!dbServer.sshConfigAlias && (dbServer.host === 'localhost' || dbServer.host === '127.0.0.1' || dbServer.host === '::1')) {
+    const hasDirectSshSettings = Boolean(dbServer.sshConfigAlias || dbServer.sshUser || dbServer.sshPort !== 22);
+    if (isLoopbackHost(dbServer.host) && !hasDirectSshSettings) {
       const localAdapter = new LocalHostAdapter({
         serverId,
         logger: this.logger.child(`local:${serverId}`),

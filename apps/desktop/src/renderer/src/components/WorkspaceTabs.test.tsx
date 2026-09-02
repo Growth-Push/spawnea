@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { WorkspaceTabs } from './WorkspaceTabs';
-import type { Session, Server, Artifact } from '@spawnea/domain';
+import type { Session, Server, Artifact, HostConnectionEndpoint } from '@spawnea/domain';
 
 // Polyfill matchMedia, ResizeObserver, Canvas
 if (typeof window !== 'undefined') {
@@ -375,6 +375,50 @@ describe('WorkspaceTabs Component', () => {
       expect(readClipboardText).not.toHaveBeenCalled();
       expect((screen.getByTestId('context-menu-copy') as HTMLButtonElement).disabled).toBe(true);
     });
+  });
+
+  it('does not carry a local clipboard bridge into a new remote session', async () => {
+    const readClipboardText = vi.fn().mockResolvedValue('unrelated-local-text');
+    mockClipboardReadText(readClipboardText);
+    let resolveRemoteEndpoint!: (endpoint: HostConnectionEndpoint) => void;
+    const remoteEndpoint = new Promise<HostConnectionEndpoint>((resolve) => {
+      resolveRemoteEndpoint = resolve;
+    });
+    const getHostConnectionEndpoint = vi.fn()
+      .mockResolvedValueOnce({ transport: 'local', hostname: '127.0.0.1', port: 0 })
+      .mockReturnValueOnce(remoteEndpoint);
+    (window as any).spawneaApi.getHostConnectionEndpoint = getHostConnectionEndpoint;
+    const remoteSession = {
+      ...mockSession,
+      id: 'sess-remote',
+      serverId: 'srv-remote',
+    };
+    const { rerender } = render(
+      <WorkspaceTabs
+        session={mockSession}
+        activeTab="terminal"
+        onTabChange={vi.fn()}
+      />
+    );
+
+    await waitFor(() => expect(getHostConnectionEndpoint).toHaveBeenCalledWith('srv-1'));
+    rerender(
+      <WorkspaceTabs
+        session={remoteSession}
+        activeTab="terminal"
+        onTabChange={vi.fn()}
+      />
+    );
+
+    const terminalViewport = screen.getByTestId('xterm-container').parentElement;
+    expect(terminalViewport).not.toBeNull();
+    fireEvent.mouseDown(terminalViewport!, { button: 0 });
+    fireEvent.mouseMove(terminalViewport!, { buttons: 1 });
+    fireEvent.mouseUp(terminalViewport!, { button: 0 });
+    fireEvent.contextMenu(terminalViewport!);
+
+    await waitFor(() => expect(readClipboardText).not.toHaveBeenCalled());
+    resolveRemoteEndpoint({ transport: 'ssh', hostname: 'remote.example.test', port: 22 });
   });
 
   it('navigates to artifacts tab and dismisses banner when Artifacts Tab button is clicked', async () => {

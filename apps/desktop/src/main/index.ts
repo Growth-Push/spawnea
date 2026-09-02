@@ -12,6 +12,7 @@ import {
   createCatalogProjectPathLocator,
   isOnePasswordReference,
   maskSensitiveData,
+  isLoopbackHost,
   type CreateSessionInput,
   type Session,
   type LogLevel,
@@ -375,8 +376,15 @@ function registerIpcHandlers(
   );
   ipcMain.handle('projects:choosePath', async (_event, serverId: string, currentPath?: string) => {
     const server = await repos.servers.findById(serverId);
-    const isLocalHost = server?.host === 'localhost' || server?.host === '127.0.0.1';
-    if (!server || !isLocalHost) {
+    if (!server) {
+      return {
+        canceled: false,
+        error: 'Folder selection is available for local hosts only. Enter the remote path manually.',
+      };
+    }
+    const hasDirectSshSettings = Boolean(server.sshConfigAlias || server.sshUser || server.sshPort !== 22);
+    const isLocalHost = isLoopbackHost(server.host) && !hasDirectSshSettings;
+    if (!isLocalHost) {
       return {
         canceled: false,
         error: 'Folder selection is available for local hosts only. Enter the remote path manually.',

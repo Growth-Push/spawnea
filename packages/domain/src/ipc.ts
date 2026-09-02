@@ -11,6 +11,7 @@ import type {
   GitBranchDiscoveryResult,
   HostTestResult,
   HostSystemInfo,
+  HostConnectionEndpoint,
   DiscoveredTmuxSession,
   AdoptSessionInput,
   StateFeedbackSnapshot,
@@ -142,6 +143,7 @@ export interface IpcChannels {
   'servers:delete': (id: string) => Promise<void>;
   'servers:test': (id: string) => Promise<HostTestResult>;
   'hosts:getSystemInfo': (serverId: string) => Promise<HostSystemInfo | null>;
+  'hosts:getConnectionEndpoint': (serverId: string) => Promise<HostConnectionEndpoint | null>;
   'hosts:discoverExternalSessions': (serverId: string) => Promise<DiscoveredTmuxSession[]>;
 
   // Project Management
