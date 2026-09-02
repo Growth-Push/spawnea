@@ -770,6 +770,9 @@ function registerIpcHandlers(
 
 
 
+/**
+ * Creates and displays the application window with the configured renderer and preload script.
+ */
 function createWindow(): void {
   const { preloadPath, rendererPath } = resolveDesktopRuntimePaths(app.getAppPath(), existsSync);
   if (existsSync(preloadPath)) {
