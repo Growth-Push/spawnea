@@ -204,7 +204,8 @@ export class TmuxManager {
       .filter((value) => Number.isInteger(value))
       .sort((a, b) => a - b)[0];
     const target = firstWindow === undefined ? sessionName : `${sessionName}:${firstWindow}`;
-    const cmd = `tmux capture-pane -p -t ${escapeShellArg(target)} -S -${lines}`;
+    const safeLines = Number.isFinite(lines) ? Math.max(0, Math.trunc(lines)) : 25;
+    const cmd = `tmux capture-pane -p -t ${escapeShellArg(target)} -S -${safeLines}`;
     const result = await host.execute(cmd);
     if (result.exitCode !== 0) {
       return [];
