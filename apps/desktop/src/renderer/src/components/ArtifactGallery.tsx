@@ -216,17 +216,23 @@ export function ArtifactGallery({
     if (!confirm(`Clear all ${artifacts.length} artifacts from this session? Remote files will not be deleted.`)) {
       return;
     }
+    if (!window.spawneaApi?.clearArtifacts) {
+      showToast('Artifact clearing is unavailable in this app version');
+      return;
+    }
 
     setIsClearing(true);
     try {
-      if (window.spawneaApi?.clearArtifacts) {
-        await window.spawneaApi.clearArtifacts(sessionId);
-        setSelectedArtifact(null);
-        setHiddenArtifactIds(new Set());
+      await window.spawneaApi.clearArtifacts(sessionId);
+      setSelectedArtifact(null);
+      setHiddenArtifactIds(new Set());
+      try {
         localStorage.removeItem(`spawnea:hiddenArtifacts:${sessionId}`);
-        onRefresh();
-        showToast('Cleared session artifacts');
+      } catch {
+        // Hidden state is already reset in memory.
       }
+      onRefresh();
+      showToast('Cleared session artifacts');
     } catch (err: any) {
       showToast(`Failed to clear artifacts: ${err?.message || 'Error'}`);
     } finally {

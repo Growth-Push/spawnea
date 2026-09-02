@@ -171,4 +171,21 @@ describe('ArtifactGallery Component', () => {
     render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
     expect(screen.getByTestId('artifact-grid').className).toContain('xl:grid-cols-6');
   });
+
+  it('reports when the clear bridge is unavailable', async () => {
+    const confirmMock = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('confirm', confirmMock);
+    const clearArtifacts = window.spawneaApi.clearArtifacts;
+    delete (window.spawneaApi as Partial<Window['spawneaApi']>).clearArtifacts;
+
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('clear-artifacts-button'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Artifact clearing is unavailable in this app version')).toBeDefined();
+    });
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    (window.spawneaApi as Window['spawneaApi']).clearArtifacts = clearArtifacts;
+    vi.unstubAllGlobals();
+  });
 });
