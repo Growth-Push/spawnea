@@ -104,8 +104,11 @@ export interface HostConnectionEndpoint {
 }
 
 export function isLoopbackHost(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase().replace(/^\[|\]$/g, '');
-  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+  const normalized = hostname.trim().toLowerCase();
+  const unbracketed = normalized.startsWith('[') && normalized.endsWith(']')
+    ? normalized.slice(1, -1)
+    : normalized;
+  return unbracketed === 'localhost' || unbracketed === '127.0.0.1' || unbracketed === '::1';
 }
 
 export interface HostAdapter {

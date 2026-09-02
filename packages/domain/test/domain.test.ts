@@ -6,6 +6,7 @@ import {
   ArtifactSchema,
   SessionStatusSchema,
 } from '../src/schemas.js';
+import { isLoopbackHost } from '../src/hosts.js';
 
 describe('Domain Schemas', () => {
   it('validates a valid Server', () => {
@@ -36,6 +37,13 @@ describe('Domain Schemas', () => {
     expect(parsed.sshPort).toBe(22);
     expect(parsed.enabled).toBe(true);
     expect(parsed.createdAt).toBeInstanceOf(Date);
+  });
+
+  it('normalizes only complete bracketed IPv6 loopback hostnames', () => {
+    expect(isLoopbackHost('[::1]')).toBe(true);
+    expect(isLoopbackHost(' [::1] ')).toBe(true);
+    expect(isLoopbackHost('[::1')).toBe(false);
+    expect(isLoopbackHost('::1]')).toBe(false);
   });
 
   it('validates Session statuses', () => {
