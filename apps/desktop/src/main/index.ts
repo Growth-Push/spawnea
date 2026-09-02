@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, dialog, type WebContents } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, shell, dialog, type WebContents } from 'electron';
 import { join, resolve, dirname } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -399,6 +399,12 @@ function registerIpcHandlers(
     }
     const error = await shell.openPath(configPath);
     return error ? { success: false, error: `Could not open configuration file: ${error}` } : { success: true };
+  });
+  ipcMain.handle('clipboard:writeText', async (_event, text: unknown) => {
+    if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 1024 * 1024) {
+      throw new Error('Clipboard text must be a string no larger than 1 MiB');
+    }
+    clipboard.writeText(text);
   });
 
   // Session Lifecycle & Status Supervision

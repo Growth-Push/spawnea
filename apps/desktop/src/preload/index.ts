@@ -131,6 +131,7 @@ export const api = {
 
   openExternalUrl: (url: string): Promise<boolean> => ipcRenderer.invoke('shell:openExternalUrl', url),
   openConfig: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('shell:openConfig'),
+  writeClipboardText: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:writeText', text),
 
   // Session Context Data (Files & Git)
   getFiles: (sessionId: string, subPath?: string): Promise<FileEntry[]> =>

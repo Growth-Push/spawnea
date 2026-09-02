@@ -18,6 +18,7 @@ import { ReconnectionBanner } from './ReconnectionBanner.js';
 interface TerminalViewProps {
   session: Session;
   agent?: Agent;
+  clipboardBridgeAvailable?: boolean;
   onAttach?: (sessionId: string) => void;
   onDetach?: (sessionId: string) => void;
   onDelete?: (sessionId: string) => void;
@@ -30,12 +31,50 @@ const RETRY_DELAY_MS = 2000;
 const isInteractiveStatus = (status: Session['status']) => status !== 'done';
 
 const HTTP_URL_PATTERN = /https?:\/\/[^\s<>"'`]+/g;
+const OSC52_MAX_DECODED_LENGTH = 1024 * 1024;
+const OSC52_MAX_ENCODED_LENGTH = 4 * Math.ceil(OSC52_MAX_DECODED_LENGTH / 3);
+const OSC52_CLIPBOARD_TARGET_PATTERN = /^(?:c)?$/;
+
+export function decodeOsc52Clipboard(data: string): string | null {
+  const separatorIndex = data.indexOf(';');
+  if (separatorIndex < 0) return null;
+
+  const selection = data.slice(0, separatorIndex);
+  const payload = data.slice(separatorIndex + 1);
+  if (
+    !OSC52_CLIPBOARD_TARGET_PATTERN.test(selection) ||
+    payload === '?' ||
+    payload.length > OSC52_MAX_ENCODED_LENGTH
+  ) {
+    return null;
+  }
+
+  try {
+    const decoded = atob(payload);
+    if (decoded.length > OSC52_MAX_DECODED_LENGTH) return null;
+    const bytes = Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
 
 export function findHttpUrls(lineText: string): Array<{ text: string; start: number }> {
   return Array.from(lineText.matchAll(HTTP_URL_PATTERN), (match) => {
     const text = match[0].replace(/[),.;!?]+$/g, '');
     return { text, start: match.index ?? 0 };
   }).filter((link) => link.text.length > 0);
+}
+
+function readLocalClipboardText(): Promise<string | null> {
+  const readText = navigator.clipboard?.readText;
+  if (typeof readText !== 'function') return Promise.resolve(null);
+
+  try {
+    return readText.call(navigator.clipboard).catch(() => null);
+  } catch {
+    return Promise.resolve(null);
+  }
 }
 
 export function createHttpLinkProvider(
@@ -64,6 +103,7 @@ export function createHttpLinkProvider(
 export function TerminalView({
   session,
   agent,
+  clipboardBridgeAvailable = false,
   onAttach,
   onDetach: _onDetach,
   onDelete,
@@ -78,6 +118,15 @@ export function TerminalView({
   const resizeTimerRef = useRef<NodeJS.Timeout | null>(null);
   const retryCountRef = useRef<number>(0);
   const isConnectingRef = useRef<boolean>(false);
+  const leftMouseDownRef = useRef<boolean>(false);
+  const mouseSelectionGestureRef = useRef<boolean>(false);
+  const clipboardBeforeMouseDragReadRef = useRef<Promise<string | null> | null>(null);
+  // tmux owns mouse selections while mouse mode is enabled. Its OSC52 copy
+  // event or the user clipboard is therefore the only selection text xterm
+  // can expose to us. Keep the last accepted selection for reopening the
+  // context menu after it was dismissed.
+  const lastOsc52ClipboardTextRef = useRef<string | null>(null);
+  const lastContextSelectionTextRef = useRef<string | null>(null);
 
   const sessionRef = useRef(session);
   sessionRef.current = session;
@@ -340,6 +389,9 @@ export function TerminalView({
     if (!containerRef.current) return;
 
     cleanupActiveConnection();
+    lastOsc52ClipboardTextRef.current = null;
+    lastContextSelectionTextRef.current = null;
+    clipboardBeforeMouseDragReadRef.current = null;
     containerRef.current.innerHTML = '';
     prevStatusRef.current = session.status;
 
@@ -388,9 +440,27 @@ export function TerminalView({
         }
       )
     );
+    const osc52ClipboardDisposable = term.parser.registerOscHandler(52, (data) => {
+      const text = decodeOsc52Clipboard(data);
+      if (text === null) return true;
+
+      const writeClipboardText = window.spawneaApi?.writeClipboardText;
+      if (!writeClipboardText) {
+        showToast('Clipboard copy unavailable');
+        return true;
+      }
+
+      lastOsc52ClipboardTextRef.current = text;
+      void writeClipboardText(text)
+        .then(() => showToast('Copied to clipboard'))
+        .catch(() => showToast('Clipboard copy failed'));
+      return true;
+    });
 
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.type === 'keydown') {
+        lastOsc52ClipboardTextRef.current = null;
+        lastContextSelectionTextRef.current = null;
         // Ctrl+Shift+C: Linux standard Copy
         if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
           e.preventDefault();
@@ -520,6 +590,7 @@ export function TerminalView({
       containerElem.removeEventListener('wheel', handleWheel);
       resizeObserver.disconnect();
       linkProviderDisposable.dispose();
+      osc52ClipboardDisposable.dispose();
       term.dispose();
       terminalInstanceRef.current = null;
       fitAddonRef.current = null;
@@ -559,10 +630,59 @@ export function TerminalView({
     }
   };
 
-  const handleContextMenu = (e: React.MouseEvent) => {
+  const handleTerminalMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 0) {
+      leftMouseDownRef.current = true;
+      mouseSelectionGestureRef.current = false;
+      clipboardBeforeMouseDragReadRef.current = clipboardBridgeAvailable
+        ? readLocalClipboardText()
+        : null;
+    }
+  };
+
+  const handleTerminalMouseMove = (e: React.MouseEvent) => {
+    if (leftMouseDownRef.current && (e.buttons & 1) === 1) {
+      if (!mouseSelectionGestureRef.current) {
+        lastOsc52ClipboardTextRef.current = null;
+        lastContextSelectionTextRef.current = null;
+      }
+      mouseSelectionGestureRef.current = true;
+    }
+  };
+
+  const handleTerminalMouseUp = (e: React.MouseEvent) => {
+    if (e.button === 0) {
+      leftMouseDownRef.current = false;
+    }
+  };
+
+  const handleContextMenu = async (e: React.MouseEvent) => {
     e.preventDefault();
     const term = terminalInstanceRef.current;
-    const sel = term ? term.getSelection() : '';
+    const hasNewMouseSelection = mouseSelectionGestureRef.current;
+    const mouseTrackingActive = term?.modes.mouseTrackingMode !== 'none';
+    const preferFreshMouseSelection = hasNewMouseSelection && mouseTrackingActive;
+    let sel = preferFreshMouseSelection
+      ? lastOsc52ClipboardTextRef.current || ''
+      : term?.getSelection() || lastOsc52ClipboardTextRef.current || lastContextSelectionTextRef.current || '';
+
+    // With tmux-yank, the mouse selection can be piped directly to wl-copy
+    // without producing OSC52. Read it only after a local drag gesture so a
+    // plain right-click does not turn arbitrary clipboard text into a
+    // terminal selection.
+    if (!sel && hasNewMouseSelection && clipboardBridgeAvailable) {
+      const clipboardBefore = await (clipboardBeforeMouseDragReadRef.current ?? Promise.resolve(null));
+      const clipboardAfter = await readLocalClipboardText();
+      if (clipboardBefore !== null && clipboardAfter !== null && clipboardAfter !== clipboardBefore) {
+        sel = clipboardAfter;
+      }
+    }
+    mouseSelectionGestureRef.current = false;
+    clipboardBeforeMouseDragReadRef.current = null;
+    if (sel.trim()) {
+      lastContextSelectionTextRef.current = sel;
+    }
+
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -713,6 +833,9 @@ export function TerminalView({
 
       {/* Terminal Viewport Container */}
       <div
+        onMouseDownCapture={handleTerminalMouseDown}
+        onMouseMoveCapture={handleTerminalMouseMove}
+        onMouseUpCapture={handleTerminalMouseUp}
         onContextMenu={handleContextMenu}
         className="relative flex-1 w-full h-full overflow-hidden bg-[#090d13]"
       >

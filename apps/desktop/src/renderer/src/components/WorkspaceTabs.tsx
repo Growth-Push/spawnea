@@ -535,6 +535,9 @@ export function WorkspaceTabs({
               <TerminalView
                 session={session}
                 agent={agent}
+                clipboardBridgeAvailable={
+                  server?.id === 'local' || server?.host === 'localhost' || server?.host === '127.0.0.1'
+                }
                 onAttach={onAttach}
                 onDetach={onDetach}
                 onDelete={onDelete}

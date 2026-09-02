@@ -136,6 +136,7 @@ const mockSessions: Session[] = [
 
 function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Window['spawneaApi'] {
   return {
+    writeClipboardText: vi.fn().mockResolvedValue(undefined),
     listSessions: vi.fn().mockResolvedValue(mockSessions),
     reconcileSessions: vi.fn().mockResolvedValue(mockSessions),
     listServers: vi.fn().mockResolvedValue(mockServers),
