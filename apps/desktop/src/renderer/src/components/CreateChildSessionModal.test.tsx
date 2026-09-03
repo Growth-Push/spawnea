@@ -211,7 +211,7 @@ describe('CreateChildSessionModal', () => {
       {
         id: 'srv-2',
         name: 'Growth Push VPS',
-        host: '10.0.0.2',
+        host: '192.0.2.2',
         sshPort: 22,
         enabled: true,
         createdAt: new Date(),
