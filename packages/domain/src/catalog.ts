@@ -19,6 +19,10 @@ export interface CatalogProject {
     enabled: boolean;
     copy_files: string[];
   };
+  tmux?: {
+    options: Record<string, string | number | boolean>;
+    commands: string[];
+  };
   enabled: boolean;
 }
 
@@ -291,6 +295,13 @@ export const CatalogProjectSchema = z
               message: 'copy_files entries must be exact repository-relative paths without traversal or backslashes',
             })
         ).default([]),
+      })
+      .strict()
+      .optional(),
+    tmux: z
+      .object({
+        options: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
+        commands: z.array(z.string().trim().min(1, 'tmux commands must not be empty')).default([]),
       })
       .strict()
       .optional(),

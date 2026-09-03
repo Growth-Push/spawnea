@@ -734,6 +734,8 @@ export class SessionManager {
           command: harnessCommand,
           args: harnessArgs,
           env: undefined,
+          tmuxOptions: catProject?.tmux?.options,
+          tmuxCommands: catProject?.tmux?.commands,
           logger: this.logger.child('tmux'),
         });
 
