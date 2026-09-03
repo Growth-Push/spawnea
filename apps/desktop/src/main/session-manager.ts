@@ -1381,6 +1381,8 @@ export class SessionManager {
     try {
       const existingContext = await this.contextStore.load(sessionId);
       const worktreeAlreadyRemoved = existingContext?.finalization?.action === action && existingContext.finalization.worktreeRemoved;
+      const branchAlreadyRemoved =
+        action === 'integrate' && worktreeAlreadyRemoved && existingContext?.finalization?.branchRemoved === true;
       const identity: ManagedWorktreeIdentity = {
         repositoryPath: repositoryPath.value,
         worktreePath: worktreePath.value,
@@ -1396,10 +1398,12 @@ export class SessionManager {
         }
 
         // 2. Stop persistent session and detach PTY
-        try {
-          await this.stopSession(sessionId);
-        } catch (err) {
-          this.logger.warn('Failed to stop tmux session during integration (may already be stopped)', { error: err });
+        if (!worktreeAlreadyRemoved) {
+          try {
+            await this.stopSession(sessionId);
+          } catch (err) {
+            this.logger.warn('Failed to stop tmux session during integration (may already be stopped)', { error: err });
+          }
         }
 
         // 3. Merge task branch into base branch
@@ -1414,19 +1418,36 @@ export class SessionManager {
         // 4. Record cleanup progress before removing the worktree. This makes a
         // later retry safe if branch or database cleanup fails.
         if (!worktreeAlreadyRemoved && existingContext) {
-          await this.contextStore.save({ ...existingContext, finalization: { action, worktreeRemoved: false } });
+          await this.contextStore.save({
+            ...existingContext,
+            finalization: { action, worktreeRemoved: false, branchRemoved: false },
+          });
         }
 
         // 5. Remove worktree
         if (!worktreeAlreadyRemoved) {
-          await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
+          const removed = await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
+          if (!removed) {
+            throw new Error(`Failed to remove managed worktree for session '${sessionId}'`);
+          }
           if (existingContext) {
-            await this.contextStore.save({ ...existingContext, finalization: { action, worktreeRemoved: true } });
+            await this.contextStore.save({
+              ...existingContext,
+              finalization: { action, worktreeRemoved: true, branchRemoved: false },
+            });
           }
         }
 
         // 6. Delete integrated task branch
-        await this.gitService.deleteIntegratedBranch(host, identity);
+        if (!branchAlreadyRemoved) {
+          await this.gitService.deleteIntegratedBranch(host, identity);
+          if (existingContext) {
+            await this.contextStore.save({
+              ...existingContext,
+              finalization: { action, worktreeRemoved: true, branchRemoved: true },
+            });
+          }
+        }
 
         // 7. Clean up context and session DB
         if (!(await this.contextStore.delete(sessionId))) {
@@ -1439,28 +1460,30 @@ export class SessionManager {
       }
 
       if (action === 'close') {
-        // 1. Verify identity, but allow the explicit close flow to handle local changes.
-        const inspection = await this.gitService.inspectManagedWorktree(host, identity);
-        await this.gitService.verifyManagedWorktreeForFinalization(
-          host,
-          identity,
-          false,
-          false,
-          inspection.state === 'integrated'
-        );
+        if (!worktreeAlreadyRemoved) {
+          // 1. Verify identity, but allow the explicit close flow to handle local changes.
+          const inspection = await this.gitService.inspectManagedWorktree(host, identity);
+          await this.gitService.verifyManagedWorktreeForFinalization(
+            host,
+            identity,
+            false,
+            false,
+            inspection.state === 'integrated'
+          );
 
-        // 2. Stop persistent session and detach PTY
-        try {
-          await this.stopSession(sessionId);
-        } catch (err) {
-          this.logger.warn('Failed to stop tmux session during close (may already be stopped)', { error: err });
-        }
+          // 2. Stop persistent session and detach PTY
+          try {
+            await this.stopSession(sessionId);
+          } catch (err) {
+            this.logger.warn('Failed to stop tmux session during close (may already be stopped)', { error: err });
+          }
 
-        // 3. Preserve or discard local changes before removing the worktree.
-        if (options.stashChanges) {
-          await this.gitService.stashManagedWorktreeChanges(host, identity);
-        } else {
-          await this.gitService.discardManagedWorktreeChanges(host, identity);
+          // 3. Preserve or discard local changes before removing the worktree.
+          if (options.stashChanges) {
+            await this.gitService.stashManagedWorktreeChanges(host, identity);
+          } else {
+            await this.gitService.discardManagedWorktreeChanges(host, identity);
+          }
         }
 
         // Reconcile children before removing the worktree so failed promotion
@@ -1470,12 +1493,18 @@ export class SessionManager {
         // 4. Record cleanup progress before removing the worktree. This makes a
         // later retry safe if database cleanup fails.
         if (!worktreeAlreadyRemoved && existingContext) {
-          await this.contextStore.save({ ...existingContext, finalization: { action, worktreeRemoved: false } });
+          await this.contextStore.save({
+            ...existingContext,
+            finalization: { action, worktreeRemoved: false },
+          });
         }
 
         // 5. Remove worktree (preserves task branch)
         if (!worktreeAlreadyRemoved) {
-          await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
+          const removed = await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
+          if (!removed) {
+            throw new Error(`Failed to remove managed worktree for session '${sessionId}'`);
+          }
           if (existingContext) {
             await this.contextStore.save({ ...existingContext, finalization: { action, worktreeRemoved: true } });
           }

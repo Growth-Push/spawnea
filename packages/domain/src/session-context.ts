@@ -72,6 +72,7 @@ export const SessionContextFileSchema = z
       .object({
         action: z.enum(['integrate', 'close']),
         worktreeRemoved: z.boolean(),
+        branchRemoved: z.boolean().optional(),
       })
       .strict()
       .optional(),
