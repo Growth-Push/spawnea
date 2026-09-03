@@ -159,5 +159,48 @@ export function createSpawneaMcpServer(control: AgentControlService): McpServer 
     async ({ requestId }) => safeTool(() => control.getFinalizationRequest(requestId))()
   );
 
+  server.registerTool(
+    'spawnea_create_child_session',
+    {
+      title: 'Create a child session',
+      description: 'Create a direct child session under an existing parent session. Server and project are inherited; workspace can be same-project or new-worktree.',
+      inputSchema: z.object({
+        parentSession: z.string().min(1).max(200),
+        name: z.string().trim().min(1).max(120).optional(),
+        task: z.string().trim().min(1).max(4_000),
+        workspace: z.enum(['same-project', 'new-worktree']),
+        agentId: z.string().min(1).max(240).optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async (input) => safeTool(() => control.createChildSession(input))()
+  );
+
+  server.registerTool(
+    'spawnea_list_sessions',
+    {
+      title: 'List Spawnea sessions',
+      description: 'Canonical listing of all root sessions and their direct children with relationship metadata (parentSessionId and childAlias).',
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    safeTool(() => control.listSessions())
+  );
+
+  server.registerTool(
+    'spawnea_send_prompt',
+    {
+      title: 'Send prompt to session',
+      description: 'Writes prompt text directly to the target session PTY/tmux stream and returns immediately. Truthfully reports delivery without waiting for harness completion.',
+      inputSchema: z.object({
+        target: z.string().min(1).max(200),
+        parentSession: z.string().min(1).max(200).optional(),
+        prompt: z.string().min(1),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async (input) => safeTool(() => control.sendPrompt(input))()
+  );
+
   return server;
 }

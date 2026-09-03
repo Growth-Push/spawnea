@@ -14,6 +14,8 @@ import {
   maskSensitiveData,
   isLoopbackHost,
   type CreateSessionInput,
+  type CreateChildSessionInput,
+  type ParentCloseAction,
   type Session,
   type LogLevel,
   type ArtifactDirection,
@@ -446,6 +448,10 @@ function registerIpcHandlers(
     return sessManager.createSession(input);
   });
 
+  ipcMain.handle('sessions:createChild', async (_event, input: CreateChildSessionInput): Promise<Session> => {
+    return sessManager.createChildSession(input);
+  });
+
   ipcMain.handle('sessions:rename', async (_event, sessionId: string, name: string): Promise<Session> => {
     return sessManager.renameSession(sessionId, name);
   });
@@ -483,8 +489,12 @@ function registerIpcHandlers(
     return sessManager.inspectManagedWorktree(sessionId);
   });
 
-  ipcMain.handle('sessions:delete', async (_event, sessionId: string) => {
-    return sessManager.deleteSession(sessionId);
+  ipcMain.handle('sessions:delete', async (_event, sessionId: string, childAction?: ParentCloseAction) => {
+    return sessManager.deleteSession(sessionId, childAction);
+  });
+
+  ipcMain.handle('sessions:sendPrompt', async (_event, sessionId: string, prompt: string) => {
+    return sessManager.sendPrompt(sessionId, prompt);
   });
 
   ipcMain.handle('shell:openExternalUrl', async (_event, rawUrl: string) => {

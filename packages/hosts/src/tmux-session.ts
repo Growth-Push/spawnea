@@ -128,6 +128,19 @@ export class TmuxManager {
   }
 
   /**
+   * Sends keyboard input / prompt text directly to the tmux session.
+   */
+  async sendInput(host: HostAdapter, sessionName: string, text: string): Promise<boolean> {
+    this.logger.info('Sending input to tmux session', { serverId: host.serverId, sessionName });
+    // Using -l sends the literal characters without duplicate newline before Enter
+    const sanitizedText = text.replace(/\r?\n$/, '');
+    const sendCmd = `tmux send-keys -t ${escapeShellArg(sessionName)} -l -- ${escapeShellArg(sanitizedText)}`;
+    const sendResult = await host.execute(sendCmd);
+    const enterResult = await host.execute(`tmux send-keys -t ${escapeShellArg(sessionName)} Enter`);
+    return sendResult.exitCode === 0 && enterResult.exitCode === 0;
+  }
+
+  /**
    * Opens an interactive PTY channel attached to the running tmux session.
    */
   async attachPty(host: HostAdapter, sessionName: string, options: PtyOptions): Promise<PtyStream> {

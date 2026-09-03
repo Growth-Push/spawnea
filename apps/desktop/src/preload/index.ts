@@ -28,6 +28,8 @@ import type {
   FinishSessionOptions,
   FinishSessionResult,
   ManagedWorktreeInspection,
+  CreateChildSessionInput,
+  ParentCloseAction,
   LocalDiscoveryScanResult,
   LocalDiscoverySelection,
   LocalDiscoveryPreviewResult,
@@ -85,6 +87,8 @@ export const api = {
   listSessions: (): Promise<Session[]> => ipcRenderer.invoke('sessions:list'),
   reconcileSessions: (): Promise<Session[]> => ipcRenderer.invoke('sessions:reconcile'),
   createSession: (input: CreateSessionInput): Promise<Session> => ipcRenderer.invoke('sessions:create', input),
+  createChildSession: (input: CreateChildSessionInput): Promise<Session> =>
+    ipcRenderer.invoke('sessions:createChild', input),
   renameSession: (sessionId: string, name: string): Promise<Session> =>
     ipcRenderer.invoke('sessions:rename', sessionId, name),
   adoptSession: (input: AdoptSessionInput): Promise<Session> => ipcRenderer.invoke('sessions:adopt', input),
@@ -100,7 +104,10 @@ export const api = {
   ): Promise<FinishSessionResult> => ipcRenderer.invoke('sessions:finish', sessionId, action, options),
   inspectWorktree: (sessionId: string): Promise<ManagedWorktreeInspection> =>
     ipcRenderer.invoke('sessions:inspectWorktree', sessionId),
-  deleteSession: (sessionId: string): Promise<boolean> => ipcRenderer.invoke('sessions:delete', sessionId),
+  deleteSession: (sessionId: string, childAction?: ParentCloseAction): Promise<boolean> =>
+    ipcRenderer.invoke('sessions:delete', sessionId, childAction),
+  sendPrompt: (sessionId: string, prompt: string): Promise<{ delivered: boolean; deliveryMethod: 'pty' | 'tmux' }> =>
+    ipcRenderer.invoke('sessions:sendPrompt', sessionId, prompt),
 
   // Explicit local MCP control. The bridge never exposes an approval method to
   // MCP; only this trusted renderer preload can resolve pending requests.

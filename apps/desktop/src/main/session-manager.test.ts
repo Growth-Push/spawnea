@@ -1429,4 +1429,111 @@ up 1 day, 5 hours
       expect(await contextStore.load(session.id)).toBeNull();
     });
   });
+
+  describe('Session Hierarchy and Child Sessions', () => {
+    it('creates a child session inheriting parent server, project, and agent with alias child-1', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent root task',
+      });
+
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child subtask 1',
+        workspace: 'same-project',
+      });
+
+      expect(child.parentSessionId).toBe(parent.id);
+      expect(child.childAlias).toBe('child-1');
+      expect(child.serverId).toBe(parent.serverId);
+      expect(child.projectId).toBe(parent.projectId);
+      expect(child.agentId).toBe(parent.agentId);
+      expect(child.worktreePath).toBe(parent.worktreePath);
+      expect(child.managedWorktree).toBe(false);
+
+      // Verify second child receives child-2
+      const child2 = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child subtask 2',
+        workspace: 'same-project',
+      });
+      expect(child2.childAlias).toBe('child-2');
+    });
+
+    it('enforces 2-level hierarchy and rejects creating a child of a child', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent root task',
+      });
+
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child subtask',
+        workspace: 'same-project',
+      });
+
+      await expect(
+        sessionManager.createChildSession({
+          parentSessionId: child.id,
+          task: 'Grandchild task',
+          workspace: 'same-project',
+        })
+      ).rejects.toThrow(/2-level cap/);
+    });
+
+    it('deletes parent with leave-children and promotes children to standalone root sessions', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent root task',
+      });
+
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child subtask',
+        workspace: 'same-project',
+      });
+
+      await sessionManager.deleteSession(parent.id, 'leave-children');
+
+      // Parent is deleted
+      expect(await repos.sessions.findById(parent.id)).toBeNull();
+
+      // Child is promoted
+      const promoted = await repos.sessions.findById(child.id);
+      expect(promoted).not.toBeNull();
+      expect(promoted!.parentSessionId).toBeUndefined();
+      expect(promoted!.childAlias).toBeUndefined();
+    });
+
+    it('deletes parent with close-all and closes both parent and child sessions', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent root task',
+      });
+
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child subtask',
+        workspace: 'same-project',
+      });
+
+      await sessionManager.deleteSession(parent.id, 'close-all');
+
+      // Both are deleted
+      expect(await repos.sessions.findById(parent.id)).toBeNull();
+      expect(await repos.sessions.findById(child.id)).toBeNull();
+    });
+  });
 });

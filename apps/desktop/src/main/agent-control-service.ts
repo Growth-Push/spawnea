@@ -18,6 +18,11 @@ import {
   type ControlStateSnapshot,
   type ControlUiState,
   type ControlWorktreeInspectionResult,
+  type ControlCreateChildSessionRequest,
+  type ControlCreateChildSessionResult,
+  type ControlListSessionsResult,
+  type ControlSendPromptRequest,
+  type ControlSendPromptResult,
   type FinishSessionOrigin,
   type Logger,
   type Session,
@@ -116,6 +121,8 @@ export class AgentControlService {
     return {
       id: session.id,
       name: session.name,
+      parentSessionId: session.parentSessionId ?? undefined,
+      childAlias: session.childAlias ?? undefined,
       task: session.task,
       host: { id: session.serverId, name: host?.name ?? session.serverId },
       project: { id: session.projectId, name: project?.name ?? session.projectId },
@@ -254,8 +261,117 @@ export class AgentControlService {
     return result;
   }
 
+  async listSessions(): Promise<ControlListSessionsResult> {
+    const snapshot = await this.getState();
+    return {
+      apiVersion: SPAWNEA_CONTROL_API_VERSION,
+      sessions: snapshot.sessions,
+    };
+  }
+
+  async createChildSession(request: ControlCreateChildSessionRequest): Promise<ControlCreateChildSessionResult> {
+    try {
+      const parent = await this.repos.sessions.findById(request.parentSession);
+      if (!parent) {
+        throw new Error(`Parent session '${request.parentSession}' not found`);
+      }
+      if (parent.parentSessionId) {
+        throw new Error('A child session cannot be used as a parent session');
+      }
+
+      const child = await this.sessionManager.createChildSession(
+        {
+          parentSessionId: parent.id,
+          name: request.name,
+          task: request.task,
+          workspace: request.workspace,
+          agentId: request.agentId,
+        },
+        'mcp',
+      );
+
+      this.notifyDataChanged?.();
+
+      return {
+        apiVersion: SPAWNEA_CONTROL_API_VERSION,
+        parentSessionId: parent.id,
+        childAlias: child.childAlias || '',
+        sessionId: child.id,
+        childSessionId: child.id,
+        name: child.name,
+        displayName: child.name,
+        workspace: request.workspace,
+        workspaceMode: request.workspace,
+        status: child.status,
+        initialStatus: child.status,
+      };
+    } catch (error) {
+      this.rememberError('create_child_session', error);
+      throw error;
+    }
+  }
+
+  async sendPrompt(request: ControlSendPromptRequest): Promise<ControlSendPromptResult> {
+    try {
+      let targetSession = await this.repos.sessions.findById(request.target);
+      if (!targetSession) {
+        if (request.parentSession) {
+          targetSession = await this.repos.sessions.findByParentAndAlias(
+            request.parentSession,
+            request.target,
+          );
+        } else if (request.target.startsWith('child-')) {
+          const all = await this.repos.sessions.findAll();
+          const matches = all.filter((s) => s.childAlias === request.target);
+          if (matches.length === 1) {
+            targetSession = matches[0];
+          } else if (matches.length > 1) {
+            throw new Error(
+              `Multiple sessions match alias '${request.target}'. Specify parentSession to disambiguate.`,
+            );
+          }
+        }
+      }
+
+      if (!targetSession) {
+        throw new Error(`Session '${request.target}' not found`);
+      }
+
+      const result = await this.sessionManager.sendPrompt(targetSession.id, request.prompt);
+      return {
+        apiVersion: SPAWNEA_CONTROL_API_VERSION,
+        sessionId: targetSession.id,
+        delivered: result.delivered,
+        deliveryMethod: result.deliveryMethod,
+        acceptedAt: new Date().toISOString(),
+        message: 'Prompt delivered to terminal stream. Response handoff is manual.',
+      };
+    } catch (error) {
+      this.rememberError('send_prompt', error);
+      throw error;
+    }
+  }
+
   async navigate(request: ControlNavigationRequest): Promise<ControlNavigationResult> {
-    const session = await this.repos.sessions.findById(request.sessionId);
+    let session = await this.repos.sessions.findById(request.sessionId);
+    if (!session) {
+      if (request.parentSessionId) {
+        session = await this.repos.sessions.findByParentAndAlias(
+          request.parentSessionId,
+          request.sessionId
+        );
+      } else if (request.sessionId.startsWith('child-')) {
+        const all = await this.repos.sessions.findAll();
+        const matches = all.filter((s) => s.childAlias === request.sessionId);
+        if (matches.length === 1) {
+          session = matches[0];
+        } else if (matches.length > 1) {
+          throw new Error(
+            `Multiple sessions match alias '${request.sessionId}'. Specify the session ID or parentSessionId to disambiguate.`
+          );
+        }
+      }
+    }
     if (!session) throw new Error(`Session '${request.sessionId}' not found`);
     const nextState: ControlUiState = {
       activeSessionId: session.id,

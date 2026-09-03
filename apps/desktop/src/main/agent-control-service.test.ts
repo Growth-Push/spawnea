@@ -13,6 +13,8 @@ describe('AgentControlService', () => {
     renameSession: ReturnType<typeof vi.fn>;
     inspectManagedWorktree: ReturnType<typeof vi.fn>;
     finishSession: ReturnType<typeof vi.fn>;
+    createChildSession: ReturnType<typeof vi.fn>;
+    sendPrompt: ReturnType<typeof vi.fn>;
   };
   let service: AgentControlService;
 
@@ -63,6 +65,21 @@ describe('AgentControlService', () => {
         state: 'active', currentBranch: 'spawnea/existing', message: 'Ready',
       }),
       finishSession: vi.fn().mockResolvedValue({ action: 'integrate', removed: true }),
+      createChildSession: vi.fn(async (input, source) => {
+        createdCount += 1;
+        return session(`child-${createdCount}`, {
+          task: input.task,
+          name: input.name || input.task,
+          parentSessionId: input.parentSessionId,
+          childAlias: `child-${createdCount}`,
+          status: 'starting',
+          creationSource: source,
+        });
+      }),
+      sendPrompt: vi.fn(async (_sessionId: string, _prompt: string) => ({
+        delivered: true,
+        deliveryMethod: 'pty' as const,
+      })),
     };
     service = new AgentControlService({
       repositories,
@@ -253,5 +270,84 @@ describe('AgentControlService', () => {
     const rejected = await service.resolveFinalizationRequest(pending.id, 'reject');
     expect(rejected.status).toBe('rejected');
     expect(sessionManager.finishSession).not.toHaveBeenCalled();
+  });
+
+  describe('Session Hierarchy and Child Sessions via Control API', () => {
+    it('creates a child session and returns ControlCreateChildSessionResult with starting status and alias', async () => {
+      const result = await service.createChildSession({
+        parentSession: 'existing',
+        task: 'Refactor child subtask',
+        name: 'Child Task',
+        workspace: 'same-project',
+      });
+
+      expect(result.sessionId).toBe('child-1');
+      expect(result.childAlias).toBe('child-1');
+      expect(result.parentSessionId).toBe('existing');
+      expect(result.status).toBe('starting');
+      expect(sessionManager.createChildSession).toHaveBeenCalledWith(
+        {
+          parentSessionId: 'existing',
+          task: 'Refactor child subtask',
+          name: 'Child Task',
+          workspace: 'same-project',
+          agentId: undefined,
+        },
+        'mcp'
+      );
+    });
+
+    it('lists sessions including parentSessionId and childAlias metadata', async () => {
+      await repositories.sessions.save(
+        session('child-1', {
+          parentSessionId: 'existing',
+          childAlias: 'child-1',
+          name: 'Child One',
+        })
+      );
+
+      const listResult = await service.listSessions();
+      expect(listResult.sessions).toHaveLength(2);
+
+      const parentView = listResult.sessions.find((s) => s.id === 'existing');
+      const childView = listResult.sessions.find((s) => s.id === 'child-1');
+
+      expect(parentView?.parentSessionId).toBeUndefined();
+      expect(childView?.parentSessionId).toBe('existing');
+      expect(childView?.childAlias).toBe('child-1');
+    });
+
+    it('sends prompt to session via sendPrompt', async () => {
+      const result = await service.sendPrompt({
+        target: 'existing',
+        prompt: 'Run tests',
+      });
+
+      expect(result).toMatchObject({
+        apiVersion: 'v1',
+        sessionId: 'existing',
+        delivered: true,
+        deliveryMethod: 'pty',
+      });
+      expect(sessionManager.sendPrompt).toHaveBeenCalledWith('existing', 'Run tests');
+    });
+
+    it('navigates to session by child alias when parentSessionId is provided', async () => {
+      await repositories.sessions.save(
+        session('child-sess-id', {
+          parentSessionId: 'existing',
+          childAlias: 'child-1',
+        })
+      );
+
+      const navResult = await service.navigate({
+        sessionId: 'child-1',
+        parentSessionId: 'existing',
+        tab: 'terminal',
+      });
+
+      expect(navResult.activeSessionId).toBe('child-sess-id');
+      expect(navResult.activeTab).toBe('terminal');
+    });
   });
 });

@@ -31,6 +31,9 @@ describe('Spawnea MCP v1 contract', () => {
       'spawnea_activate',
       'spawnea_request_finalization',
       'spawnea_get_finalization_request',
+      'spawnea_create_child_session',
+      'spawnea_list_sessions',
+      'spawnea_send_prompt',
     ]);
     expect(new Set(toolNames).size).toBe(toolNames.length);
     expect(toolNames.every((name) => name.startsWith('spawnea_'))).toBe(true);
@@ -196,5 +199,115 @@ describe('Spawnea MCP v1 contract', () => {
       action: 'close',
       confirmation: 'llm-validated',
     }));
+  });
+
+  it('handles spawnea_create_child_session tool call', async () => {
+    const childResult = {
+      apiVersion: 'v1' as const,
+      parentSessionId: 'parent-1',
+      childAlias: 'child-1',
+      sessionId: 'session-child-1',
+      childSessionId: 'session-child-1',
+      name: 'Child task',
+      displayName: 'Child task',
+      workspace: 'same-project' as const,
+      workspaceMode: 'same-project' as const,
+      status: 'starting' as const,
+      initialStatus: 'starting' as const,
+    };
+    const createChildSession = vi.fn().mockResolvedValue(childResult);
+    const client = await connect({ createChildSession } as Partial<AgentControlService>);
+
+    const result = await client.callTool({
+      name: 'spawnea_create_child_session',
+      arguments: {
+        parentSession: 'parent-1',
+        task: 'Child task',
+        workspace: 'same-project',
+      },
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      sessionId: 'session-child-1',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-1',
+    });
+    expect(createChildSession).toHaveBeenCalledWith({
+      parentSession: 'parent-1',
+      task: 'Child task',
+      workspace: 'same-project',
+    });
+  });
+
+  it('handles spawnea_list_sessions tool call', async () => {
+    const listResult = {
+      apiVersion: 'v1' as const,
+      sessions: [
+        {
+          id: 'parent-1',
+          name: 'Parent',
+          task: 'Parent task',
+          tmuxSessionName: 'spawnea-parent-1',
+          status: 'working' as const,
+          source: 'catalog' as const,
+          server: { id: 'srv-1', name: 'Dev Server', target: 'localhost' },
+          project: { id: 'proj-1', name: 'Spawnea', rootPath: '/repo' },
+          agent: { id: 'agent-1', name: 'Claude', harness: 'claude-code' as const },
+          createdAt: '2026-09-03T00:00:00.000Z',
+          lastActivityAt: '2026-09-03T00:00:00.000Z',
+        },
+      ],
+    };
+    const listSessions = vi.fn().mockResolvedValue(listResult);
+    const client = await connect({ listSessions } as Partial<AgentControlService>);
+
+    const result = await client.callTool({
+      name: 'spawnea_list_sessions',
+      arguments: {},
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      sessions: [expect.objectContaining({ id: 'parent-1' })],
+    });
+  });
+
+  it('handles spawnea_send_prompt tool call', async () => {
+    const sendResult = {
+      apiVersion: 'v1' as const,
+      delivered: true,
+      deliveryMethod: 'pty' as const,
+      session: {
+        id: 'session-child-1',
+        name: 'Child',
+        task: 'Child',
+        tmuxSessionName: 'spawnea-child-1',
+        status: 'working' as const,
+        source: 'catalog' as const,
+        server: { id: 'srv-1', name: 'Dev Server', target: 'localhost' },
+        project: { id: 'proj-1', name: 'Spawnea', rootPath: '/repo' },
+        agent: { id: 'agent-1', name: 'Claude', harness: 'claude-code' as const },
+        createdAt: '2026-09-03T00:00:00.000Z',
+        lastActivityAt: '2026-09-03T00:00:00.000Z',
+      },
+    };
+    const sendPrompt = vi.fn().mockResolvedValue(sendResult);
+    const client = await connect({ sendPrompt } as Partial<AgentControlService>);
+
+    const result = await client.callTool({
+      name: 'spawnea_send_prompt',
+      arguments: {
+        target: 'session-child-1',
+        prompt: 'Run test suite',
+      },
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      delivered: true,
+      deliveryMethod: 'pty',
+    });
+    expect(sendPrompt).toHaveBeenCalledWith({
+      target: 'session-child-1',
+      prompt: 'Run test suite',
+    });
   });
 });
