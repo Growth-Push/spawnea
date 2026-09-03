@@ -33,8 +33,7 @@ Follow the official [1Password SSH Agent documentation](https://developer.1passw
    - Go to **Settings > Developer**.
    - Turn on **Use the SSH agent**.
 2. **Add an SSH Key to 1Password**:
-   - Create or import your private SSH key in 1Password.
-   - Ensure the key has the **Use for SSH** toggle enabled.
+   - Create or import your SSH key as an **SSH Key** item in an accessible 1Password vault. Active keys in your vault are automatically served by the agent.
 3. **Configure OpenSSH (`~/.ssh/config`)**:
    Add the `IdentityAgent` directive to your `~/.ssh/config`. For example:
 
@@ -59,16 +58,20 @@ Follow the official [1Password SSH Agent documentation](https://developer.1passw
 Before launching Spawnea, verify that 1Password is serving your keys in your standard terminal:
 
 1. Unlock 1Password.
-2. List keys managed by the agent:
-   ```bash
-   ssh-add -l
-   ```
-   You should see your 1Password SSH key listed with a comment from 1Password.
-3. Connect to your target server once from the terminal:
+2. Connect to your target server once from the terminal:
    ```bash
    ssh dev-box
    ```
-   1Password should show an authorization prompt. Approve it and confirm you can log in.
+   1Password should display an authorization prompt. Approve it and confirm you can log in.
+3. (Optional) Inspect loaded keys via the socket:
+   ```bash
+   # On Linux:
+   SSH_AUTH_SOCK=~/.1password/agent.sock ssh-add -l
+
+   # On macOS:
+   SSH_AUTH_SOCK="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock" ssh-add -l
+   ```
+   You should see your 1Password SSH key listed with a comment from 1Password.
 
 ---
 

@@ -76,7 +76,7 @@ Operational data needed to manage sessions is stored strictly on your local mach
 2. **Session Metadata**: Session identifiers, creation timestamps, target hosts, worktree paths, and normalized status states in a local SQLite database (`better-sqlite3`).
 3. **Application Logs**: Standard diagnostic application logs, which mask sensitive credentials and secret references.
 4. **Session Artifacts**: Files or images explicitly uploaded by the user or identified in the session artifact directory.
-5. **Explicit Feedback Reports**: If you explicitly choose to submit a diagnostic feedback report (via the state feedback dialog), a recent tail snapshot is packaged for that specific diagnostic report.
+5. **Explicit Feedback Reports**: If you explicitly choose to submit a diagnostic feedback report (via the state feedback dialog), a recent tail snapshot is packaged for that specific report. These reports remain stored locally in your application user-data directory until manually removed, allowing you to inspect or delete them at any time.
 
 ---
 

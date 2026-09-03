@@ -59,7 +59,7 @@ If `worktree.enabled` is `false` or omitted in `config.yaml`, the session runs d
 Spawnea automatically:
 - Creates a dedicated task branch named `spawnea/<task-slug>`.
 - Creates a worktree directory at `<project-path>__worktrees/<task-slug>`.
-- Copies any configured `copy_files` into the new worktree.
+- Copies any configured `copy_files` that exist in the project root into the new worktree (missing entries are safely skipped).
 - Starts a persistent `tmux` session pointed at that worktree directory.
 
 ### 2. Work and Commit Changes
@@ -114,7 +114,7 @@ If the dialog indicates the branch is already integrated:
 
 ### Merge Conflicts During Integration
 
-If **Integrate & Clean Up** fails with a merge error:
+If **Integrate into `<baseBranch>`** (button: **Integrate & Clean Up**) fails with a merge error:
 - The base branch has moved forward with conflicting changes.
 - Switch to the worktree terminal and run `git merge <baseBranch>` to resolve the conflict manually, or choose **Close Worktree (Keep Task Branch)** to preserve the branch and resolve it later.
 
