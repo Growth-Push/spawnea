@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { detectOutputArtifacts } from '../src/output-artifact-detector.js';
+import { detectOutputArtifacts, stripPathLineNumber } from '../src/output-artifact-detector.js';
 
 describe('OutputArtifactDetector', () => {
   const worktreePath = '/workspace/spawnea';
@@ -118,5 +118,46 @@ Created file /workspace/spawnea/docs/../safe-report.md
     expect(results.map((result) => result.normalizedPath)).toEqual([
       '/workspace/spawnea/safe-report.md',
     ]);
+  });
+
+  it('detects full, home-relative, relative, and bare file paths with line numbers', () => {
+    const output = `
+Created file /workspace/spawnea/artifact-demo.md
+Open ./docs/guide.adoc and docs/notes.rst:12:3
+artifact-demo.md
+`;
+
+    const results = detectOutputArtifacts(output, { worktreePath });
+
+    expect(results.map((result) => result.normalizedPath)).toEqual([
+      '/workspace/spawnea/artifact-demo.md',
+      '/workspace/spawnea/docs/guide.adoc',
+      '/workspace/spawnea/docs/notes.rst',
+    ]);
+    expect(stripPathLineNumber('notes.rst:12:3')).toBe('notes.rst');
+
+    const homeRoot = ['', 'home', 'demo_usr', 'demo-proj'].join('/');
+    const homeResults = detectOutputArtifacts('See ~/demo-proj/relative-report.pdf:8', {
+      worktreePath: homeRoot,
+    });
+    expect(homeResults[0]?.normalizedPath).toBe(`${homeRoot}/relative-report.pdf`);
+
+    const windowsRoot = ['C:', 'workspace', 'demo-proj'].join('\\');
+    const windowsResults = detectOutputArtifacts('Created C:\\workspace\\demo-proj\\artifact.bin:8', {
+      worktreePath: windowsRoot,
+    });
+    expect(windowsResults[0]?.normalizedPath).toBe('C:/workspace/demo-proj/artifact.bin');
+  });
+
+  it('detects the shell transcript form that reports a created absolute path', () => {
+    const output = `printf '# Demo artifact\\n' > artifact-demo.md
+printf 'Created file /workspace/spawnea/artifact-demo.md\\n'
+Created file /workspace/spawnea/artifact-demo.md`;
+
+    const results = detectOutputArtifacts(output, { worktreePath });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].filename).toBe('artifact-demo.md');
+    expect(results[0].normalizedPath).toBe('/workspace/spawnea/artifact-demo.md');
   });
 });

@@ -46,7 +46,7 @@ describe('PtyBroker', () => {
     expect(mockWebContents.send).toHaveBeenCalledWith('pty:data', 'pty-1', 'Hello agent world!');
 
     // 2. Simulate user keyboard input
-    broker.write('pty-1', 'ls -la\n');
+    expect(broker.write('pty-1', 'ls -la\n')).toBe(true);
     const inputMetrics = broker.getMetrics('pty-1');
     expect(inputMetrics?.lastInputAt).toBeDefined();
     expect(mockStream.write).toHaveBeenCalledWith('ls -la\n');
@@ -54,6 +54,7 @@ describe('PtyBroker', () => {
     // 3. Clean up
     broker.close('pty-1');
     expect(broker.getMetrics('pty-1')).toBeUndefined();
+    expect(broker.write('pty-1', 'after-close\n')).toBe(false);
     expect(mockStream.close).toHaveBeenCalled();
   });
 });

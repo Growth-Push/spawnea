@@ -108,7 +108,7 @@ export class PtyBroker {
   /**
    * Writes input data (keyboard typing) to the PTY stream and tracks input activity.
    */
-  write(channelId: string, data: string): void {
+  write(channelId: string, data: string): boolean {
     const managed = this.channels.get(channelId);
     if (managed) {
       managed.metrics.lastInputAt = new Date();
@@ -120,8 +120,10 @@ export class PtyBroker {
         }
       }
       managed.stream.write(data);
+      return true;
     } else {
       this.logger.debug('Attempted to write to unknown or closed PTY channel', { channelId });
+      return false;
     }
   }
 

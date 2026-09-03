@@ -966,8 +966,12 @@ export class SessionManager {
     const formattedPrompt = prompt.endsWith('\n') ? prompt : `${prompt}\n`;
 
     if (metrics !== undefined) {
-      this.ptyBroker.write(ptyChannelId, formattedPrompt);
-      return { delivered: true, deliveryMethod: 'pty' };
+      // The channel can disappear after getMetrics() during reconnect or
+      // shutdown. PtyBroker reports the authoritative write result so callers
+      // do not receive a false delivery confirmation.
+      if (this.ptyBroker.write(ptyChannelId, formattedPrompt)) {
+        return { delivered: true, deliveryMethod: 'pty' };
+      }
     }
 
     const host = await this.getHostAdapter(session.serverId);

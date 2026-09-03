@@ -3,20 +3,20 @@
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 /**
- * Canonicalizes a POSIX path without touching the filesystem.
- * Spawnea's local and remote execution targets use POSIX paths.
+ * Canonicalizes a path without touching the filesystem. Windows separators
+ * are normalized so containment checks behave consistently across hosts.
  */
 export function canonicalizePath(input: string): string {
   if (typeof input !== 'string' || input.length === 0) {
     throw new Error('Path must be a non-empty string');
   }
-  if (input.includes('\0') || input.includes('\\')) {
-    throw new Error('Path contains an unsupported character');
-  }
+  if (input.includes('\0')) throw new Error('Path contains an unsupported character');
 
-  const absolute = input.startsWith('/');
+  const portableInput = input.replace(/\\/g, '/');
+  const driveAbsolute = /^[A-Za-z]:\//.test(portableInput);
+  const absolute = portableInput.startsWith('/') || driveAbsolute;
   const segments: string[] = [];
-  for (const segment of input.split('/')) {
+  for (const segment of portableInput.split('/')) {
     if (!segment || segment === '.') continue;
     if (segment === '..') {
       if (segments.length > 0 && segments[segments.length - 1] !== '..') {
@@ -30,7 +30,7 @@ export function canonicalizePath(input: string): string {
   }
 
   const joined = segments.join('/');
-  if (absolute) return joined ? `/${joined}` : '/';
+  if (absolute) return driveAbsolute ? joined : joined ? `/${joined}` : '/';
   return joined || '.';
 }
 
@@ -43,7 +43,15 @@ export function isPathContained(root: string, candidate: string): boolean {
     const canonicalRoot = canonicalizePath(root).replace(/\/+$/, '') || '/';
     const canonicalCandidate = canonicalizePath(candidate);
     if (canonicalRoot === '/') return canonicalCandidate.startsWith('/');
-    return canonicalCandidate === canonicalRoot || canonicalCandidate.startsWith(`${canonicalRoot}/`);
+    const isWindowsPath = /^[A-Za-z]:\//.test(canonicalRoot);
+    const comparisonRoot = isWindowsPath ? canonicalRoot.toLowerCase() : canonicalRoot;
+    const comparisonCandidate = isWindowsPath
+      ? canonicalCandidate.toLowerCase()
+      : canonicalCandidate;
+    return (
+      comparisonCandidate === comparisonRoot ||
+      comparisonCandidate.startsWith(`${comparisonRoot}/`)
+    );
   } catch {
     return false;
   }
@@ -56,7 +64,8 @@ export function resolveContainedPath(root: string, requestedPath: string): strin
   if (typeof requestedPath !== 'string' || requestedPath.length === 0) {
     throw new Error('Path must be a non-empty string');
   }
-  const candidate = requestedPath.startsWith('/')
+  const isAbsolute = requestedPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(requestedPath);
+  const candidate = isAbsolute
     ? canonicalizePath(requestedPath)
     : canonicalizePath(`${root.replace(/\/+$/, '')}/${requestedPath}`);
   if (!isPathContained(root, candidate)) {

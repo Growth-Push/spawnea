@@ -121,13 +121,32 @@ const PATTERNS: { regex: RegExp; source: 'tool_call' | 'terminal_output'; confid
     source: 'tool_call',
     confidence: 0.90,
   },
-  // Standalone full path or relative path on a line with known code/doc/artifact extension
+  // Standalone paths. The existence and Git checks happen in ArtifactManager;
+  // this matcher intentionally accepts any file extension so artifacts are not
+  // limited to a hard-coded list of document and source formats.
   {
-    regex: /(?:^|\s)([\w./-]+\.(?:md|png|jpg|jpeg|gif|svg|webp|pdf|json|yaml|yml|ts|tsx|js|jsx|py|html|css|txt|csv|sql))(?:\s|$)/i,
+    regex: /(?:^|[\s"'`(])((?:~[\\/]|\/|[A-Za-z]:[\\/]|\.\.?[\\/])?[\w.-]+(?:[\\/][\w.-]+)*\.[A-Za-z0-9_-]{1,32}(?::\d+){0,2})(?=$|[\s"'`),.;!?])/g,
     source: 'terminal_output',
     confidence: 0.75,
   },
 ];
+
+/** Removes editor-style line/column suffixes from a detected file path. */
+export function stripPathLineNumber(candidate: string): string {
+  return candidate.replace(/:\d+(?::\d+)?$/, '');
+}
+
+function expandHomePath(candidate: string, worktreePath: string): string {
+  if (!candidate.startsWith('~/') && !candidate.startsWith('~\\')) return candidate;
+
+  // The remote user's home is not available as a separate session field. For
+  // the usual POSIX layouts, infer it from the resolved worktree root.
+  const portableWorktree = worktreePath.replace(/\\/g, '/');
+  const homeMatch = portableWorktree.match(
+    /^(\/(?:home|Users)\/[^/]+|[A-Za-z]:\/Users\/[^/]+)(?:\/|$)/
+  );
+  return homeMatch ? `${homeMatch[1]}/${candidate.slice(2).replace(/\\/g, '/')}` : candidate;
+}
 
 
 /**
@@ -161,7 +180,9 @@ export function detectOutputArtifacts(
       if (!candidateRaw || candidateRaw.length < 2) continue;
 
       // Clean surrounding quotes or parenthesis
-      const cleanPath = candidateRaw.replace(/^['"`(]+|['"`)]+$/g, '').trim();
+      const cleanPath = stripPathLineNumber(
+        candidateRaw.replace(/^['"`(]+|['"`)]+$/g, '').trim()
+      );
       if (!cleanPath || cleanPath.includes(' ') || cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
         continue;
       }
@@ -176,7 +197,10 @@ export function detectOutputArtifacts(
       // traversal paths must never become artifact candidates.
       let normalizedPath: string;
       try {
-        normalizedPath = resolveContainedPath(normalizedWorktree, cleanPath);
+        normalizedPath = resolveContainedPath(
+          normalizedWorktree,
+          expandHomePath(cleanPath, normalizedWorktree)
+        );
       } catch {
         continue;
       }
