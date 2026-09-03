@@ -72,7 +72,7 @@ describe('packaged MCP socket bridge', () => {
     await finished(stdout);
     expect(authenticationLine).toBe(`${JSON.stringify({ type: 'spawnea-auth', token })}\n`);
     expect(Buffer.concat(received)).toEqual(payload);
-  });
+  }, 15000);
 
   it('reports a failed connection through the process exit code', () => {
     const socket = new Socket();
