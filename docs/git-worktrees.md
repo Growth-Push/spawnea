@@ -74,7 +74,7 @@ When your task is complete or you are ready to conclude the session, open the **
 
 Spawnea provides three explicit outcomes:
 
-1. **Integrate into `<baseBranch>`**:
+1. **Integrate into `<baseBranch>`** (button: **Integrate & Clean Up**):
    - Merges the session branch (`spawnea/<slug>`) into your base branch.
    - Stops the session and kills its `tmux` process.
    - Deletes the worktree folder.
