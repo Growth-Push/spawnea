@@ -669,6 +669,12 @@ export function App(): React.JSX.Element {
 
         if (pendingCloseAllParentId) {
           const parentId = pendingCloseAllParentId;
+          const finishedSession = sessions.find((s) => s.id === sessionId);
+          if (finishedSession?.parentSessionId !== parentId) {
+            setPendingCloseAllParentId(null);
+            setSessionToFinish(null);
+            return;
+          }
           const remainingChildren = sessions.filter(
             (s) => s.parentSessionId === parentId && s.id !== sessionId
           );
@@ -788,7 +794,16 @@ export function App(): React.JSX.Element {
 
   const handleClearDoneSessions = async () => {
     const doneSessions = sessions.filter((s) => s.status === 'done');
-    setSessions((prev) => prev.filter((s) => s.status !== 'done'));
+    const clearedSessionIds = new Set(doneSessions.map((session) => session.id));
+    setSessions((prev) =>
+      prev
+        .filter((session) => session.status !== 'done')
+        .map((session) =>
+          session.parentSessionId && clearedSessionIds.has(session.parentSessionId)
+            ? { ...session, parentSessionId: undefined, childAlias: undefined }
+            : session
+        )
+    );
 
     setActiveSessionId((currentActiveId) => {
       if (doneSessions.some((s) => s.id === currentActiveId)) {

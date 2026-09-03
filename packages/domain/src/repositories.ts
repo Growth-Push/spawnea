@@ -35,6 +35,7 @@ export interface SessionRepository {
   findByParentId(parentId: string): Promise<Session[]>;
   findByParentAndAlias(parentId: string, childAlias: string): Promise<Session | null>;
   allocateChildAlias(parentId: string): Promise<string>;
+  releaseChildAlias(parentId: string, alias: string): Promise<boolean>;
   promoteChildrenToRoot(parentId: string): Promise<number>;
   clearParentReferences(parentId: string): Promise<number>;
   save(

@@ -23,6 +23,37 @@ describe('TmuxManager', () => {
     expect(commands.some((c) => c.includes('which tmux'))).toBe(true);
     expect(commands.some((c) => c.includes('tmux new-session -d -s \'spawnea-test-session\''))).toBe(true);
     expect(commands.some((c) => c.includes('tmux send-keys'))).toBe(true);
+    expect(commands.some((c) => c.includes('set-option') && c.includes('mouse'))).toBe(false);
+    expect(commands.some((c) => c.includes('set-option') && c.includes('history-limit'))).toBe(false);
+  });
+
+  it('applies only explicitly configured tmux options and commands', async () => {
+    const host = new MockHostAdapter('host-1');
+    const tmux = new TmuxManager();
+
+    const result = await tmux.createPersistentSession({
+      host,
+      sessionName: 'spawnea-configured-session',
+      cwd: '/workspace/code',
+      command: 'bash',
+      tmuxOptions: { mouse: true, 'history-limit': 50000 },
+      tmuxCommands: [['set-window-option', '-t', '{{session}}', 'status', 'off']],
+    });
+
+    expect(result.success).toBe(true);
+    const commands = host.executedCommands.map((c) => c.command);
+    expect(commands).toContain("tmux set-option -t 'spawnea-configured-session' 'mouse' 'on'");
+    expect(commands).toContain("tmux set-option -t 'spawnea-configured-session' 'history-limit' '50000'");
+    expect(commands).toContain("tmux 'set-window-option' '-t' 'spawnea-configured-session' 'status' 'off'");
+  });
+
+  it('does not change tmux options while attaching', async () => {
+    const host = new MockHostAdapter('host-1');
+    const tmux = new TmuxManager();
+
+    await tmux.attachPty(host, 'spawnea-existing-session', { cols: 80, rows: 24 });
+
+    expect(host.executedCommands.map((c) => c.command)).toEqual([]);
   });
 
   it('fails truthfully if tmux is not installed on the target host', async () => {

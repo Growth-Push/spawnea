@@ -8,6 +8,8 @@ export interface CreateTmuxSessionOptions {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  tmuxOptions?: Record<string, string | number | boolean>;
+  tmuxCommands?: string[][];
   logger?: Logger;
 }
 
@@ -88,9 +90,7 @@ export class TmuxManager {
       };
     }
 
-    // Enable mouse wheel scrolling and high scrollback buffer on this tmux session
-    await host.execute(`tmux set-option -t ${escapeShellArg(sessionName)} mouse on`).catch(() => {});
-    await host.execute(`tmux set-option -t ${escapeShellArg(sessionName)} history-limit 50000`).catch(() => {});
+    await this.applyConfiguredSessionSettings(host, sessionName, options.tmuxOptions, options.tmuxCommands);
 
     // 4. Construct harness command with arguments and environment variables
     const envEntries = options.env ? Object.entries(options.env) : [];
@@ -146,10 +146,40 @@ export class TmuxManager {
    */
   async attachPty(host: HostAdapter, sessionName: string, options: PtyOptions): Promise<PtyStream> {
     this.logger.info('Attaching PTY to tmux session', { serverId: host.serverId, sessionName });
-    // Ensure mouse mode is active for mouse wheel scrolling
-    await host.execute(`tmux set-option -t ${escapeShellArg(sessionName)} mouse on`).catch(() => {});
     const attachCmd = `tmux attach-session -t ${escapeShellArg(sessionName)}`;
     return host.openPty(attachCmd, options);
+  }
+
+  private async applyConfiguredSessionSettings(
+    host: HostAdapter,
+    sessionName: string,
+    tmuxOptions: Record<string, string | number | boolean> = {},
+    tmuxCommands: string[][] = []
+  ): Promise<void> {
+    for (const [option, value] of Object.entries(tmuxOptions)) {
+      try {
+        const optionValue = typeof value === 'boolean' ? (value ? 'on' : 'off') : String(value);
+        const result = await host.execute(
+          `tmux set-option -t ${escapeShellArg(sessionName)} ${escapeShellArg(option)} ${escapeShellArg(optionValue)}`
+        );
+        if (result.exitCode === 0) continue;
+        this.logger.warn('Configured tmux option could not be applied', { sessionName, option });
+      } catch (error) {
+        this.logger.warn('Configured tmux option could not be applied', { sessionName, option, error });
+      }
+    }
+
+    for (const command of tmuxCommands) {
+      try {
+        const expandedArgs = command.map((arg) => arg === '{{session}}' ? sessionName : arg);
+        const expandedCommand = expandedArgs.map(escapeShellArg).join(' ');
+        const result = await host.execute(`tmux ${expandedCommand}`);
+        if (result.exitCode === 0) continue;
+        this.logger.warn('Configured tmux command could not be applied', { sessionName, command: expandedCommand });
+      } catch (error) {
+        this.logger.warn('Configured tmux command could not be applied', { sessionName, command, error });
+      }
+    }
   }
 
   /**

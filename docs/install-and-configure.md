@@ -113,6 +113,14 @@ hosts:
         name: Backend Service
         path: ~/code/backend
         base_branch: main
+        # Optional. Empty by default: Spawnea does not change tmux options.
+        tmux:
+          options: {}
+          # To opt in, replace the empty map with for example:
+          # options:
+          #   mouse: on
+          #   history-limit: 50000
+          commands: []
         enabled: true
 
     harnesses:
@@ -130,6 +138,46 @@ hosts:
 ```
 
 A reference template is available in the repository at [`config/spawnea.example.yaml`](../config/spawnea.example.yaml).
+
+### Optional tmux settings
+
+Project-level `tmux.options` applies explicit `tmux set-option` values when a new session is created. The session target is added automatically. `tmux.commands` runs explicit tmux subcommands after creation. Each command is an array of arguments, which Spawnea shell-quotes before execution. Use the `{{session}}` argument when the command needs the generated session target. Both are empty by default and are not run again when Spawnea attaches to an existing session.
+
+For example, this enables mouse reporting and increases the scrollback buffer for sessions belonging to one project:
+
+```yaml
+tmux:
+  options:
+    mouse: on
+    history-limit: 50000
+  commands: []
+```
+
+Other useful session options include:
+
+```yaml
+tmux:
+  options:
+    # Hide the tmux status line.
+    status: off
+    # Refresh the status line every second when it is enabled.
+    status-interval: 1
+    # Keep tmux messages visible for five seconds.
+    display-time: 5000
+  commands: []
+```
+
+Use `commands` for tmux operations that are not session options, such as window settings or hooks. Each entry is appended after `tmux` and runs once after the new session is created. Use `{{session}}` as a placeholder when a command needs the generated session name:
+
+```yaml
+tmux:
+  options: {}
+  commands:
+    - [set-window-option, -t, "{{session}}", mode-keys, vi]
+    - [set-window-option, -t, "{{session}}", remain-on-exit, on]
+```
+
+Spawnea replaces the `{{session}}` argument with the generated session name. Avoid putting credentials or unrelated host changes in this list.
 
 ### Adding Projects via the UI
 

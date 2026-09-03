@@ -25,7 +25,7 @@ export function CloseParentModal({
 
   // Initial focus on open (only runs when isOpen transitions to true)
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !parentSession) return;
 
     const timer = setTimeout(() => {
       if (modalRef.current && !modalRef.current.contains(document.activeElement)) {
@@ -44,11 +44,11 @@ export function CloseParentModal({
     }, 0);
 
     return () => clearTimeout(timer);
-  }, [isOpen]);
+  }, [isOpen, parentSession]);
 
   // Keyboard navigation: Escape to close, Tab to cycle focus within modal
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !parentSession) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -76,7 +76,7 @@ export function CloseParentModal({
 
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [isOpen]);
+  }, [isOpen, parentSession]);
 
   if (!isOpen || !parentSession) return null;
 

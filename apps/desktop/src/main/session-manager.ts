@@ -102,7 +102,9 @@ export class SessionManager {
   // Active Host Adapters by serverId (pooled)
   private readonly hostPool: Map<string, HostAdapter> = new Map();
   // Active session locks to prevent concurrent duplicate starts (FG-2.2.10)
-  private readonly startingSessions: Set<string> = new Set();
+  private readonly startingSessions: Map<string, Promise<void>> = new Map();
+  private readonly finalizingParents: Set<string> = new Set();
+  private readonly childCreationsInProgress: Map<string, number> = new Map();
   // In-memory host system telemetry cache
   private readonly hostSystemInfoCache: Map<string, HostSystemInfo> = new Map();
   // Active attached terminal sessions tracking for automatic transparent re-attachment
@@ -570,10 +572,9 @@ export class SessionManager {
 
 
   /**
-   * Creates an Spawnea-owned persistent session (FG-2.2, FG-2.5):
-   * 1. Validates selections and prevents duplicate simultaneous starts.
-  /**
-   * Internal session creation core powering root and child session creation.
+   * Creates an Spawnea-owned persistent session, powering root and child creation.
+   * It validates the task, prepares the project folder, starts tmux, and persists
+   * the session context and database record.
    */
   private async createSessionCore(options: {
     serverId: string;
@@ -599,21 +600,29 @@ export class SessionManager {
       .substring(0, 30) || 'task';
 
     const lockKey = `${options.serverId}:${options.projectId}`;
-    if (this.startingSessions.has(lockKey)) {
-      throw new Error(`Another session start is already in progress for project '${options.projectId}'`);
+    while (true) {
+      const activeStart = this.startingSessions.get(lockKey);
+      if (!activeStart) break;
+      await activeStart;
     }
-
-    this.startingSessions.add(lockKey);
+    let releaseStart!: () => void;
+    const startLock = new Promise<void>((resolve) => { releaseStart = resolve; });
+    this.startingSessions.set(lockKey, startLock);
+    let allocatedChildAlias: string | undefined;
     let releaseProjectPath: () => void = () => undefined;
     let releaseParentPath: () => void = () => undefined;
     try {
+      if (options.parentSessionId && !options.childAlias) {
+        allocatedChildAlias = await this.repos.sessions.allocateChildAlias(options.parentSessionId);
+      }
+      const childAlias = options.childAlias || allocatedChildAlias;
       this.logger.info('Initiating session creation', {
         serverId: options.serverId,
         projectId: options.projectId,
         agentId: options.agentId,
         task: options.task,
         parentSessionId: options.parentSessionId,
-        childAlias: options.childAlias,
+        childAlias,
       });
 
       // 1. Resolve host, project, and agent definitions
@@ -734,6 +743,8 @@ export class SessionManager {
           command: harnessCommand,
           args: harnessArgs,
           env: undefined,
+          tmuxOptions: catProject?.tmux?.options,
+          tmuxCommands: catProject?.tmux?.commands,
           logger: this.logger.child('tmux'),
         });
 
@@ -767,7 +778,7 @@ export class SessionManager {
           sessionName: effectiveName,
           task: options.task,
           parentSessionId: options.parentSessionId,
-          childAlias: options.childAlias,
+          childAlias,
           host: {
             id: options.serverId,
             name: catalogHost?.name || options.serverId,
@@ -827,7 +838,7 @@ export class SessionManager {
           agentId: options.agentId,
           task: options.task,
           parentSessionId: options.parentSessionId,
-          childAlias: options.childAlias,
+          childAlias,
           worktreePath: persistedRuntimePath,
           branch: branchName,
           baseBranch,
@@ -844,7 +855,7 @@ export class SessionManager {
           worktreePath: runtimePath,
           managedWorktree,
           parentSessionId: options.parentSessionId,
-          childAlias: options.childAlias,
+          childAlias,
         });
 
         const wc = this.getWebContents();
@@ -854,6 +865,9 @@ export class SessionManager {
 
         return savedSession;
       } catch (error) {
+        if (allocatedChildAlias && options.parentSessionId) {
+          await this.repos.sessions.releaseChildAlias(options.parentSessionId, allocatedChildAlias).catch(() => false);
+        }
         await this.contextStore.delete(sessionId).catch(() => false);
 
         let runtimeStopped = !tmuxCreated;
@@ -884,7 +898,10 @@ export class SessionManager {
     } finally {
       releaseProjectPath();
       releaseParentPath();
-      this.startingSessions.delete(lockKey);
+      if (this.startingSessions.get(lockKey) === startLock) {
+        this.startingSessions.delete(lockKey);
+        releaseStart();
+      }
     }
   }
 
@@ -922,8 +939,13 @@ export class SessionManager {
     if (parent.parentSessionId) {
       throw new Error('A child session cannot be used as a parent session (enforces 2-level cap)');
     }
+    if (this.finalizingParents.has(parent.id)) {
+      throw new Error(`Parent session '${parent.id}' is being finalized and cannot accept new children`);
+    }
+    this.childCreationsInProgress.set(parent.id, (this.childCreationsInProgress.get(parent.id) || 0) + 1);
 
-    if (input.agentId) {
+    try {
+      if (input.agentId) {
       if (input.agentId.includes(':')) {
         const [hostId] = input.agentId.split(':');
         if (hostId !== parent.serverId) {
@@ -941,23 +963,29 @@ export class SessionManager {
       if (!dbAgent && !catHarness) {
         throw new Error(`Agent '${input.agentId}' not found on parent host '${parent.serverId}'`);
       }
+      }
+
+      if (this.finalizingParents.has(parent.id)) {
+        throw new Error(`Parent session '${parent.id}' is being finalized and cannot accept new children`);
+      }
+      const displayName = input.name?.trim() || input.task;
+
+      return this.createSessionCore({
+        serverId: parent.serverId,
+        projectId: parent.projectId,
+        agentId: input.agentId || parent.agentId,
+        task: input.task,
+        name: displayName,
+        useWorktree: input.workspace === 'new-worktree',
+        parentSessionId: parent.id,
+        initialStatus: 'starting',
+        creationSource,
+      });
+    } finally {
+      const remaining = (this.childCreationsInProgress.get(parent.id) || 1) - 1;
+      if (remaining > 0) this.childCreationsInProgress.set(parent.id, remaining);
+      else this.childCreationsInProgress.delete(parent.id);
     }
-
-    const childAlias = await this.repos.sessions.allocateChildAlias(parent.id);
-    const displayName = input.name?.trim() || input.task;
-
-    return this.createSessionCore({
-      serverId: parent.serverId,
-      projectId: parent.projectId,
-      agentId: input.agentId || parent.agentId,
-      task: input.task,
-      name: displayName,
-      useWorktree: input.workspace === 'new-worktree',
-      parentSessionId: parent.id,
-      childAlias,
-      initialStatus: 'starting',
-      creationSource,
-    });
   }
 
   /**
@@ -1358,13 +1386,27 @@ export class SessionManager {
       throw new Error(`Session '${sessionId}' does not have an associated task branch`);
     }
 
+    // Freeze child creation before taking the snapshot so no child can appear
+    // after the parent worktree cleanup has begun.
+    this.finalizingParents.add(sessionId);
+    while ((this.childCreationsInProgress.get(sessionId) || 0) > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const children = await this.repos.sessions.findByParentId(sessionId);
+    const sameWorktreeChildIds = new Set(
+      children
+        .filter((child) => !child.managedWorktree && child.worktreePath === session.worktreePath)
+        .map((child) => child.id)
+    );
+
     // Check if any other session is currently using this worktree
     const allSessions = await this.repos.sessions.findAll();
     const normalizedSessionPath = normalizeWorktreePathForComparison(session.worktreePath);
     const sharingSessions = allSessions.filter(
-      (s) => s.id !== sessionId && normalizeWorktreePathForComparison(s.worktreePath) === normalizedSessionPath
+      (s) => s.id !== sessionId && !sameWorktreeChildIds.has(s.id) && normalizeWorktreePathForComparison(s.worktreePath) === normalizedSessionPath
     );
     if (sharingSessions.length > 0) {
+      this.finalizingParents.delete(sessionId);
       throw new Error(
         `Cannot finalize session '${sessionId}': worktree is still in use by ${sharingSessions.length} other session(s) (${sharingSessions.map((s) => s.id).join(', ')}). Close or reparent those sessions first.`
       );
@@ -1372,6 +1414,7 @@ export class SessionManager {
 
     const project = await this.repos.projects.findById(session.projectId);
     if (!project) {
+      this.finalizingParents.delete(sessionId);
       throw new Error(`Project '${session.projectId}' associated with session '${sessionId}' not found`);
     }
 
@@ -1526,6 +1569,7 @@ export class SessionManager {
 
       throw new Error(`Unsupported finalization action: ${action}`);
     } finally {
+      this.finalizingParents.delete(sessionId);
       worktreePath.release();
       repositoryPath.release();
     }

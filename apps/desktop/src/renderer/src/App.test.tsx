@@ -1722,10 +1722,18 @@ describe('App Desktop Shell', () => {
     const api = createMockSpawneaApi();
     api.listSessions = vi.fn().mockResolvedValue([parent, dirtyChild]);
     api.getGitStatus = vi.fn().mockImplementation((id: string) => {
-      if (id === 'child-1') {
-        return Promise.resolve({ isGitRepo: true, isClean: false, uncommittedChanges: 2, ahead: 0, behind: 0 });
-      }
-      return Promise.resolve({ isGitRepo: true, isClean: true, uncommittedChanges: 0, ahead: 0, behind: 0 });
+      const dirty = id === 'child-1';
+      return Promise.resolve({
+        isGitRepo: true,
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        isClean: !dirty,
+        staged: [],
+        unstaged: dirty ? ['a.ts', 'b.ts'] : [],
+        untracked: [],
+        totalChanges: dirty ? 2 : 0,
+      });
     });
     api.inspectWorktree = vi.fn().mockResolvedValue({
       canFastForward: true,

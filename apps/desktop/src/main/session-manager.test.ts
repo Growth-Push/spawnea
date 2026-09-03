@@ -758,12 +758,20 @@ hosts:
     expect(allSessions.length).toBe(0);
   });
 
-  it('blocks concurrent duplicate session launches (FG-2.2.10)', async () => {
-    // Inject artificial delay in mock host
+  it('queues concurrent duplicate session launches (FG-2.2.10)', async () => {
+    let releaseFirstTmuxCheck!: () => void;
+    let firstTmuxCheckReached!: () => void;
+    const firstTmuxCheck = new Promise<void>((resolve) => { firstTmuxCheckReached = resolve; });
+    const release = new Promise<void>((resolve) => { releaseFirstTmuxCheck = resolve; });
+    let tmuxCheckCount = 0;
     mockHost.customRules.push({
       pattern: 'which tmux',
       response: async () => {
-        await new Promise((r) => setTimeout(r, 50));
+        tmuxCheckCount += 1;
+        if (tmuxCheckCount === 1) {
+          firstTmuxCheckReached();
+          await release;
+        }
         return { stdout: '/usr/bin/tmux', stderr: '', exitCode: 0 };
       },
     });
@@ -774,6 +782,7 @@ hosts:
       agentId: 'dev-workstation:claude',
       task: 'Duplicate Task',
     });
+    await firstTmuxCheck;
 
     const p2 = sessionManager.createSession({
       serverId: 'dev-workstation',
@@ -782,7 +791,12 @@ hosts:
       task: 'Duplicate Task',
     });
 
-    await expect(Promise.all([p1, p2])).rejects.toThrow(/already in progress/);
+    await Promise.resolve();
+    expect(tmuxCheckCount).toBe(1);
+    releaseFirstTmuxCheck();
+    const sessions = await Promise.all([p1, p2]);
+    expect(sessions).toHaveLength(2);
+    expect(new Set(sessions.map((session) => session.id)).size).toBe(2);
   });
 
   it('detaches from session without stopping persistent execution (FG-2.3.1, FG-2.3.3)', async () => {
@@ -1589,6 +1603,72 @@ up 1 day, 5 hours
       // Both are deleted
       expect(await repos.sessions.findById(parent.id)).toBeNull();
       expect(await repos.sessions.findById(child.id)).toBeNull();
+    });
+    it('deletes parent and managed worktree child with close-all', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent root task',
+      });
+
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child with independent worktree',
+        workspace: 'new-worktree',
+      });
+
+      expect(child.managedWorktree).toBe(true);
+      expect(child.worktreePath).not.toBe(parent.worktreePath);
+
+      await sessionManager.deleteSession(parent.id, 'close-all');
+
+      expect(await repos.sessions.findById(parent.id)).toBeNull();
+      expect(await repos.sessions.findById(child.id)).toBeNull();
+    });
+
+    it('keeps same-project children when integrate preflight fails', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent preflight task',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child preserved on failure',
+        workspace: 'same-project',
+      });
+      const verify = vi.spyOn((sessionManager as any).gitService, 'verifyManagedWorktreeForFinalization')
+        .mockRejectedValueOnce(new Error('worktree is dirty'));
+
+      await expect(sessionManager.finishSession(parent.id, 'integrate')).rejects.toThrow('worktree is dirty');
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+      verify.mockRestore();
+    });
+
+    it('keeps same-project children when integration fails after preflight', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent merge task',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child preserved after merge failure',
+        workspace: 'same-project',
+      });
+      const merge = vi.spyOn((sessionManager as any).gitService, 'mergeManagedBranch')
+        .mockRejectedValueOnce(new Error('merge failed'));
+
+      await expect(sessionManager.finishSession(parent.id, 'integrate')).rejects.toThrow('merge failed');
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+      expect(await (sessionManager as any).tmuxManager.hasSession(mockHost, child.tmuxSessionName)).toBe(true);
+      merge.mockRestore();
     });
   });
 });

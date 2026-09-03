@@ -495,8 +495,13 @@ function registerIpcHandlers(
     return sessManager.deleteSession(sessionId, childAction);
   });
 
-  ipcMain.handle('sessions:sendPrompt', async (_event, sessionId: string, prompt: unknown) => {
-    if (typeof prompt !== 'string') throw new Error('Prompt must be a string');
+  ipcMain.handle('sessions:sendPrompt', async (event, sessionId: string, prompt: unknown) => {
+    if (!mainWindowRef || mainWindowRef.isDestroyed() || event.sender !== mainWindowRef.webContents) {
+      throw new Error('Unauthorized sessions:sendPrompt sender');
+    }
+    if (typeof prompt !== 'string') {
+      throw new TypeError('Prompt must be a string');
+    }
     return sessManager.sendPrompt(sessionId, prompt);
   });
 
