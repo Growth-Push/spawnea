@@ -78,12 +78,13 @@ Spawnea is early-stage and under active development. Interfaces and runtime beha
 
 ## Documentation
 
+- [User Documentation Index](docs/index.md)
+- [Getting Started](docs/getting-started.md)
+- [Installation and Configuration](docs/install-and-configure.md)
 - [Vision](docs/vision.md)
 - [Architecture](docs/architecture.md)
 - [Local control API and MCP](docs/control-api-mcp.md)
 - [Public-source privacy boundary](docs/public-source-privacy.md)
-
-Configuration and harness-specific setup will live in the project wiki or a dedicated documentation update.
 
 ## Development
 
