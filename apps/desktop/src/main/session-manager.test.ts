@@ -1648,5 +1648,26 @@ up 1 day, 5 hours
       expect(await repos.sessions.findById(child.id)).not.toBeNull();
       verify.mockRestore();
     });
+
+    it('keeps same-project children when integration fails after preflight', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent merge task',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child preserved after merge failure',
+        workspace: 'same-project',
+      });
+      const merge = vi.spyOn((sessionManager as any).gitService, 'mergeManagedBranch')
+        .mockRejectedValueOnce(new Error('merge failed'));
+
+      await expect(sessionManager.finishSession(parent.id, 'integrate')).rejects.toThrow('merge failed');
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+      merge.mockRestore();
+    });
   });
 });
