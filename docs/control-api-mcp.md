@@ -146,7 +146,7 @@ A repeated correlation ID with a different payload is rejected. An exact retry r
 
 ### `spawnea_activate`
 
-Input: `{ "sessionId": "session-id", "tab": "terminal|files|diff|artifacts|details" }`. Selects a known session/tab in the live renderer. It does not run host or Git commands. The result says whether delivery to a live renderer occurred.
+Input: `{ "sessionId": "session-id-or-alias", "parentSessionId": "parent-session-id-optional", "tab": "terminal|files|diff|artifacts|details" }`. Selects a known session/tab in the live renderer. When targeting a child alias (such as `child-1`), optional `parentSessionId` disambiguates child sessions across different parents. It does not run host or Git commands. The result says whether delivery to a live renderer occurred.
 
 ### `spawnea_request_finalization`
 

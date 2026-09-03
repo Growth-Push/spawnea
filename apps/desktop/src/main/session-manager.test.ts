@@ -1512,6 +1512,48 @@ up 1 day, 5 hours
       expect(promoted).not.toBeNull();
       expect(promoted!.parentSessionId).toBeUndefined();
       expect(promoted!.childAlias).toBeUndefined();
+      expect(promoted!.worktreePath).toBe(parent.worktreePath);
+      expect(promoted!.managedWorktree).toBe(true);
+      expect(promoted!.baseBranch).toBe(parent.baseBranch);
+      expect(promoted!.baseCommit).toBe(parent.baseCommit);
+    });
+
+    it('creates concurrent child sessions under the same parent without project lock rejection', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent root task',
+      });
+
+      const [child1, child2] = await Promise.all([
+        sessionManager.createChildSession({
+          parentSessionId: parent.id,
+          task: 'Child task A',
+          workspace: 'same-project',
+        }),
+        sessionManager.createChildSession({
+          parentSessionId: parent.id,
+          task: 'Child task B',
+          workspace: 'same-project',
+        }),
+      ]);
+
+      expect(child1.id).not.toBe(child2.id);
+      expect(child1.childAlias).toBe('child-1');
+      expect(child2.childAlias).toBe('child-2');
+    });
+
+    it('rejects oversized prompt exceeding 128 KiB limit', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Task',
+      });
+      const largePrompt = 'a'.repeat(129 * 1024);
+      await expect(sessionManager.sendPrompt(session.id, largePrompt)).rejects.toThrow('Prompt exceeds the 128 KiB delivery limit');
     });
 
     it('deletes parent with close-all and closes both parent and child sessions', async () => {

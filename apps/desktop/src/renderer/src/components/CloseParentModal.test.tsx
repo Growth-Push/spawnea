@@ -153,4 +153,22 @@ describe('CloseParentModal', () => {
     fireEvent.click(screen.getByTestId('parent-close-cancel-button'));
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  it('shows finalization warning specifying Close All when children are dirty', () => {
+    const dirtyChild = { ...mockChildren[0], managedWorktree: true };
+    render(
+      <CloseParentModal
+        isOpen={true}
+        parentSession={mockParent}
+        childrenSessions={[dirtyChild]}
+        gitDirtyBySessionId={{ [dirtyChild.id]: true }}
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByText('1 child has uncommitted changes and will prompt for finalization if you choose "Close All".')
+    ).toBeDefined();
+  });
 });

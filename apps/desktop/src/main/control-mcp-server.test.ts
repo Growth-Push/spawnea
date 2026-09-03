@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { createSpawneaMcpServer } from './control-mcp-server.js';
 import type { AgentControlService } from './agent-control-service.js';
+import type { ControlSendPromptResult } from '@spawnea/domain';
 
 describe('Spawnea MCP v1 contract', () => {
   const connected: Array<{ client: Client; server: ReturnType<typeof createSpawneaMcpServer> }> = [];
@@ -272,26 +273,16 @@ describe('Spawnea MCP v1 contract', () => {
   });
 
   it('handles spawnea_send_prompt tool call', async () => {
-    const sendResult = {
-      apiVersion: 'v1' as const,
+    const sendResult: ControlSendPromptResult = {
+      apiVersion: 'v1',
+      sessionId: 'session-child-1',
       delivered: true,
-      deliveryMethod: 'pty' as const,
-      session: {
-        id: 'session-child-1',
-        name: 'Child',
-        task: 'Child',
-        tmuxSessionName: 'spawnea-child-1',
-        status: 'working' as const,
-        source: 'catalog' as const,
-        server: { id: 'srv-1', name: 'Dev Server', target: 'localhost' },
-        project: { id: 'proj-1', name: 'Spawnea', rootPath: '/repo' },
-        agent: { id: 'agent-1', name: 'Claude', harness: 'claude-code' as const },
-        createdAt: '2026-09-03T00:00:00.000Z',
-        lastActivityAt: '2026-09-03T00:00:00.000Z',
-      },
+      deliveryMethod: 'pty',
+      acceptedAt: '2026-09-03T00:00:00.000Z',
+      message: 'Prompt delivered successfully',
     };
     const sendPrompt = vi.fn().mockResolvedValue(sendResult);
-    const client = await connect({ sendPrompt } as Partial<AgentControlService>);
+    const client = await connect({ sendPrompt } as unknown as AgentControlService);
 
     const result = await client.callTool({
       name: 'spawnea_send_prompt',
@@ -302,12 +293,42 @@ describe('Spawnea MCP v1 contract', () => {
     });
 
     expect(result.structuredContent).toMatchObject({
+      apiVersion: 'v1',
+      sessionId: 'session-child-1',
       delivered: true,
       deliveryMethod: 'pty',
+      acceptedAt: '2026-09-03T00:00:00.000Z',
+      message: 'Prompt delivered successfully',
     });
     expect(sendPrompt).toHaveBeenCalledWith({
       target: 'session-child-1',
       prompt: 'Run test suite',
+    });
+  });
+
+  it('forwards optional parentSessionId through spawnea_activate', async () => {
+    const navigate = vi.fn().mockResolvedValue({
+      apiVersion: 'v1',
+      deliveredToRenderer: true,
+      activeSessionId: 'session-child-1',
+      activeTab: 'terminal',
+    });
+    const client = await connect({ navigate } as unknown as AgentControlService);
+
+    const result = await client.callTool({
+      name: 'spawnea_activate',
+      arguments: {
+        sessionId: 'child-1',
+        parentSessionId: 'parent-1',
+        tab: 'terminal',
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(navigate).toHaveBeenCalledWith({
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',
+      tab: 'terminal',
     });
   });
 });

@@ -979,7 +979,7 @@ export function Sidebar({
             <button
               type="button"
               data-testid={`session-toggle-children-${session.id}`}
-              aria-label={`${isExpanded ? 'Hide' : 'Show'} ${children.length} child session${children.length === 1 ? '' : 's'}`}
+              aria-label={`${isExpanded ? 'Hide' : 'Show'} ${visibleChildren.length} child session${visibleChildren.length === 1 ? '' : 's'}`}
               aria-expanded={isExpanded}
               aria-controls={`session-child-list-${session.id}`}
               onClick={(e) => {
@@ -987,21 +987,16 @@ export function Sidebar({
                 toggleParentExpanded(session.id);
               }}
               className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono bg-purple-950/90 hover:bg-purple-900 text-purple-300 border border-purple-500/40 cursor-pointer transition-colors shadow-xs"
-              title={`${children.length} child session${children.length === 1 ? '' : 's'} (click to ${isExpanded ? 'collapse' : 'expand'})`}
+              title={`${visibleChildren.length} child session${visibleChildren.length === 1 ? '' : 's'} (click to ${isExpanded ? 'collapse' : 'expand'})`}
             >
               <GitFork className="w-2.5 h-2.5 text-purple-400" />
-              <span>{children.length} child{children.length === 1 ? '' : 'ren'}</span>
+              <span>{visibleChildren.length} child{visibleChildren.length === 1 ? '' : 'ren'}</span>
               <ChevronDown className={`w-3 h-3 text-purple-400 transition-transform duration-150 ${isExpanded ? 'rotate-180' : ''}`} />
             </button>
           </div>
 
           {/* Card footer (Path + tmux session) */}
-          <div
-            onClick={() => onSelectSession(session.id)}
-            className="cursor-pointer"
-          >
-            {renderCardFooter()}
-          </div>
+          {renderCardFooter()}
         </div>
 
         {isExpanded && (

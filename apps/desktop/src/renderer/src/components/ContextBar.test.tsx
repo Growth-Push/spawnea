@@ -86,12 +86,14 @@ describe('ContextBar session hierarchy actions', () => {
   });
 
   it('hides + child session button for child session (enforcing 2-level cap)', () => {
+    const onCreateChild = vi.fn();
     render(
       <ContextBar
         session={childSession}
         server={mockServer}
         project={mockProject}
         agent={mockAgent}
+        onCreateChild={onCreateChild}
       />
     );
 

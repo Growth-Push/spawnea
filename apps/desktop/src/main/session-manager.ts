@@ -593,7 +593,9 @@ export class SessionManager {
       .replace(/^-|-$/g, '')
       .substring(0, 30) || 'task';
 
-    const lockKey = `${options.serverId}:${options.projectId}`;
+    const lockKey = options.parentSessionId
+      ? `${options.serverId}:${options.projectId}:child:${options.childAlias ?? crypto.randomUUID()}`
+      : `${options.serverId}:${options.projectId}`;
     if (this.startingSessions.has(lockKey)) {
       throw new Error(`Another session start is already in progress for project '${options.projectId}'`);
     }
@@ -778,12 +780,12 @@ export class SessionManager {
             path: persistedRuntimePath,
             git_url: gitUrl,
           },
-          worktree: managedWorktree && baseBranch
+          worktree: (managedWorktree && baseBranch) || options.parentSessionId
             ? {
-                managed: true,
+                managed: managedWorktree,
                 path: persistedRuntimePath,
                 branch: branchName,
-                baseBranch,
+                baseBranch: baseBranch || 'main',
                 baseCommit,
               }
             : undefined,
@@ -961,9 +963,12 @@ export class SessionManager {
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
     }
+    if (Buffer.byteLength(prompt, 'utf8') > 128 * 1024) {
+      throw new Error('Prompt exceeds the 128 KiB delivery limit');
+    }
+    const formattedPrompt = prompt.endsWith('\n') ? prompt : `${prompt}\n`;
     const ptyChannelId = `pty-${session.id}`;
     const metrics = this.ptyBroker.getMetrics(ptyChannelId);
-    const formattedPrompt = prompt.endsWith('\n') ? prompt : `${prompt}\n`;
 
     if (metrics !== undefined) {
       this.ptyBroker.write(ptyChannelId, formattedPrompt);

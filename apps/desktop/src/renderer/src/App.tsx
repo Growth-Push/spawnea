@@ -644,6 +644,7 @@ export function App(): React.JSX.Element {
   ) => {
     if (action === 'ignore') {
       setSessionToFinish(null);
+      setPendingCloseAllParentId(null);
       return;
     }
 
@@ -686,6 +687,8 @@ export function App(): React.JSX.Element {
       } else {
         setPendingCloseAllParentId(null);
       }
+    } else {
+      setPendingCloseAllParentId(null);
     }
     setSessionToFinish(null);
   };

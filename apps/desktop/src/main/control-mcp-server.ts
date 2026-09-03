@@ -124,6 +124,7 @@ export function createSpawneaMcpServer(control: AgentControlService): McpServer 
       description: 'Select a known session and optionally open one of its workspace tabs. This does not execute host or Git commands.',
       inputSchema: z.object({
         sessionId: z.string().min(1).max(200),
+        parentSessionId: z.string().min(1).max(200).optional(),
         tab: workspaceTabSchema.optional(),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -195,7 +196,7 @@ export function createSpawneaMcpServer(control: AgentControlService): McpServer 
       inputSchema: z.object({
         target: z.string().min(1).max(200),
         parentSession: z.string().min(1).max(200).optional(),
-        prompt: z.string().min(1),
+        prompt: z.string().min(1).max(131072),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
