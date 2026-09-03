@@ -80,14 +80,19 @@ export const SessionContextFileSchema = z
     persistentSession: SessionContextPersistentSessionSchema,
     reconnectTarget: SessionContextReconnectTargetSchema,
     status: SessionStatusSchema,
-    parentSessionId: z.string().optional(),
-    childAlias: z.string().optional(),
+    parentSessionId: z.string().min(1).optional(),
+    childAlias: z.string().min(1).optional(),
     creationSource: SessionCreationSourceSchema.optional(),
     isExternal: z.boolean().optional(),
     createdAt: z.string().datetime({ offset: true }).or(z.string()),
     updatedAt: z.string().datetime({ offset: true }).or(z.string()),
   })
-  .strict();
+  .strict()
+  .superRefine((context, ctx) => {
+    if (Boolean(context.parentSessionId) !== Boolean(context.childAlias)) {
+      ctx.addIssue({ code: 'custom', path: ['parentSessionId'], message: 'parentSessionId and childAlias must be provided together' });
+    }
+  });
 
 export type SessionContextFile = z.infer<typeof SessionContextFileSchema>;
 

@@ -9,7 +9,7 @@ export interface CreateTmuxSessionOptions {
   args?: string[];
   env?: Record<string, string>;
   tmuxOptions?: Record<string, string | number | boolean>;
-  tmuxCommands?: string[];
+  tmuxCommands?: string[][];
   logger?: Logger;
 }
 
@@ -154,12 +154,13 @@ export class TmuxManager {
     host: HostAdapter,
     sessionName: string,
     tmuxOptions: Record<string, string | number | boolean> = {},
-    tmuxCommands: string[] = []
+    tmuxCommands: string[][] = []
   ): Promise<void> {
     for (const [option, value] of Object.entries(tmuxOptions)) {
       try {
+        const optionValue = typeof value === 'boolean' ? (value ? 'on' : 'off') : String(value);
         const result = await host.execute(
-          `tmux set-option -t ${escapeShellArg(sessionName)} ${escapeShellArg(option)} ${escapeShellArg(String(value))}`
+          `tmux set-option -t ${escapeShellArg(sessionName)} ${escapeShellArg(option)} ${escapeShellArg(optionValue)}`
         );
         if (result.exitCode === 0) continue;
         this.logger.warn('Configured tmux option could not be applied', { sessionName, option });
@@ -170,7 +171,8 @@ export class TmuxManager {
 
     for (const command of tmuxCommands) {
       try {
-        const expandedCommand = command.replaceAll('{{session}}', escapeShellArg(sessionName));
+        const expandedArgs = command.map((arg) => arg === '{{session}}' ? sessionName : arg);
+        const expandedCommand = expandedArgs.map(escapeShellArg).join(' ');
         const result = await host.execute(`tmux ${expandedCommand}`);
         if (result.exitCode === 0) continue;
         this.logger.warn('Configured tmux command could not be applied', { sessionName, command: expandedCommand });

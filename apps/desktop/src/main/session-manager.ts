@@ -102,7 +102,7 @@ export class SessionManager {
   // Active Host Adapters by serverId (pooled)
   private readonly hostPool: Map<string, HostAdapter> = new Map();
   // Active session locks to prevent concurrent duplicate starts (FG-2.2.10)
-  private readonly startingSessions: Set<string> = new Set();
+  private readonly startingSessions: Map<string, Promise<void>> = new Map();
   // In-memory host system telemetry cache
   private readonly hostSystemInfoCache: Map<string, HostSystemInfo> = new Map();
   // Active attached terminal sessions tracking for automatic transparent re-attachment
@@ -570,10 +570,9 @@ export class SessionManager {
 
 
   /**
-   * Creates an Spawnea-owned persistent session (FG-2.2, FG-2.5):
-   * 1. Validates selections and prevents duplicate simultaneous starts.
-  /**
-   * Internal session creation core powering root and child session creation.
+   * Creates an Spawnea-owned persistent session, powering root and child creation.
+   * It validates the task, prepares the project folder, starts tmux, and persists
+   * the session context and database record.
    */
   private async createSessionCore(options: {
     serverId: string;
@@ -599,21 +598,29 @@ export class SessionManager {
       .substring(0, 30) || 'task';
 
     const lockKey = `${options.serverId}:${options.projectId}`;
-    if (this.startingSessions.has(lockKey)) {
-      throw new Error(`Another session start is already in progress for project '${options.projectId}'`);
+    while (true) {
+      const activeStart = this.startingSessions.get(lockKey);
+      if (!activeStart) break;
+      await activeStart;
     }
-
-    this.startingSessions.add(lockKey);
+    let releaseStart!: () => void;
+    const startLock = new Promise<void>((resolve) => { releaseStart = resolve; });
+    this.startingSessions.set(lockKey, startLock);
+    let allocatedChildAlias: string | undefined;
     let releaseProjectPath: () => void = () => undefined;
     let releaseParentPath: () => void = () => undefined;
     try {
+      if (options.parentSessionId && !options.childAlias) {
+        allocatedChildAlias = await this.repos.sessions.allocateChildAlias(options.parentSessionId);
+      }
+      const childAlias = options.childAlias || allocatedChildAlias;
       this.logger.info('Initiating session creation', {
         serverId: options.serverId,
         projectId: options.projectId,
         agentId: options.agentId,
         task: options.task,
         parentSessionId: options.parentSessionId,
-        childAlias: options.childAlias,
+        childAlias,
       });
 
       // 1. Resolve host, project, and agent definitions
@@ -769,7 +776,7 @@ export class SessionManager {
           sessionName: effectiveName,
           task: options.task,
           parentSessionId: options.parentSessionId,
-          childAlias: options.childAlias,
+          childAlias,
           host: {
             id: options.serverId,
             name: catalogHost?.name || options.serverId,
@@ -829,7 +836,7 @@ export class SessionManager {
           agentId: options.agentId,
           task: options.task,
           parentSessionId: options.parentSessionId,
-          childAlias: options.childAlias,
+          childAlias,
           worktreePath: persistedRuntimePath,
           branch: branchName,
           baseBranch,
@@ -846,7 +853,7 @@ export class SessionManager {
           worktreePath: runtimePath,
           managedWorktree,
           parentSessionId: options.parentSessionId,
-          childAlias: options.childAlias,
+          childAlias,
         });
 
         const wc = this.getWebContents();
@@ -856,6 +863,9 @@ export class SessionManager {
 
         return savedSession;
       } catch (error) {
+        if (allocatedChildAlias && options.parentSessionId) {
+          await this.repos.sessions.releaseChildAlias(options.parentSessionId, allocatedChildAlias).catch(() => false);
+        }
         await this.contextStore.delete(sessionId).catch(() => false);
 
         let runtimeStopped = !tmuxCreated;
@@ -886,7 +896,10 @@ export class SessionManager {
     } finally {
       releaseProjectPath();
       releaseParentPath();
-      this.startingSessions.delete(lockKey);
+      if (this.startingSessions.get(lockKey) === startLock) {
+        this.startingSessions.delete(lockKey);
+        releaseStart();
+      }
     }
   }
 
@@ -945,7 +958,6 @@ export class SessionManager {
       }
     }
 
-    const childAlias = await this.repos.sessions.allocateChildAlias(parent.id);
     const displayName = input.name?.trim() || input.task;
 
     return this.createSessionCore({
@@ -956,7 +968,6 @@ export class SessionManager {
       name: displayName,
       useWorktree: input.workspace === 'new-worktree',
       parentSessionId: parent.id,
-      childAlias,
       initialStatus: 'starting',
       creationSource,
     });
@@ -1358,6 +1369,15 @@ export class SessionManager {
 
     if (!session.branch) {
       throw new Error(`Session '${sessionId}' does not have an associated task branch`);
+    }
+
+    // Same-project children share the parent's worktree and must not survive
+    // its removal with a path that no longer exists.
+    const children = await this.repos.sessions.findByParentId(sessionId);
+    for (const child of children) {
+      if (!child.managedWorktree && child.worktreePath === session.worktreePath) {
+        await this.deleteSession(child.id, 'close-all');
+      }
     }
 
     // Check if any other session is currently using this worktree

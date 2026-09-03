@@ -141,7 +141,7 @@ A reference template is available in the repository at [`config/spawnea.example.
 
 ### Optional tmux settings
 
-Project-level `tmux.options` applies explicit `tmux set-option` values when a new session is created. The session target is added automatically. `tmux.commands` runs explicit tmux subcommands after creation; use the `{{session}}` placeholder when the command needs the generated session target. Both are empty by default and are not run again when Spawnea attaches to an existing session. Commands are passed to the target host as configured, so only use trusted local catalog files.
+Project-level `tmux.options` applies explicit `tmux set-option` values when a new session is created. The session target is added automatically. `tmux.commands` runs explicit tmux subcommands after creation. Each command is an array of arguments, which Spawnea shell-quotes before execution. Use the `{{session}}` argument when the command needs the generated session target. Both are empty by default and are not run again when Spawnea attaches to an existing session.
 
 For example, this enables mouse reporting and increases the scrollback buffer for sessions belonging to one project:
 
@@ -173,11 +173,11 @@ Use `commands` for tmux operations that are not session options, such as window 
 tmux:
   options: {}
   commands:
-    - "set-window-option -t {{session}} mode-keys vi"
-    - "set-window-option -t {{session}} remain-on-exit on"
+    - [set-window-option, -t, "{{session}}", mode-keys, vi]
+    - [set-window-option, -t, "{{session}}", remain-on-exit, on]
 ```
 
-Spawnea replaces `{{session}}` with the generated session name using shell-safe quoting. Avoid putting shell pipelines, credentials, or unrelated host changes in this list.
+Spawnea replaces the `{{session}}` argument with the generated session name. Avoid putting credentials or unrelated host changes in this list.
 
 ### Adding Projects via the UI
 

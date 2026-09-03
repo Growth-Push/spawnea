@@ -758,7 +758,7 @@ hosts:
     expect(allSessions.length).toBe(0);
   });
 
-  it('blocks concurrent duplicate session launches (FG-2.2.10)', async () => {
+  it('queues concurrent duplicate session launches (FG-2.2.10)', async () => {
     // Inject artificial delay in mock host
     mockHost.customRules.push({
       pattern: 'which tmux',
@@ -782,7 +782,9 @@ hosts:
       task: 'Duplicate Task',
     });
 
-    await expect(Promise.all([p1, p2])).rejects.toThrow(/already in progress/);
+    const sessions = await Promise.all([p1, p2]);
+    expect(sessions).toHaveLength(2);
+    expect(new Set(sessions.map((session) => session.id)).size).toBe(2);
   });
 
   it('detaches from session without stopping persistent execution (FG-2.3.1, FG-2.3.3)', async () => {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { createSpawneaMcpServer } from './control-mcp-server.js';
 import type { AgentControlService } from './agent-control-service.js';
+import type { ControlListSessionsResult, ControlSendPromptResult } from '@spawnea/domain';
 
 describe('Spawnea MCP v1 contract', () => {
   const connected: Array<{ client: Client; server: ReturnType<typeof createSpawneaMcpServer> }> = [];
@@ -240,7 +241,7 @@ describe('Spawnea MCP v1 contract', () => {
   });
 
   it('handles spawnea_list_sessions tool call', async () => {
-    const listResult = {
+    const listResult: ControlListSessionsResult = {
       apiVersion: 'v1' as const,
       sessions: [
         {
@@ -249,10 +250,12 @@ describe('Spawnea MCP v1 contract', () => {
           task: 'Parent task',
           tmuxSessionName: 'spawnea-parent-1',
           status: 'working' as const,
-          source: 'catalog' as const,
-          server: { id: 'srv-1', name: 'Dev Server', target: 'localhost' },
-          project: { id: 'proj-1', name: 'Spawnea', rootPath: '/repo' },
-          agent: { id: 'agent-1', name: 'Claude', harness: 'claude-code' as const },
+          host: { id: 'srv-1', name: 'Dev Server' },
+          project: { id: 'proj-1', name: 'Spawnea' },
+          harness: { id: 'agent-1', name: 'Claude', command: 'claude' },
+          creationSource: 'ui',
+          worktree: { managed: false, path: '/repo', branch: 'main', baseBranch: 'main' },
+          active: false,
           createdAt: '2026-09-03T00:00:00.000Z',
           lastActivityAt: '2026-09-03T00:00:00.000Z',
         },
@@ -266,29 +269,21 @@ describe('Spawnea MCP v1 contract', () => {
       arguments: {},
     });
 
-    expect(result.structuredContent).toMatchObject({
-      sessions: [expect.objectContaining({ id: 'parent-1' })],
-    });
+    const response = result.structuredContent as ControlListSessionsResult;
+    expect(response.apiVersion).toBe('v1');
+    expect(response.sessions).toHaveLength(1);
+    expect(response.sessions[0]?.id).toBe('parent-1');
+    expect(response.sessions[0]?.harness.command).toBe('claude');
   });
 
   it('handles spawnea_send_prompt tool call', async () => {
-    const sendResult = {
+    const sendResult: ControlSendPromptResult = {
       apiVersion: 'v1' as const,
+      sessionId: 'session-child-1',
       delivered: true,
-      deliveryMethod: 'pty' as const,
-      session: {
-        id: 'session-child-1',
-        name: 'Child',
-        task: 'Child',
-        tmuxSessionName: 'spawnea-child-1',
-        status: 'working' as const,
-        source: 'catalog' as const,
-        server: { id: 'srv-1', name: 'Dev Server', target: 'localhost' },
-        project: { id: 'proj-1', name: 'Spawnea', rootPath: '/repo' },
-        agent: { id: 'agent-1', name: 'Claude', harness: 'claude-code' as const },
-        createdAt: '2026-09-03T00:00:00.000Z',
-        lastActivityAt: '2026-09-03T00:00:00.000Z',
-      },
+      deliveryMethod: 'pty',
+      acceptedAt: '2026-09-03T00:00:01.000Z',
+      message: 'Prompt delivered to terminal stream. Response handoff is manual.',
     };
     const sendPrompt = vi.fn().mockResolvedValue(sendResult);
     const client = await connect({ sendPrompt } as Partial<AgentControlService>);
@@ -304,6 +299,7 @@ describe('Spawnea MCP v1 contract', () => {
     expect(result.structuredContent).toMatchObject({
       delivered: true,
       deliveryMethod: 'pty',
+      message: 'Prompt delivered to terminal stream. Response handoff is manual.',
     });
     expect(sendPrompt).toHaveBeenCalledWith({
       target: 'session-child-1',

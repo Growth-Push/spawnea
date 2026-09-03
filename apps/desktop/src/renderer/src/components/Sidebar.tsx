@@ -969,7 +969,7 @@ export function Sidebar({
             data-testid={`session-item-${session.id}`}
             aria-current={isSelected ? 'page' : undefined}
             onClick={() => onSelectSession(session.id)}
-            className="w-full text-left flex flex-col gap-1.5 cursor-pointer focus:outline-none"
+            className="w-full text-left flex flex-col gap-1.5 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/80"
           >
             {renderCardHeader()}
             {renderCardTitle()}
@@ -1187,7 +1187,13 @@ export function Sidebar({
                 </span>
                 <span className="truncate text-[10px]">{child.name}</span>
               </span>
-              <StatusBadge status={child.status} iconOnly className="shrink-0 scale-75" />
+              <StatusBadge
+                status={child.status}
+                isFocused={child.id === activeSessionId}
+                isAcknowledged={acknowledgedAlerts.has(getAlertId(child.id, child.status, statusDetailsMap[child.id]?.detectedPrompt || statusDetailsMap[child.id]?.reason))}
+                iconOnly
+                className="shrink-0 scale-75"
+              />
             </button>
           ))}
         </div>
@@ -1469,7 +1475,13 @@ export function Sidebar({
                       </span>
                       <span className="truncate text-xs">{child.name}</span>
                     </div>
-                    <StatusBadge status={child.status} iconOnly className="shrink-0" />
+                    <StatusBadge
+                      status={child.status}
+                      isFocused={child.id === activeSessionId}
+                      isAcknowledged={acknowledgedAlerts.has(getAlertId(child.id, child.status, statusDetailsMap[child.id]?.detectedPrompt || statusDetailsMap[child.id]?.reason))}
+                      iconOnly
+                      className="shrink-0"
+                    />
                   </button>
                 ))}
               </div>

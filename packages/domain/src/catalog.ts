@@ -21,7 +21,7 @@ export interface CatalogProject {
   };
   tmux?: {
     options: Record<string, string | number | boolean>;
-    commands: string[];
+    commands: string[][];
   };
   enabled: boolean;
 }
@@ -301,7 +301,7 @@ export const CatalogProjectSchema = z
     tmux: z
       .object({
         options: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
-        commands: z.array(z.string().trim().min(1, 'tmux commands must not be empty')).default([]),
+        commands: z.array(z.array(z.string().min(1, 'tmux command arguments must not be empty'))).default([]),
       })
       .strict()
       .optional(),

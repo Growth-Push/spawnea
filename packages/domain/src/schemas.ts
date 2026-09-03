@@ -84,8 +84,8 @@ export const AgentSchema = z.object({
 export const SessionSchema = z.object({
   id: z.string().uuid().or(z.string().min(1)),
   name: z.string().min(1),
-  parentSessionId: z.string().optional(),
-  childAlias: z.string().optional(),
+  parentSessionId: z.string().min(1).optional(),
+  childAlias: z.string().min(1).optional(),
   serverId: z.string().min(1),
   projectId: z.string().min(1),
   agentId: z.string().min(1),
@@ -99,6 +99,10 @@ export const SessionSchema = z.object({
   isExternal: z.boolean().default(false),
   createdAt: z.date().default(() => new Date()),
   lastActivityAt: z.date().default(() => new Date()),
+}).superRefine((session, ctx) => {
+  if (Boolean(session.parentSessionId) !== Boolean(session.childAlias)) {
+    ctx.addIssue({ code: 'custom', path: ['parentSessionId'], message: 'parentSessionId and childAlias must be provided together' });
+  }
 });
 
 export const ArtifactSchema = z.object({

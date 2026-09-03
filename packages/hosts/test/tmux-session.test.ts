@@ -36,15 +36,15 @@ describe('TmuxManager', () => {
       sessionName: 'spawnea-configured-session',
       cwd: '/workspace/code',
       command: 'bash',
-      tmuxOptions: { mouse: 'on', 'history-limit': 50000 },
-      tmuxCommands: ['set-window-option -t {{session}} status off'],
+      tmuxOptions: { mouse: true, 'history-limit': 50000 },
+      tmuxCommands: [['set-window-option', '-t', '{{session}}', 'status', 'off']],
     });
 
     expect(result.success).toBe(true);
     const commands = host.executedCommands.map((c) => c.command);
     expect(commands).toContain("tmux set-option -t 'spawnea-configured-session' 'mouse' 'on'");
     expect(commands).toContain("tmux set-option -t 'spawnea-configured-session' 'history-limit' '50000'");
-    expect(commands).toContain("tmux set-window-option -t 'spawnea-configured-session' status off");
+    expect(commands).toContain("tmux 'set-window-option' '-t' 'spawnea-configured-session' 'status' 'off'");
   });
 
   it('does not change tmux options while attaching', async () => {

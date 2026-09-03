@@ -125,6 +125,24 @@ export class SqliteSessionRepository implements SessionRepository {
     });
   }
 
+  async releaseChildAlias(parentId: string, alias: string): Promise<boolean> {
+    const match = alias.match(/^child-(\d+)$/);
+    if (!match) return false;
+    const index = Number(match[1]);
+    return this.db.transaction((tx) => {
+      const children = tx.select().from(sessions).where(eq(sessions.parentSessionId, parentId)).all();
+      if (children.some((child) => child.childAlias === alias)) return false;
+      const counter = tx.select().from(sessionChildAliasCounters)
+        .where(eq(sessionChildAliasCounters.parentSessionId, parentId)).all();
+      if (counter.length === 0 || counter[0].nextAliasIndex !== index + 1) return false;
+      tx.update(sessionChildAliasCounters)
+        .set({ nextAliasIndex: index })
+        .where(eq(sessionChildAliasCounters.parentSessionId, parentId))
+        .run();
+      return true;
+    });
+  }
+
   async promoteChildrenToRoot(parentId: string): Promise<number> {
     this.logger.info('Promoting child sessions of parent to root', { parentId });
     const result = await this.db

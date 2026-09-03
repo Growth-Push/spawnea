@@ -669,6 +669,12 @@ export function App(): React.JSX.Element {
 
         if (pendingCloseAllParentId) {
           const parentId = pendingCloseAllParentId;
+          const finishedSession = sessions.find((s) => s.id === sessionId);
+          if (finishedSession?.parentSessionId !== parentId) {
+            setPendingCloseAllParentId(null);
+            setSessionToFinish(null);
+            return;
+          }
           const remainingChildren = sessions.filter(
             (s) => s.parentSessionId === parentId && s.id !== sessionId
           );

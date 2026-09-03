@@ -74,16 +74,19 @@ describe('CloseParentModal', () => {
   });
 
   it('renders nothing when parentSession is null', () => {
+    const onClose = vi.fn();
     const { container } = render(
       <CloseParentModal
         isOpen={true}
         parentSession={null}
         childrenSessions={mockChildren}
-        onClose={vi.fn()}
+        onClose={onClose}
         onConfirm={vi.fn()}
       />
     );
     expect(container.firstChild).toBeNull();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('renders parent details and lists child sessions', () => {
