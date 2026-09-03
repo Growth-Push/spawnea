@@ -1,0 +1,96 @@
+import React from 'react';
+import { describe, it, expect, afterEach } from 'vitest';
+import { render, screen, cleanup } from '@testing-library/react';
+import { ContextBar } from './ContextBar';
+import type { Session, Server, Project, Agent } from '@spawnea/domain';
+
+describe('ContextBar session hierarchy actions', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const mockServer: Server = {
+    id: 'srv-1',
+    name: 'Local Server',
+    host: 'localhost',
+    sshPort: 22,
+    enabled: true,
+    createdAt: new Date(),
+  };
+
+  const mockProject: Project = {
+    id: 'proj-1',
+    serverId: 'srv-1',
+    name: 'Spawnea',
+    rootPath: '/repo',
+    createdAt: new Date(),
+  };
+
+  const mockAgent: Agent = {
+    id: 'agent-1',
+    name: 'Claude Code',
+    command: 'claude',
+    harness: 'claude-code',
+    createdAt: new Date(),
+  };
+
+  const rootSession: Session = {
+    id: 'parent-1',
+    name: 'Parent Session',
+    serverId: 'srv-1',
+    projectId: 'proj-1',
+    agentId: 'agent-1',
+    task: 'Parent task',
+    branch: 'main',
+    worktreePath: '/repo',
+    tmuxSessionName: 'spawnea-parent',
+    status: 'working',
+    createdAt: new Date(),
+    lastActivityAt: new Date(),
+  };
+
+  const childSession: Session = {
+    id: 'child-1',
+    parentSessionId: 'parent-1',
+    childAlias: 'child-1',
+    name: 'Child Session',
+    serverId: 'srv-1',
+    projectId: 'proj-1',
+    agentId: 'agent-1',
+    task: 'Child task',
+    branch: 'main',
+    worktreePath: '/repo',
+    tmuxSessionName: 'spawnea-child-1',
+    status: 'working',
+    createdAt: new Date(),
+    lastActivityAt: new Date(),
+  };
+
+  it('does not render child session button in ContextBar (managed from sidebar)', () => {
+    render(
+      <ContextBar
+        session={rootSession}
+        server={mockServer}
+        project={mockProject}
+        agent={mockAgent}
+      />
+    );
+
+    expect(screen.queryByTestId('session-create-child-button')).toBeNull();
+  });
+
+  it('renders child alias badge when active session has childAlias', () => {
+    render(
+      <ContextBar
+        session={childSession}
+        server={mockServer}
+        project={mockProject}
+        agent={mockAgent}
+      />
+    );
+
+    const badge = screen.getByTestId('contextbar-child-alias-badge');
+    expect(badge).toBeDefined();
+    expect(badge.textContent).toBe('child-1');
+  });
+});

@@ -87,6 +87,7 @@ const renderSidebar = (
     gitDirtyBySessionId?: Record<string, boolean>;
     gitChangeCountBySessionId?: Record<string, number>;
     isCollapsed?: boolean;
+    onOpenCreateChildModal?: (parentSessionId?: string) => void;
   } = {}
 ) => render(
   <Sidebar
@@ -99,6 +100,7 @@ const renderSidebar = (
     activeSessionId={options.activeSessionId ?? sessions[0]?.id ?? null}
     onSelectSession={options.onSelectSession ?? vi.fn()}
     onOpenCreateModal={vi.fn()}
+    onOpenCreateChildModal={options.onOpenCreateChildModal}
     onRefresh={vi.fn()}
     isCollapsed={options.isCollapsed}
   />
@@ -510,5 +512,180 @@ describe('Sidebar MCP source badge', () => {
     expect(
       screen.getByTestId('session-item-sess-ui').querySelector('[data-testid="mcp-session-badge"]')
     ).toBeNull();
+  });
+});
+
+describe('Sidebar session hierarchy', () => {
+  const rootParentSession: Session = {
+    id: 'parent-root',
+    name: 'Parent Root Session',
+    serverId: 'srv-local',
+    projectId: 'proj-1',
+    agentId: 'agent-1',
+    task: 'Main root feature task',
+    branch: 'main',
+    worktreePath: '/workspace/spawnea',
+    tmuxSessionName: 'spawnea-root',
+    status: 'working',
+    createdAt: new Date(),
+    lastActivityAt: new Date(),
+  };
+
+  const childSessionOne: Session = {
+    id: 'child-1',
+    parentSessionId: 'parent-root',
+    childAlias: 'child-1',
+    name: 'Child Subtask One',
+    serverId: 'srv-local',
+    projectId: 'proj-1',
+    agentId: 'agent-1',
+    task: 'Child subtask one',
+    branch: 'main',
+    worktreePath: '/workspace/spawnea',
+    tmuxSessionName: 'spawnea-child-1',
+    status: 'working',
+    createdAt: new Date(),
+    lastActivityAt: new Date(),
+  };
+
+  const standaloneRootSession: Session = {
+    id: 'standalone-root',
+    name: 'Standalone Root Session',
+    serverId: 'srv-local',
+    projectId: 'proj-1',
+    agentId: 'agent-1',
+    task: 'Solo task',
+    branch: 'feat/solo',
+    worktreePath: '/workspace/spawnea',
+    tmuxSessionName: 'spawnea-solo',
+    status: 'idle',
+    createdAt: new Date(),
+    lastActivityAt: new Date(),
+  };
+
+  it('renders child session under parent in Card view with toggle', () => {
+    const onSelectSession = vi.fn();
+    renderSidebar([rootParentSession, childSessionOne, standaloneRootSession], { onSelectSession });
+
+    // Standalone root has no toggle button
+    expect(screen.queryByTestId('session-toggle-children-standalone-root')).toBeNull();
+
+    // Parent root has toggle button
+    const toggleBtn = screen.getByTestId('session-toggle-children-parent-root');
+    expect(toggleBtn).toBeDefined();
+    expect(toggleBtn.textContent).toContain('1');
+
+    // Child list is not visible until expanded
+    expect(screen.queryByTestId('session-child-list-parent-root')).toBeNull();
+
+    // Click toggle to expand
+    fireEvent.click(toggleBtn);
+    expect(screen.getByTestId('session-child-list-parent-root')).toBeDefined();
+    expect(screen.getByTestId('session-child-alias-child-1').textContent).toBe('child-1');
+    expect(screen.getByTestId('session-title-child-1').textContent).toBe('Child Subtask One');
+
+    // Selecting child calls onSelectSession
+    fireEvent.click(screen.getByTestId('session-item-child-1'));
+    expect(onSelectSession).toHaveBeenCalledWith('child-1');
+  });
+
+  it('renders child count badge and popup list in Collapsed view', () => {
+    const onSelectSession = vi.fn();
+    renderSidebar([rootParentSession, childSessionOne], { isCollapsed: true, onSelectSession });
+
+    // Parent compact card shows child count badge
+    const badge = screen.getByTestId('session-compact-child-count-parent-root');
+    expect(badge).toBeDefined();
+    expect(badge.textContent).toBe('1');
+
+    // Hover popup lists child session item
+    const popupChild = screen.getByTestId('session-compact-child-item-child-1');
+    expect(popupChild).toBeDefined();
+
+    // Clicking child item in popup selects it
+    fireEvent.click(popupChild);
+    expect(onSelectSession).toHaveBeenCalledWith('child-1');
+  });
+
+  it('renders dense subgrid in Grid/Dense view', () => {
+    const onSelectSession = vi.fn();
+    // 12 sessions triggers dense threshold
+    const manySessions = makeSessions(11);
+    const parentWithChild: Session = {
+      ...rootParentSession,
+      id: 'sess-parent-dense',
+      name: 'Session Dense Parent',
+    };
+    const childInDense: Session = {
+      ...childSessionOne,
+      id: 'sess-child-dense',
+      parentSessionId: 'sess-parent-dense',
+      childAlias: 'child-1',
+      name: 'Subtask In Dense',
+    };
+
+    renderSidebar([...manySessions, parentWithChild, childInDense], { onSelectSession });
+
+    // Grid layout renders dense subgrid under parent
+    expect(screen.getByTestId('session-dense-subgrid-sess-parent-dense')).toBeDefined();
+    const childDenseItem = screen.getByTestId('session-item-sess-child-dense');
+    expect(childDenseItem).toBeDefined();
+
+    fireEvent.click(childDenseItem);
+    expect(onSelectSession).toHaveBeenCalledWith('sess-child-dense');
+  });
+
+  it('keeps parent visible when search matches child alias or title', () => {
+    renderSidebar([rootParentSession, childSessionOne, standaloneRootSession]);
+
+    const searchInput = screen.getByTestId('session-search-input');
+
+    // Search by child title
+    fireEvent.change(searchInput, { target: { value: 'Subtask One' } });
+    expect(screen.getByTestId('session-item-parent-root')).toBeDefined();
+    expect(screen.queryByTestId('session-item-standalone-root')).toBeNull();
+
+    // Search by child alias
+    fireEvent.change(searchInput, { target: { value: 'child-1' } });
+    expect(screen.getByTestId('session-item-parent-root')).toBeDefined();
+    expect(screen.queryByTestId('session-item-standalone-root')).toBeNull();
+  });
+
+  it('renders [+ New] and [+ Child] in header and triggers child creation for active parent', () => {
+    const onOpenCreateChildModal = vi.fn();
+    renderSidebar([rootParentSession, childSessionOne], {
+      activeSessionId: 'parent-root',
+      onOpenCreateChildModal,
+    });
+
+    const newBtn = screen.getByTestId('sidebar-new-session-button');
+    const childBtn = screen.getByTestId('sidebar-new-child-session-button');
+    expect(newBtn).toBeDefined();
+    expect(childBtn).toBeDefined();
+    expect(childBtn.textContent).toContain('Child');
+
+    fireEvent.click(childBtn);
+    expect(onOpenCreateChildModal).toHaveBeenCalledWith('parent-root');
+  });
+
+  it('renders child expand/collapse toggle below the name without covering shortcut badge', () => {
+    renderSidebar([rootParentSession, childSessionOne]);
+
+    const shortcutBadge = screen.getByTestId('session-shortcut-badge-parent-root');
+    expect(shortcutBadge.textContent).toBe('Ctrl-1');
+
+    const toggleBtn = screen.getByTestId('session-toggle-children-parent-root');
+    expect(toggleBtn).toBeDefined();
+    expect(toggleBtn.textContent).toContain('1 child');
+
+    const card = screen.getByTestId('session-item-parent-root');
+    const titleEl = screen.getByTestId('session-title-parent-root');
+    const group = screen.getByTestId('session-parent-group-parent-root');
+
+    // Toggle button is a sibling of card button (not nested inside button) following the title in layout
+    expect(group.contains(card)).toBe(true);
+    expect(group.contains(toggleBtn)).toBe(true);
+    expect(card.contains(toggleBtn)).toBe(false);
+    expect(titleEl.compareDocumentPosition(toggleBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

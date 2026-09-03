@@ -29,6 +29,18 @@ export interface CreateSessionInput {
   useWorktree?: boolean;
 }
 
+export type ChildSessionWorkspaceMode = 'same-project' | 'new-worktree';
+
+export interface CreateChildSessionInput {
+  parentSessionId: string;
+  name?: string;
+  task: string;
+  workspace: ChildSessionWorkspaceMode;
+  agentId?: string;
+}
+
+export type ParentCloseAction = 'close-all' | 'leave-children';
+
 export interface AddProjectToCatalogInput {
   serverId: string;
   projectId: string;
@@ -168,6 +180,7 @@ export interface IpcChannels {
   // Session Lifecycle
   'sessions:list': () => Promise<Session[]>;
   'sessions:create': (input: CreateSessionInput) => Promise<Session>;
+  'sessions:createChild': (input: CreateChildSessionInput) => Promise<Session>;
   'sessions:rename': (sessionId: string, name: string) => Promise<Session>;
   'sessions:adopt': (input: AdoptSessionInput) => Promise<Session>;
   'sessions:unadopt': (sessionId: string) => Promise<boolean>;
@@ -181,7 +194,8 @@ export interface IpcChannels {
     options?: FinishSessionOptions
   ) => Promise<FinishSessionResult>;
   'sessions:inspectWorktree': (sessionId: string) => Promise<ManagedWorktreeInspection>;
-  'sessions:delete': (sessionId: string) => Promise<boolean>;
+  'sessions:delete': (sessionId: string, childAction?: ParentCloseAction) => Promise<boolean>;
+  'sessions:sendPrompt': (sessionId: string, prompt: string) => Promise<{ delivered: boolean; deliveryMethod: 'pty' | 'tmux' }>;
 
   // Local MCP control requests. Pending destructive actions are resolved here
   // from the trusted renderer after an explicit user decision. An explicitly

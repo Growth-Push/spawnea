@@ -46,7 +46,10 @@ describe('Database Migrations', () => {
 
     expect(indexes).toContain('idx_sessions_server_id');
     expect(indexes).toContain('idx_sessions_project_id');
+    expect(indexes).toContain('idx_sessions_parent_session_id');
     expect(indexes).toContain('idx_artifacts_session_id');
+
+    expect(tables).toContain('session_child_alias_counters');
 
     const sessionColumns = (
       sqlite.prepare('PRAGMA table_info(sessions)').all() as { name: string }[]
@@ -55,6 +58,8 @@ describe('Database Migrations', () => {
     expect(sessionColumns).toContain('base_commit');
     expect(sessionColumns).toContain('managed_worktree');
     expect(sessionColumns).toContain('creation_source');
+    expect(sessionColumns).toContain('parent_session_id');
+    expect(sessionColumns).toContain('child_alias');
   });
 
   it('is idempotent when executed multiple times', () => {

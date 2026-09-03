@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { relations } from 'drizzle-orm';
 import type { SessionStatus, SessionCreationSource, ArtifactDirection } from '@spawnea/domain';
 
@@ -59,6 +59,8 @@ export const sessions = sqliteTable(
     tmuxWindowName: text('tmux_window_name'),
     status: text('status').$type<SessionStatus>().notNull().default('disconnected'),
     creationSource: text('creation_source').$type<SessionCreationSource>().notNull().default('ui'),
+    parentSessionId: text('parent_session_id'),
+    childAlias: text('child_alias'),
     isExternal: integer('is_external', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     lastActivityAt: integer('last_activity_at', { mode: 'timestamp_ms' }).notNull(),
@@ -66,7 +68,19 @@ export const sessions = sqliteTable(
   (table) => [
     index('idx_sessions_server_id').on(table.serverId),
     index('idx_sessions_project_id').on(table.projectId),
+    index('idx_sessions_parent_session_id').on(table.parentSessionId),
+    uniqueIndex('idx_sessions_parent_child_alias').on(table.parentSessionId, table.childAlias),
   ],
+);
+
+export const sessionChildAliasCounters = sqliteTable(
+  'session_child_alias_counters',
+  {
+    parentSessionId: text('parent_session_id')
+      .primaryKey()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    nextAliasIndex: integer('next_alias_index').notNull().default(1),
+  },
 );
 
 export const artifacts = sqliteTable(
@@ -119,6 +133,14 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
     fields: [sessions.agentId],
     references: [agents.id],
   }),
+  parent: one(sessions, {
+    fields: [sessions.parentSessionId],
+    references: [sessions.id],
+    relationName: 'sessionHierarchy',
+  }),
+  children: many(sessions, {
+    relationName: 'sessionHierarchy',
+  }),
   artifacts: many(artifacts),
 }));
 
@@ -137,5 +159,7 @@ export type AgentRow = typeof agents.$inferSelect;
 export type NewAgentRow = typeof agents.$inferInsert;
 export type SessionRow = typeof sessions.$inferSelect;
 export type NewSessionRow = typeof sessions.$inferInsert;
+export type SessionChildAliasCounterRow = typeof sessionChildAliasCounters.$inferSelect;
+export type NewSessionChildAliasCounterRow = typeof sessionChildAliasCounters.$inferInsert;
 export type ArtifactRow = typeof artifacts.$inferSelect;
 export type NewArtifactRow = typeof artifacts.$inferInsert;

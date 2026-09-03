@@ -215,6 +215,15 @@ export function ContextBar({
                 )}
               </>
             )}
+            {session.childAlias && (
+              <span
+                data-testid="contextbar-child-alias-badge"
+                className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0"
+                title={`Child agent alias: ${session.childAlias}`}
+              >
+                {session.childAlias}
+              </span>
+            )}
             {session.isExternal && (
               <span
                 data-testid="contextbar-external-badge"

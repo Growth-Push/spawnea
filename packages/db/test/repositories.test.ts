@@ -338,6 +338,106 @@ describe('Domain Repositories & Logging Integration', () => {
         /FOREIGN KEY constraint failed/,
       );
     });
+
+    it('allocates persistent non-reused aliases and manages parent-child relationships', async () => {
+      // Create parent session
+      await repos.sessions.save({
+        id: 'parent-1',
+        name: 'Parent Session',
+        serverId: 'srv-1',
+        projectId: 'proj-1',
+        agentId: 'agent-1',
+        task: 'Parent Task',
+        worktreePath: '/code/parent',
+        branch: 'main',
+        tmuxSessionName: 'tmux-parent-1',
+        status: 'working',
+      });
+
+      // Allocate first alias
+      const alias1 = await repos.sessions.allocateChildAlias('parent-1');
+      expect(alias1).toBe('child-1');
+
+      // Create child 1
+      await repos.sessions.save({
+        id: 'child-sess-1',
+        name: 'Child 1',
+        parentSessionId: 'parent-1',
+        childAlias: alias1,
+        serverId: 'srv-1',
+        projectId: 'proj-1',
+        agentId: 'agent-1',
+        task: 'Subtask 1',
+        worktreePath: '/code/child1',
+        branch: 'main',
+        tmuxSessionName: 'tmux-child-1',
+        status: 'starting',
+      });
+
+      // Allocate second alias
+      const alias2 = await repos.sessions.allocateChildAlias('parent-1');
+      expect(alias2).toBe('child-2');
+
+      // Create child 2
+      await repos.sessions.save({
+        id: 'child-sess-2',
+        name: 'Child 2',
+        parentSessionId: 'parent-1',
+        childAlias: alias2,
+        serverId: 'srv-1',
+        projectId: 'proj-1',
+        agentId: 'agent-1',
+        task: 'Subtask 2',
+        worktreePath: '/code/child2',
+        branch: 'main',
+        tmuxSessionName: 'tmux-child-2',
+        status: 'starting',
+      });
+
+      // Find children by parent ID
+      const children = await repos.sessions.findByParentId('parent-1');
+      expect(children).toHaveLength(2);
+      expect(children.map((c) => c.childAlias)).toEqual(['child-1', 'child-2']);
+
+      // Find child by parent ID and alias
+      const foundChild = await repos.sessions.findByParentAndAlias('parent-1', 'child-2');
+      expect(foundChild).not.toBeNull();
+      expect(foundChild?.id).toBe('child-sess-2');
+
+      // Delete child 1 and allocate third alias (must NOT reuse child-1 or child-2)
+      await repos.sessions.delete('child-sess-1');
+      const alias3 = await repos.sessions.allocateChildAlias('parent-1');
+      expect(alias3).toBe('child-3');
+
+      // Promote remaining children to root
+      const promotedCount = await repos.sessions.promoteChildrenToRoot('parent-1');
+      expect(promotedCount).toBe(1);
+
+      const survivingChild = await repos.sessions.findById('child-sess-2');
+      expect(survivingChild?.parentSessionId).toBeUndefined();
+      expect(survivingChild?.childAlias).toBeUndefined();
+
+      // Deleting parent when it has children safely promotes children
+      await repos.sessions.save({
+        id: 'child-sess-3',
+        name: 'Child 3',
+        parentSessionId: 'parent-1',
+        childAlias: 'child-4',
+        serverId: 'srv-1',
+        projectId: 'proj-1',
+        agentId: 'agent-1',
+        task: 'Subtask 3',
+        worktreePath: '/code/child3',
+        branch: 'main',
+        tmuxSessionName: 'tmux-child-3',
+        status: 'starting',
+      });
+
+      await repos.sessions.delete('parent-1');
+      const orphanCheck = await repos.sessions.findById('child-sess-3');
+      expect(orphanCheck?.parentSessionId).toBeUndefined();
+      expect(orphanCheck?.childAlias).toBeUndefined();
+    });
   });
 
   describe('ArtifactRepository', () => {

@@ -146,7 +146,7 @@ A repeated correlation ID with a different payload is rejected. An exact retry r
 
 ### `spawnea_activate`
 
-Input: `{ "sessionId": "session-id", "tab": "terminal|files|diff|artifacts|details" }`. Selects a known session/tab in the live renderer. It does not run host or Git commands. The result says whether delivery to a live renderer occurred.
+Input: `{ "sessionId": "session-id-or-alias", "parentSessionId": "parent-session-id-optional", "tab": "terminal|files|diff|artifacts|details" }`. Selects a known session/tab in the live renderer. When targeting a child alias (such as `child-1`), optional `parentSessionId` disambiguates child sessions across different parents. It does not run host or Git commands. The result says whether delivery to a live renderer occurred.
 
 ### `spawnea_request_finalization`
 
@@ -186,6 +186,40 @@ For close, the caller must state what should happen to dirty changes:
 ### `spawnea_get_finalization_request`
 
 Input: `{ "requestId": "uuid-returned-above" }`. Returns one of `pending`, `executing`, `completed`, `rejected`, or `failed`, plus the truthful result/error. Clients must not interpret a pending request as success.
+
+### `spawnea_create_child_session`
+
+Input:
+```json
+{
+  "parentSession": "parent-session-id",
+  "name": "Investigate unit test regression",
+  "task": "Investigate regression in test suite",
+  "workspace": "same-project",
+  "agentId": "agent-id"
+}
+```
+
+Creates a direct child session under an existing root parent session. Server, project, and default agent harness are inherited from the parent session. `workspace` must be either `"same-project"` (runs directly in parent's working directory) or `"new-worktree"` (creates an isolated managed git worktree). Enforces a strict 2-level cap: child sessions cannot spawn grandchildren. Returns the allocated monotonic child alias (`child-1`, `child-2`, etc.), parent session ID, and session status (`starting`).
+
+### `spawnea_list_sessions`
+
+Input: `{}` (no arguments).
+
+Returns canonical listing of all sessions with full hierarchy metadata, including `parentSessionId` and `childAlias`.
+
+### `spawnea_send_prompt`
+
+Input:
+```json
+{
+  "target": "session-id-or-child-alias",
+  "parentSession": "parent-session-id",
+  "prompt": "Run the test suite and report results"
+}
+```
+
+Writes prompt text directly to the target session's active PTY stream or underlying tmux session. Returns immediately after delivering prompt input without waiting for agent completion.
 
 ## Threat-model decisions
 

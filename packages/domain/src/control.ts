@@ -1,4 +1,9 @@
-import type { CreateSessionInput, FinishSessionResult, ManagedWorktreeInspection } from './ipc.js';
+import type {
+  CreateSessionInput,
+  FinishSessionResult,
+  ManagedWorktreeInspection,
+  ChildSessionWorkspaceMode,
+} from './ipc.js';
 import type { SessionStatus } from './index.js';
 
 export const SPAWNEA_CONTROL_API_VERSION = 'v1' as const;
@@ -14,6 +19,8 @@ export interface ControlUiState {
 export interface ControlSessionView {
   id: string;
   name: string;
+  parentSessionId?: string;
+  childAlias?: string;
   task: string;
   host: { id: string; name: string };
   project: { id: string; name: string };
@@ -103,6 +110,7 @@ export interface ControlFinalizationRequest {
 
 export interface ControlNavigationRequest {
   sessionId: string;
+  parentSessionId?: string;
   tab?: ControlWorkspaceTab;
 }
 
@@ -137,3 +145,45 @@ export interface ControlRuntimeDescriptor {
 }
 
 export interface ControlNavigateEvent extends ControlUiState {}
+
+export interface ControlCreateChildSessionRequest {
+  parentSession: string;
+  name?: string;
+  task: string;
+  workspace: ChildSessionWorkspaceMode;
+  agentId?: string;
+}
+
+export interface ControlCreateChildSessionResult {
+  apiVersion: SpawneaControlApiVersion;
+  parentSessionId: string;
+  childAlias: string;
+  sessionId: string;
+  childSessionId: string;
+  name: string;
+  displayName: string;
+  workspace: ChildSessionWorkspaceMode;
+  workspaceMode: ChildSessionWorkspaceMode;
+  status: SessionStatus;
+  initialStatus: SessionStatus;
+}
+
+export interface ControlListSessionsResult {
+  apiVersion: SpawneaControlApiVersion;
+  sessions: ControlSessionView[];
+}
+
+export interface ControlSendPromptRequest {
+  target: string;
+  parentSession?: string;
+  prompt: string;
+}
+
+export interface ControlSendPromptResult {
+  apiVersion: SpawneaControlApiVersion;
+  sessionId: string;
+  delivered: boolean;
+  deliveryMethod: 'pty' | 'tmux';
+  acceptedAt: string;
+  message: string;
+}

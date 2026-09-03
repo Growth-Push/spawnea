@@ -147,6 +147,8 @@ export interface AdoptSessionInput {
 export interface Session {
   id: string;
   name: string;
+  parentSessionId?: string;
+  childAlias?: string;
   serverId: string;
   projectId: string;
   agentId: string;

@@ -72,6 +72,8 @@ export const SessionContextFileSchema = z
     persistentSession: SessionContextPersistentSessionSchema,
     reconnectTarget: SessionContextReconnectTargetSchema,
     status: SessionStatusSchema,
+    parentSessionId: z.string().optional(),
+    childAlias: z.string().optional(),
     creationSource: SessionCreationSourceSchema.optional(),
     isExternal: z.boolean().optional(),
     createdAt: z.string().datetime({ offset: true }).or(z.string()),
