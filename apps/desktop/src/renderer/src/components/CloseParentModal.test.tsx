@@ -171,4 +171,19 @@ describe('CloseParentModal', () => {
       screen.getByText('1 child has uncommitted changes and will prompt for finalization if you choose "Close All".')
     ).toBeDefined();
   });
+
+  it('does not show finalization warning when no children have uncommitted changes', () => {
+    render(
+      <CloseParentModal
+        isOpen={true}
+        parentSession={mockParent}
+        childrenSessions={mockChildren}
+        gitDirtyBySessionId={{}}
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText(/will prompt for finalization/)).toBeNull();
+  });
 });
