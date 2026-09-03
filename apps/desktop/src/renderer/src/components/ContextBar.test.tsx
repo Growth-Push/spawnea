@@ -1,6 +1,6 @@
 import React from 'react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { describe, it, expect, afterEach } from 'vitest';
+import { render, screen, cleanup } from '@testing-library/react';
 import { ContextBar } from './ContextBar';
 import type { Session, Server, Project, Agent } from '@spawnea/domain';
 
@@ -66,34 +66,13 @@ describe('ContextBar session hierarchy actions', () => {
     lastActivityAt: new Date(),
   };
 
-  it('renders + child session button for root session and triggers callback', () => {
-    const onCreateChild = vi.fn();
+  it('does not render child session button in ContextBar (managed from sidebar)', () => {
     render(
       <ContextBar
         session={rootSession}
         server={mockServer}
         project={mockProject}
         agent={mockAgent}
-        onCreateChild={onCreateChild}
-      />
-    );
-
-    const createBtn = screen.getByTestId('session-create-child-button');
-    expect(createBtn).toBeDefined();
-
-    fireEvent.click(createBtn);
-    expect(onCreateChild).toHaveBeenCalledWith('parent-1');
-  });
-
-  it('hides + child session button for child session (enforcing 2-level cap)', () => {
-    const onCreateChild = vi.fn();
-    render(
-      <ContextBar
-        session={childSession}
-        server={mockServer}
-        project={mockProject}
-        agent={mockAgent}
-        onCreateChild={onCreateChild}
       />
     );
 
