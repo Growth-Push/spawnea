@@ -68,6 +68,13 @@ export const SessionContextFileSchema = z
       })
       .strict()
       .optional(),
+    finalization: z
+      .object({
+        action: z.enum(['integrate', 'close']),
+        worktreeRemoved: z.boolean(),
+      })
+      .strict()
+      .optional(),
     harness: SessionContextHarnessSchema,
     persistentSession: SessionContextPersistentSessionSchema,
     reconnectTarget: SessionContextReconnectTargetSchema,

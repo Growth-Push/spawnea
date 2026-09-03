@@ -251,10 +251,10 @@ export class GitService {
       `git worktree remove -- ${escapeShellPath(worktreePath)}`,
       { cwd: repositoryPath }
     );
-    if (result.exitCode !== 0) return false;
     const absent = await host.execute(
       `test ! -e ${escapeShellPath(worktreePath)} && test ! -L ${escapeShellPath(worktreePath)}`
     );
+    if (result.exitCode !== 0) return absent.exitCode === 0;
     return absent.exitCode === 0;
   }
 

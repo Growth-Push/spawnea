@@ -62,7 +62,7 @@ import type { PtyBroker } from './pty-broker.js';
 
 function normalizeWorktreePathForComparison(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
-  return /^[A-Za-z]:/.test(normalized) ? normalized.toLowerCase() : normalized;
+  return /^[A-Za-z]:/.test(normalized) || normalized.startsWith('//') ? normalized.toLowerCase() : normalized;
 }
 
 export interface AttachedSessionInfo {
@@ -785,13 +785,13 @@ export class SessionManager {
             path: persistedRuntimePath,
             git_url: gitUrl,
           },
-          worktree: managedWorktree && baseBranch
+          worktree: (managedWorktree && baseBranch) || options.parentSessionId
             ? {
-                managed: true,
+                managed: managedWorktree,
                 path: persistedRuntimePath,
                 branch: branchName,
-                baseBranch,
-                baseCommit,
+                baseBranch: baseBranch || effectiveBaseBranch || 'main',
+                baseCommit: baseCommit,
               }
             : undefined,
           harness: {
@@ -1379,6 +1379,8 @@ export class SessionManager {
     const repositoryPath = await this.resolveProjectRepositoryPath(session.projectId, project.rootPath);
     const worktreePath = await this.resolveSessionWorktreePath(session);
     try {
+      const existingContext = await this.contextStore.load(sessionId);
+      const worktreeAlreadyRemoved = existingContext?.finalization?.action === action && existingContext.finalization.worktreeRemoved;
       const identity: ManagedWorktreeIdentity = {
         repositoryPath: repositoryPath.value,
         worktreePath: worktreePath.value,
@@ -1388,8 +1390,10 @@ export class SessionManager {
       };
 
       if (action === 'integrate') {
-        // 1. Safety check: Verify worktree is clean and base branch is clean and ready
-        await this.gitService.verifyManagedWorktreeForFinalization(host, identity, true);
+        // 1. Safety check: Verify worktree is clean and base branch is clean and ready.
+        if (!worktreeAlreadyRemoved) {
+          await this.gitService.verifyManagedWorktreeForFinalization(host, identity, true);
+        }
 
         // 2. Stop persistent session and detach PTY
         try {
@@ -1399,25 +1403,35 @@ export class SessionManager {
         }
 
         // 3. Merge task branch into base branch
-        await this.gitService.mergeManagedBranch(host, identity);
+        if (!worktreeAlreadyRemoved) {
+          await this.gitService.mergeManagedBranch(host, identity);
+        }
 
         // Reconcile children before removing the worktree so failed promotion
         // leaves the managed worktree available for recovery.
         await this.reconcileChildrenForParentRemoval(sessionId, 'leave-children');
 
-        // 4. Remove context before the worktree so a failed cleanup leaves the
-        // session and its managed worktree available for retry.
-        if (!(await this.contextStore.delete(sessionId))) {
-          throw new Error(`Failed to delete context file for session '${sessionId}'`);
+        // 4. Record cleanup progress before removing the worktree. This makes a
+        // later retry safe if branch or database cleanup fails.
+        if (!worktreeAlreadyRemoved && existingContext) {
+          await this.contextStore.save({ ...existingContext, finalization: { action, worktreeRemoved: false } });
         }
 
         // 5. Remove worktree
-        await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
+        if (!worktreeAlreadyRemoved) {
+          await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
+          if (existingContext) {
+            await this.contextStore.save({ ...existingContext, finalization: { action, worktreeRemoved: true } });
+          }
+        }
 
         // 6. Delete integrated task branch
         await this.gitService.deleteIntegratedBranch(host, identity);
 
-        // 7. Clean up session DB
+        // 7. Clean up context and session DB
+        if (!(await this.contextStore.delete(sessionId))) {
+          throw new Error(`Failed to delete context file for session '${sessionId}'`);
+        }
         await this.repos.sessions.delete(sessionId);
 
         this.logger.info('Session successfully integrated and finalized', { sessionId, branch: identity.branch });
@@ -1453,14 +1467,23 @@ export class SessionManager {
         // leaves the managed worktree available for recovery.
         await this.reconcileChildrenForParentRemoval(sessionId, 'leave-children');
 
-        // 4. Remove context before the worktree so a failed cleanup leaves the
-        // session and its managed worktree available for retry.
-        if (!(await this.contextStore.delete(sessionId))) {
-          throw new Error(`Failed to delete context file for session '${sessionId}'`);
+        // 4. Record cleanup progress before removing the worktree. This makes a
+        // later retry safe if database cleanup fails.
+        if (!worktreeAlreadyRemoved && existingContext) {
+          await this.contextStore.save({ ...existingContext, finalization: { action, worktreeRemoved: false } });
         }
 
         // 5. Remove worktree (preserves task branch)
-        await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
+        if (!worktreeAlreadyRemoved) {
+          await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
+          if (existingContext) {
+            await this.contextStore.save({ ...existingContext, finalization: { action, worktreeRemoved: true } });
+          }
+        }
+
+        if (!(await this.contextStore.delete(sessionId))) {
+          throw new Error(`Failed to delete context file for session '${sessionId}'`);
+        }
 
         // 6. Clean up session DB
         await this.repos.sessions.delete(sessionId);
