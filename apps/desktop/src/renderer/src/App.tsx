@@ -794,7 +794,16 @@ export function App(): React.JSX.Element {
 
   const handleClearDoneSessions = async () => {
     const doneSessions = sessions.filter((s) => s.status === 'done');
-    setSessions((prev) => prev.filter((s) => s.status !== 'done'));
+    const clearedSessionIds = new Set(doneSessions.map((session) => session.id));
+    setSessions((prev) =>
+      prev
+        .filter((session) => session.status !== 'done')
+        .map((session) =>
+          session.parentSessionId && clearedSessionIds.has(session.parentSessionId)
+            ? { ...session, parentSessionId: undefined, childAlias: undefined }
+            : session
+        )
+    );
 
     setActiveSessionId((currentActiveId) => {
       if (doneSessions.some((s) => s.id === currentActiveId)) {
