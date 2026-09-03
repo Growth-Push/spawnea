@@ -8,7 +8,7 @@ Spawnea is pre-MVP software. Until the first public release, only the latest com
 
 Please do not open a public issue for vulnerabilities involving credential exposure, command execution, SSH handling, file transfer, sandbox escapes, or other security-sensitive behavior.
 
-Report security concerns privately to the repository maintainers through [GitHub Security Advisories](https://github.com/Growth-Push/spawnea/security/advisories/new) or via private repository maintainer channels.
+Report security concerns privately to the repository maintainers through [GitHub Security Advisories](https://github.com/Growth-Push/spawnea/security/advisories/new) or by creating a private report under the repository [Security tab](https://github.com/Growth-Push/spawnea/security/advisories).
 
 Include, when possible:
 

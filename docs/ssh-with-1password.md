@@ -33,7 +33,7 @@ Follow the official [1Password SSH Agent documentation](https://developer.1passw
    - Go to **Settings > Developer**.
    - Turn on **Use the SSH agent**.
 2. **Add an SSH Key to 1Password**:
-   - Create or import your SSH key as an **SSH Key** item in your 1Password vault. By default, 1Password serves keys from your Personal, Private, or Employee vaults (refer to [1Password agent configuration](https://developer.1password.com/docs/ssh/agent/config/) to configure `~/.config/1Password/ssh/agent.toml` if using custom or shared vaults).
+   - Create or import your SSH key as an **SSH Key** item in your 1Password vault. By default, 1Password serves keys from your Personal, Private, or Employee vaults (refer to [1Password agent configuration](https://developer.1password.com/docs/ssh/agent/config/) to configure `~/.config/1Password/ssh/agent.toml` on macOS/Linux or `%LOCALAPPDATA%/1Password/config/ssh/agent.toml` on Windows if using custom or shared vaults).
 3. **Configure OpenSSH (`~/.ssh/config`)**:
    Add the `IdentityAgent` directive to your `~/.ssh/config`. For example:
 
