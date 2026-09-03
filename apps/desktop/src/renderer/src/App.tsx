@@ -431,7 +431,7 @@ export function App(): React.JSX.Element {
       cancelled = true;
       if (pollTimer !== undefined) clearTimeout(pollTimer);
     };
-  }, [sessionIdsKey, gitRefreshNonce]);
+  }, [sessionIdsKey, activeSessionId, gitRefreshNonce]);
 
   const handleControlFinalizationDecision = async (
     requestId: string,
