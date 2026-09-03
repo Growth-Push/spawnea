@@ -651,6 +651,21 @@ describe('Sidebar session hierarchy', () => {
     expect(screen.queryByTestId('session-item-standalone-root')).toBeNull();
   });
 
+  it('does not render a child toggle when the status filter hides all children', () => {
+    const parent = { ...rootParentSession, status: 'working' as const };
+    const idleChild = {
+      ...childSessionOne,
+      parentSessionId: parent.id,
+      status: 'idle' as const,
+    };
+
+    renderSidebar([parent, idleChild]);
+    fireEvent.click(screen.getByTestId('status-filter-working'));
+
+    expect(screen.getByTestId('session-item-parent-root')).toBeDefined();
+    expect(screen.queryByTestId('session-toggle-children-parent-root')).toBeNull();
+  });
+
   it('renders [+ New] and [+ Child] in header and triggers child creation for active parent', () => {
     const onOpenCreateChildModal = vi.fn();
     renderSidebar([rootParentSession, childSessionOne], {

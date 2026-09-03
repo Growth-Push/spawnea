@@ -60,6 +60,11 @@ import type { CatalogManager } from './catalog-manager.js';
 import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
 
+function normalizeWorktreePathForComparison(path: string): string {
+  const normalized = path.replace(/[\\/]+$/, '');
+  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
 export interface AttachedSessionInfo {
   sessionId: string;
   serverId: string;
@@ -684,13 +689,15 @@ export class SessionManager {
 
       if (options.parentSessionId && !shouldUseWorktree) {
         const parent = await this.repos.sessions.findById(options.parentSessionId);
-        if (parent?.worktreePath) {
-          const parentPathLease = await this.resolveCatalogPathLocator(parent.worktreePath);
-          releaseParentPath = parentPathLease.release;
-          runtimePath = parentPathLease.value;
-          branchName = parent.branch;
-          inheritedWorktreeLocator = parent.worktreePath;
+        if (!parent) throw new Error(`Parent session '${options.parentSessionId}' not found`);
+        if (!parent.worktreePath.trim()) {
+          throw new Error(`Parent session '${parent.id}' has no worktree path to inherit`);
         }
+        const parentPathLease = await this.resolveCatalogPathLocator(parent.worktreePath);
+        releaseParentPath = parentPathLease.release;
+        runtimePath = parentPathLease.value;
+        branchName = parent.branch;
+        inheritedWorktreeLocator = parent.worktreePath;
       }
 
       try {
@@ -1142,15 +1149,7 @@ export class SessionManager {
       this.logger.info('Closing child sessions under parent', { parentId, count: children.length });
       for (const child of children) {
         if (child.managedWorktree) {
-          try {
-            await this.finishSession(child.id, 'close', { stashChanges: false }, 'ui');
-          } catch (err) {
-            this.logger.warn('Failed to cleanly finish managed child during close-all, falling back to deleteSession', {
-              childId: child.id,
-              error: err,
-            });
-            await this.deleteSession(child.id, 'close-all');
-          }
+          await this.finishSession(child.id, 'close', { stashChanges: false }, 'ui');
         } else {
           await this.deleteSession(child.id, 'close-all');
         }
@@ -1169,10 +1168,7 @@ export class SessionManager {
             });
           }
         } catch (ctxErr) {
-          this.logger.warn('Failed to update context file for promoted child session', {
-            childId: child.id,
-            error: ctxErr,
-          });
+          throw new Error(`Failed to update context for promoted child '${child.id}'`, { cause: ctxErr });
         }
       }
     }
@@ -1209,8 +1205,9 @@ export class SessionManager {
           if (session.managedWorktree) {
             // Check if any other session (e.g. surviving child sessions in leave-children mode) shares this worktreePath
             const allSessions = await this.repos.sessions.findAll();
+            const normalizedPath = normalizeWorktreePathForComparison(session.worktreePath);
             const sharingSessions = allSessions.filter(
-              (s) => s.id !== sessionId && s.worktreePath === session.worktreePath
+              (s) => s.id !== sessionId && normalizeWorktreePathForComparison(s.worktreePath) === normalizedPath
             );
             if (sharingSessions.length > 0) {
               // Preserve the worktree on disk and transfer managedWorktree responsibility to the first surviving session
@@ -1340,8 +1337,9 @@ export class SessionManager {
 
     // Check if any other session is currently using this worktree
     const allSessions = await this.repos.sessions.findAll();
+    const normalizedSessionPath = normalizeWorktreePathForComparison(session.worktreePath);
     const sharingSessions = allSessions.filter(
-      (s) => s.id !== sessionId && s.worktreePath === session.worktreePath
+      (s) => s.id !== sessionId && normalizeWorktreePathForComparison(s.worktreePath) === normalizedSessionPath
     );
     if (sharingSessions.length > 0) {
       throw new Error(
@@ -1380,6 +1378,10 @@ export class SessionManager {
         // 3. Merge task branch into base branch
         await this.gitService.mergeManagedBranch(host, identity);
 
+        // Reconcile children before removing the worktree so failed promotion
+        // leaves the managed worktree available for recovery.
+        await this.reconcileChildrenForParentRemoval(sessionId, 'leave-children');
+
         // 4. Remove worktree
         await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
 
@@ -1387,9 +1389,8 @@ export class SessionManager {
         await this.gitService.deleteIntegratedBranch(host, identity);
 
         // 6. Clean up session DB and context store
-        await this.reconcileChildrenForParentRemoval(sessionId, 'leave-children');
-        await this.contextStore.delete(sessionId).catch(() => {});
-        await this.repos.sessions.delete(sessionId).catch(() => {});
+        await this.contextStore.delete(sessionId);
+        await this.repos.sessions.delete(sessionId);
 
         this.logger.info('Session successfully integrated and finalized', { sessionId, branch: identity.branch });
         return { action: 'integrate', removed: true };
@@ -1420,13 +1421,16 @@ export class SessionManager {
           await this.gitService.discardManagedWorktreeChanges(host, identity);
         }
 
+        // Reconcile children before removing the worktree so failed promotion
+        // leaves the managed worktree available for recovery.
+        await this.reconcileChildrenForParentRemoval(sessionId, 'leave-children');
+
         // 4. Remove worktree (preserves task branch)
         await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
 
         // 5. Clean up session DB and context store
-        await this.reconcileChildrenForParentRemoval(sessionId, 'leave-children');
-        await this.contextStore.delete(sessionId).catch(() => {});
-        await this.repos.sessions.delete(sessionId).catch(() => {});
+        await this.contextStore.delete(sessionId);
+        await this.repos.sessions.delete(sessionId);
 
         this.logger.info('Session worktree closed and session record removed while preserving branch', {
           sessionId,
@@ -1693,7 +1697,12 @@ export class SessionManager {
     const dbSessionMap = new Map(existingDbSessions.map((s) => [s.id, s]));
 
     // 2. Reconcile context files into DB if missing
-    for (const ctx of contextFiles) {
+    const orderedContextFiles = [...contextFiles].sort((a, b) => {
+      if (!a.parentSessionId && b.parentSessionId) return -1;
+      if (a.parentSessionId && !b.parentSessionId) return 1;
+      return 0;
+    });
+    for (const ctx of orderedContextFiles) {
       if (!dbSessionMap.has(ctx.sessionId)) {
         const slug = ctx.task
           .toLowerCase()

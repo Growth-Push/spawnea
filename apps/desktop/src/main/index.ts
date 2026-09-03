@@ -15,7 +15,6 @@ import {
   isLoopbackHost,
   type CreateSessionInput,
   type CreateChildSessionInput,
-  type ParentCloseAction,
   type Session,
   type LogLevel,
   type ArtifactDirection,
@@ -489,11 +488,15 @@ function registerIpcHandlers(
     return sessManager.inspectManagedWorktree(sessionId);
   });
 
-  ipcMain.handle('sessions:delete', async (_event, sessionId: string, childAction?: ParentCloseAction) => {
+  ipcMain.handle('sessions:delete', async (_event, sessionId: string, childAction?: unknown) => {
+    if (childAction !== undefined && childAction !== 'close-all' && childAction !== 'leave-children') {
+      throw new Error(`Unsupported parent close action: ${String(childAction)}`);
+    }
     return sessManager.deleteSession(sessionId, childAction);
   });
 
-  ipcMain.handle('sessions:sendPrompt', async (_event, sessionId: string, prompt: string) => {
+  ipcMain.handle('sessions:sendPrompt', async (_event, sessionId: string, prompt: unknown) => {
+    if (typeof prompt !== 'string') throw new Error('Prompt must be a string');
     return sessManager.sendPrompt(sessionId, prompt);
   });
 

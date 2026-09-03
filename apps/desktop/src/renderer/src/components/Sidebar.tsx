@@ -545,7 +545,9 @@ export function Sidebar({
   // and projectId (per docs/tasks/05-session-hierarchy-and-child-agents.md) and are
   // intentionally grouped with and rendered directly under their parent session card.
   const rootSessions = React.useMemo(() => {
-    return sessions.filter((s) => !s.parentSessionId);
+    return sessions
+      .filter((s) => !s.parentSessionId)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
   }, [sessions]);
 
   const sessionMatchesStatus = (s: Session): boolean => {
@@ -718,7 +720,7 @@ export function Sidebar({
   }, [denseFocusedSessionId, denseHoveredSessionId, isDenseLayout, visibleSessions]);
 
   const shortcutLabels = new Map<string, string>();
-  visibleSessions.slice(0, 10).forEach((s, idx) => {
+  rootSessions.slice(0, 10).forEach((s, idx) => {
     const num = idx === 9 ? 0 : idx + 1;
     shortcutLabels.set(s.id, `Ctrl-${num}`);
   });
@@ -975,11 +977,11 @@ export function Sidebar({
           </button>
 
           {/* Children expand/collapse combo in normal flow (below the name) */}
-          <div className="flex items-center justify-between gap-1.5 w-full">
+          {visibleChildren.length > 0 && <div className="flex items-center justify-between gap-1.5 w-full">
             <button
               type="button"
               data-testid={`session-toggle-children-${session.id}`}
-              aria-label={`${isExpanded ? 'Hide' : 'Show'} ${children.length} child session${children.length === 1 ? '' : 's'}`}
+              aria-label={`${isExpanded ? 'Hide' : 'Show'} ${visibleChildren.length} child session${visibleChildren.length === 1 ? '' : 's'}`}
               aria-expanded={isExpanded}
               aria-controls={`session-child-list-${session.id}`}
               onClick={(e) => {
@@ -987,13 +989,13 @@ export function Sidebar({
                 toggleParentExpanded(session.id);
               }}
               className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono bg-purple-950/90 hover:bg-purple-900 text-purple-300 border border-purple-500/40 cursor-pointer transition-colors shadow-xs"
-              title={`${children.length} child session${children.length === 1 ? '' : 's'} (click to ${isExpanded ? 'collapse' : 'expand'})`}
+              title={`${visibleChildren.length} child session${visibleChildren.length === 1 ? '' : 's'} (click to ${isExpanded ? 'collapse' : 'expand'})`}
             >
               <GitFork className="w-2.5 h-2.5 text-purple-400" />
-              <span>{children.length} child{children.length === 1 ? '' : 'ren'}</span>
+              <span>{visibleChildren.length} child{visibleChildren.length === 1 ? '' : 'ren'}</span>
               <ChevronDown className={`w-3 h-3 text-purple-400 transition-transform duration-150 ${isExpanded ? 'rotate-180' : ''}`} />
             </button>
-          </div>
+          </div>}
 
           {/* Card footer (Path + tmux session) */}
           <div

@@ -219,6 +219,10 @@ Input:
 }
 ```
 
+Canonical session IDs always work. A `child-*` alias must include
+`parentSession` when it is not globally unique; ambiguous aliases are rejected
+without that scope.
+
 Writes prompt text directly to the target session's active PTY stream or underlying tmux session. Returns immediately after delivering prompt input without waiting for agent completion.
 
 ## Threat-model decisions

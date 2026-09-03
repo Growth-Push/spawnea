@@ -200,6 +200,61 @@ hosts:
     }
   });
 
+  describe('sendPrompt delivery', () => {
+    async function createPromptSession() {
+      return repos.sessions.save({
+        id: 'sess-prompt',
+        name: 'Prompt Session',
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Prompt delivery',
+        worktreePath: '/workspace/spawnea',
+        branch: 'main',
+        tmuxSessionName: 'spawnea-prompt',
+        status: 'working',
+      });
+    }
+
+    it('delivers through an active PTY', async () => {
+      await createPromptSession();
+      vi.spyOn(ptyBroker, 'getMetrics').mockReturnValue({ recentOutputBytes: 0 });
+      const write = vi.spyOn(ptyBroker, 'write').mockReturnValue(true);
+
+      await expect(sessionManager.sendPrompt('sess-prompt', 'Run tests')).resolves.toEqual({
+        delivered: true,
+        deliveryMethod: 'pty',
+      });
+      expect(write).toHaveBeenCalledWith('pty-sess-prompt', 'Run tests\n');
+    });
+
+    it('falls back to tmux when the PTY closes after its metrics are read', async () => {
+      await createPromptSession();
+      vi.spyOn(ptyBroker, 'getMetrics').mockReturnValue({ recentOutputBytes: 0 });
+      vi.spyOn(ptyBroker, 'write').mockReturnValue(false);
+
+      await expect(sessionManager.sendPrompt('sess-prompt', 'Run tests')).resolves.toEqual({
+        delivered: true,
+        deliveryMethod: 'tmux',
+      });
+      expect(mockHost.executedCommands.some(({ command }) => command.includes('tmux send-keys'))).toBe(true);
+    });
+
+    it('throws when tmux cannot deliver the prompt', async () => {
+      await createPromptSession();
+      mockHost.customRules.push({
+        pattern: "tmux send-keys -t 'spawnea-prompt' -l",
+        response: { stdout: '', stderr: 'send failed', exitCode: 1 },
+      });
+      vi.spyOn(ptyBroker, 'getMetrics').mockReturnValue({ recentOutputBytes: 0 });
+      vi.spyOn(ptyBroker, 'write').mockReturnValue(false);
+
+      await expect(sessionManager.sendPrompt('sess-prompt', 'Run tests')).rejects.toThrow(
+        "Failed to deliver prompt to tmux session 'spawnea-prompt'"
+      );
+    });
+  });
+
   it('tests selected host connection successfully (FG-1.2, FG-2.1)', async () => {
     const result = await sessionManager.testHost('dev-workstation');
     expect(result.success).toBe(true);

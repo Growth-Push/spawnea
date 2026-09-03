@@ -143,7 +143,7 @@ function expandHomePath(candidate: string, worktreePath: string): string {
   // the usual POSIX layouts, infer it from the resolved worktree root.
   const portableWorktree = worktreePath.replace(/\\/g, '/');
   const homeMatch = portableWorktree.match(
-    /^(\/(?:home|Users)\/[^/]+|[A-Za-z]:\/Users\/[^/]+)(?:\/|$)/
+    /^(\/(?:home|Users)\/[^/]+|[A-Za-z]:\/[Uu][Ss][Ee][Rr][Ss]\/[^/]+)(?:\/|$)/
   );
   return homeMatch ? `${homeMatch[1]}/${candidate.slice(2).replace(/\\/g, '/')}` : candidate;
 }
@@ -183,6 +183,7 @@ export function detectOutputArtifacts(
       const cleanPath = stripPathLineNumber(
         candidateRaw.replace(/^['"`(]+|['"`)]+$/g, '').trim()
       );
+      if (/^v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$/i.test(cleanPath)) continue;
       if (!cleanPath || cleanPath.includes(' ') || cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
         continue;
       }

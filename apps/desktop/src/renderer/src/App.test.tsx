@@ -1772,6 +1772,7 @@ describe('App Desktop Shell', () => {
 
     // After finishing child, parent deletion with close-all proceeds
     await waitFor(() => {
+      expect(api.finishSession).toHaveBeenCalledWith('child-1', 'integrate', undefined);
       expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all');
     });
   });

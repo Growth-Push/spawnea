@@ -136,8 +136,9 @@ export class TmuxManager {
     const sanitizedText = text.replace(/\r?\n$/, '');
     const sendCmd = `tmux send-keys -t ${escapeShellArg(sessionName)} -l -- ${escapeShellArg(sanitizedText)}`;
     const sendResult = await host.execute(sendCmd);
+    if (sendResult.exitCode !== 0) return false;
     const enterResult = await host.execute(`tmux send-keys -t ${escapeShellArg(sessionName)} Enter`);
-    return sendResult.exitCode === 0 && enterResult.exitCode === 0;
+    return enterResult.exitCode === 0;
   }
 
   /**

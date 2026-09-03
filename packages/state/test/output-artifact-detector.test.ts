@@ -74,6 +74,7 @@ Checking version v1.2.3 and https://example.com/file.png
     expect(results.some((r) => r.path.includes('node_modules'))).toBe(false);
     expect(results.some((r) => r.path.includes('.git/'))).toBe(false);
     expect(results.some((r) => r.path.startsWith('http'))).toBe(false);
+    expect(results.some((r) => r.filename === 'v1.2.3')).toBe(false);
   });
 
   it('filters out default blacklisted files like package-lock.json and *.log', () => {
@@ -142,11 +143,16 @@ artifact-demo.md
     });
     expect(homeResults[0]?.normalizedPath).toBe(`${homeRoot}/relative-report.pdf`);
 
-    const windowsRoot = ['C:', 'workspace', 'demo-proj'].join('\\');
-    const windowsResults = detectOutputArtifacts('Created C:\\workspace\\demo-proj\\artifact.bin:8', {
+    const windowsRoot = ['C:', 'users', 'demo', 'demo-proj'].join('\\');
+    const windowsResults = detectOutputArtifacts('Created C:\\UsErS\\demo\\demo-proj\\artifact.bin:8', {
       worktreePath: windowsRoot,
     });
-    expect(windowsResults[0]?.normalizedPath).toBe('C:/workspace/demo-proj/artifact.bin');
+    expect(windowsResults[0]?.normalizedPath).toBe('C:/UsErS/demo/demo-proj/artifact.bin');
+
+    const windowsHomeResults = detectOutputArtifacts('See ~\\demo-proj\\relative-report.pdf:8', {
+      worktreePath: windowsRoot,
+    });
+    expect(windowsHomeResults[0]?.normalizedPath).toBe('C:/users/demo/demo-proj/relative-report.pdf');
   });
 
   it('detects the shell transcript form that reports a created absolute path', () => {
