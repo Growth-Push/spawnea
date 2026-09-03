@@ -103,6 +103,8 @@ export class SessionManager {
   private readonly hostPool: Map<string, HostAdapter> = new Map();
   // Active session locks to prevent concurrent duplicate starts (FG-2.2.10)
   private readonly startingSessions: Map<string, Promise<void>> = new Map();
+  private readonly finalizingParents: Set<string> = new Set();
+  private readonly childCreationsInProgress: Map<string, number> = new Map();
   // In-memory host system telemetry cache
   private readonly hostSystemInfoCache: Map<string, HostSystemInfo> = new Map();
   // Active attached terminal sessions tracking for automatic transparent re-attachment
@@ -937,8 +939,13 @@ export class SessionManager {
     if (parent.parentSessionId) {
       throw new Error('A child session cannot be used as a parent session (enforces 2-level cap)');
     }
+    if (this.finalizingParents.has(parent.id)) {
+      throw new Error(`Parent session '${parent.id}' is being finalized and cannot accept new children`);
+    }
+    this.childCreationsInProgress.set(parent.id, (this.childCreationsInProgress.get(parent.id) || 0) + 1);
 
-    if (input.agentId) {
+    try {
+      if (input.agentId) {
       if (input.agentId.includes(':')) {
         const [hostId] = input.agentId.split(':');
         if (hostId !== parent.serverId) {
@@ -956,21 +963,29 @@ export class SessionManager {
       if (!dbAgent && !catHarness) {
         throw new Error(`Agent '${input.agentId}' not found on parent host '${parent.serverId}'`);
       }
+      }
+
+      if (this.finalizingParents.has(parent.id)) {
+        throw new Error(`Parent session '${parent.id}' is being finalized and cannot accept new children`);
+      }
+      const displayName = input.name?.trim() || input.task;
+
+      return this.createSessionCore({
+        serverId: parent.serverId,
+        projectId: parent.projectId,
+        agentId: input.agentId || parent.agentId,
+        task: input.task,
+        name: displayName,
+        useWorktree: input.workspace === 'new-worktree',
+        parentSessionId: parent.id,
+        initialStatus: 'starting',
+        creationSource,
+      });
+    } finally {
+      const remaining = (this.childCreationsInProgress.get(parent.id) || 1) - 1;
+      if (remaining > 0) this.childCreationsInProgress.set(parent.id, remaining);
+      else this.childCreationsInProgress.delete(parent.id);
     }
-
-    const displayName = input.name?.trim() || input.task;
-
-    return this.createSessionCore({
-      serverId: parent.serverId,
-      projectId: parent.projectId,
-      agentId: input.agentId || parent.agentId,
-      task: input.task,
-      name: displayName,
-      useWorktree: input.workspace === 'new-worktree',
-      parentSessionId: parent.id,
-      initialStatus: 'starting',
-      creationSource,
-    });
   }
 
   /**
@@ -1371,6 +1386,12 @@ export class SessionManager {
       throw new Error(`Session '${sessionId}' does not have an associated task branch`);
     }
 
+    // Freeze child creation before taking the snapshot so no child can appear
+    // after the parent worktree cleanup has begun.
+    this.finalizingParents.add(sessionId);
+    while ((this.childCreationsInProgress.get(sessionId) || 0) > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     const children = await this.repos.sessions.findByParentId(sessionId);
     const sameWorktreeChildIds = new Set(
       children
@@ -1385,6 +1406,7 @@ export class SessionManager {
       (s) => s.id !== sessionId && !sameWorktreeChildIds.has(s.id) && normalizeWorktreePathForComparison(s.worktreePath) === normalizedSessionPath
     );
     if (sharingSessions.length > 0) {
+      this.finalizingParents.delete(sessionId);
       throw new Error(
         `Cannot finalize session '${sessionId}': worktree is still in use by ${sharingSessions.length} other session(s) (${sharingSessions.map((s) => s.id).join(', ')}). Close or reparent those sessions first.`
       );
@@ -1392,6 +1414,7 @@ export class SessionManager {
 
     const project = await this.repos.projects.findById(session.projectId);
     if (!project) {
+      this.finalizingParents.delete(sessionId);
       throw new Error(`Project '${session.projectId}' associated with session '${sessionId}' not found`);
     }
 
@@ -1546,6 +1569,7 @@ export class SessionManager {
 
       throw new Error(`Unsupported finalization action: ${action}`);
     } finally {
+      this.finalizingParents.delete(sessionId);
       worktreePath.release();
       repositoryPath.release();
     }

@@ -1667,6 +1667,7 @@ up 1 day, 5 hours
 
       await expect(sessionManager.finishSession(parent.id, 'integrate')).rejects.toThrow('merge failed');
       expect(await repos.sessions.findById(child.id)).not.toBeNull();
+      expect(await (sessionManager as any).tmuxManager.hasSession(mockHost, child.tmuxSessionName)).toBe(true);
       merge.mockRestore();
     });
   });
