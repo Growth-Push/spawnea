@@ -5,6 +5,8 @@ import type {
   Project,
   Agent,
   CreateSessionInput,
+  CreateChildSessionInput,
+  ParentCloseAction,
   AdoptSessionInput,
   OperationalCatalog,
   CatalogValidationError,
@@ -20,6 +22,8 @@ import { Sidebar } from './components/Sidebar';
 import { ContextBar } from './components/ContextBar';
 import { WorkspaceTabs, type WorkspaceTabType } from './components/WorkspaceTabs';
 import { CreateSessionModal } from './components/CreateSessionModal';
+import { CreateChildSessionModal } from './components/CreateChildSessionModal';
+import { CloseParentModal } from './components/CloseParentModal';
 import { AdoptSessionModal } from './components/AdoptSessionModal';
 import { StopSessionModal } from './components/StopSessionModal';
 import { UnadoptSessionModal } from './components/UnadoptSessionModal';
@@ -32,6 +36,57 @@ import { LocalDiscoveryModal } from './components/LocalDiscoveryModal';
 import { ControlFinalizationModal } from './components/ControlFinalizationModal';
 import { spawneaSessionTabKey } from './product-storage';
 import { Terminal, Plus } from 'lucide-react';
+
+/**
+ * Orders sessions hierarchically for keyboard cycling (Ctrl-Tab / Ctrl-Shift-Tab):
+ * Root (father) session first, immediately followed by its children in order (child-1, child-2, ..., child-N).
+ */
+export function getHierarchicalSessionOrder(sessions: Session[]): Session[] {
+  const rootSessions = sessions
+    .filter((s) => !s.parentSessionId)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+
+  const childrenByParent = new Map<string, Session[]>();
+  for (const s of sessions) {
+    if (s.parentSessionId) {
+      const list = childrenByParent.get(s.parentSessionId) || [];
+      list.push(s);
+      childrenByParent.set(s.parentSessionId, list);
+    }
+  }
+
+  // Sort children under each parent by childAlias (child-1, child-2, ...), falling back to name
+  for (const list of childrenByParent.values()) {
+    list.sort((a, b) =>
+      (a.childAlias || a.name).localeCompare(b.childAlias || b.name, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      })
+    );
+  }
+
+  const result: Session[] = [];
+  const visitedIds = new Set<string>();
+
+  for (const parent of rootSessions) {
+    result.push(parent);
+    visitedIds.add(parent.id);
+    const children = childrenByParent.get(parent.id) || [];
+    for (const child of children) {
+      result.push(child);
+      visitedIds.add(child.id);
+    }
+  }
+
+  // Fallback: append any orphaned child sessions
+  for (const s of sessions) {
+    if (!visitedIds.has(s.id)) {
+      result.push(s);
+    }
+  }
+
+  return result;
+}
 
 export function App(): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -64,6 +119,9 @@ export function App(): React.JSX.Element {
   const [isUnadoptingSession, setIsUnadoptingSession] = useState(false);
   const [unadoptError, setUnadoptError] = useState<string | null>(null);
   const [sessionToFinish, setSessionToFinish] = useState<Session | null>(null);
+  const [sessionToCreateChildFor, setSessionToCreateChildFor] = useState<Session | null>(null);
+  const [parentSessionToClose, setParentSessionToClose] = useState<Session | null>(null);
+  const [pendingCloseAllParentId, setPendingCloseAllParentId] = useState<string | null>(null);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
@@ -548,7 +606,15 @@ export function App(): React.JSX.Element {
       if (window.spawneaApi?.unadoptSession) {
         await window.spawneaApi.unadoptSession(sessionId);
       }
-      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      setSessions((prev) =>
+        prev
+          .filter((s) => s.id !== sessionId)
+          .map((s) =>
+            s.parentSessionId === sessionId
+              ? { ...s, parentSessionId: undefined, childAlias: undefined }
+              : s
+          )
+      );
       setActiveSessionId((currentActiveId) => {
         if (currentActiveId === sessionId) {
           const remaining = sessions.filter((s) => s.id !== sessionId);
@@ -584,7 +650,15 @@ export function App(): React.JSX.Element {
     if (window.spawneaApi?.finishSession) {
       const result = await window.spawneaApi.finishSession(sessionId, action, options);
       if (result.removed) {
-        setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+        setSessions((prev) =>
+          prev
+            .filter((s) => s.id !== sessionId)
+            .map((s) =>
+              s.parentSessionId === sessionId
+                ? { ...s, parentSessionId: undefined, childAlias: undefined }
+                : s
+            )
+        );
         setActiveSessionId((currentActiveId) => {
           if (currentActiveId === sessionId) {
             const remaining = sessions.filter((s) => s.id !== sessionId);
@@ -592,6 +666,25 @@ export function App(): React.JSX.Element {
           }
           return currentActiveId;
         });
+
+        if (pendingCloseAllParentId) {
+          const parentId = pendingCloseAllParentId;
+          const remainingChildren = sessions.filter(
+            (s) => s.parentSessionId === parentId && s.id !== sessionId
+          );
+          const nextDirtyChild = remainingChildren.find(
+            (c) => c.managedWorktree && gitDirtyBySessionId[c.id]
+          );
+          if (nextDirtyChild) {
+            setSessionToFinish(nextDirtyChild);
+            return;
+          } else {
+            setPendingCloseAllParentId(null);
+            await executeDeleteSession(parentId, 'close-all', { skipDirtyChildCheck: true });
+          }
+        }
+      } else {
+        setPendingCloseAllParentId(null);
       }
     }
     setSessionToFinish(null);
@@ -609,26 +702,98 @@ export function App(): React.JSX.Element {
     );
   };
 
-  const handleDeleteSession = async (sessionId: string) => {
-    // Optimistically update React state immediately
-    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+  const executeDeleteSession = async (
+    sessionId: string,
+    childAction: ParentCloseAction = 'leave-children',
+    options?: { skipDirtyChildCheck?: boolean }
+  ) => {
+    if (childAction === 'close-all' && !options?.skipDirtyChildCheck) {
+      const children = sessions.filter((s) => s.parentSessionId === sessionId);
+      const dirtyChild = children.find((c) => c.managedWorktree && gitDirtyBySessionId[c.id]);
+      if (dirtyChild) {
+        setPendingCloseAllParentId(sessionId);
+        setSessionToFinish(dirtyChild);
+        return;
+      }
+    }
+
+    if (window.spawneaApi?.deleteSession) {
+      try {
+        if (childAction === 'close-all') {
+          await window.spawneaApi.deleteSession(sessionId, childAction);
+        } else {
+          await window.spawneaApi.deleteSession(sessionId);
+        }
+      } catch (err) {
+        console.error('Failed to delete session on backend:', err);
+        return;
+      }
+    }
+
+    setSessions((prev) => {
+      if (childAction === 'close-all') {
+        return prev.filter((s) => s.id !== sessionId && s.parentSessionId !== sessionId);
+      } else {
+        return prev
+          .filter((s) => s.id !== sessionId)
+          .map((s) =>
+            s.parentSessionId === sessionId
+              ? { ...s, parentSessionId: undefined, childAlias: undefined }
+              : s
+          );
+      }
+    });
 
     setActiveSessionId((currentActiveId) => {
-      if (currentActiveId === sessionId) {
-        const remaining = sessions.filter((s) => s.id !== sessionId);
+      if (
+        currentActiveId === sessionId ||
+        (childAction === 'close-all' &&
+          sessions.find((s) => s.id === currentActiveId)?.parentSessionId === sessionId)
+      ) {
+        const remaining = sessions.filter(
+          (s) =>
+            s.id !== sessionId && (childAction !== 'close-all' || s.parentSessionId !== sessionId)
+        );
         return remaining.length > 0 ? remaining[0].id : null;
       }
       return currentActiveId;
     });
-
-    if (window.spawneaApi?.deleteSession) {
-      try {
-        await window.spawneaApi.deleteSession(sessionId);
-      } catch (err) {
-        console.error('Failed to delete session on backend:', err);
-      }
-    }
   };
+
+  const handleDeleteSession = async (sessionId: string) => {
+    const target = sessions.find((s) => s.id === sessionId);
+    const children = sessions.filter((s) => s.parentSessionId === sessionId);
+    if (target && children.length > 0) {
+      setParentSessionToClose(target);
+      return;
+    }
+    await executeDeleteSession(sessionId, 'leave-children');
+  };
+
+  const handleCloseCreateChildModal = useCallback(() => {
+    setSessionToCreateChildFor(null);
+  }, []);
+
+  const handleSubmitCreateChildSession = useCallback(async (input: CreateChildSessionInput) => {
+    if (!window.spawneaApi?.createChildSession) {
+      throw new Error('Child session creation is unavailable in this app runtime.');
+    }
+    const created = await window.spawneaApi.createChildSession(input);
+    setSessions((prev) => [...prev, created]);
+    setActiveSessionId(created.id);
+  }, []);
+
+  const handleCloseParentModal = useCallback(() => {
+    setParentSessionToClose(null);
+  }, []);
+
+  const handleConfirmCloseParentModal = useCallback(async (action: ParentCloseAction) => {
+    const parent = parentSessionToClose;
+    setParentSessionToClose(null);
+    if (parent) {
+      await executeDeleteSession(parent.id, action);
+    }
+  }, [parentSessionToClose, executeDeleteSession]);
 
   const handleClearDoneSessions = async () => {
     const doneSessions = sessions.filter((s) => s.status === 'done');
@@ -791,31 +956,35 @@ export function App(): React.JSX.Element {
         return;
       }
 
-      const sortedSessions = [...sessions].sort((a, b) =>
-        a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
-      );
+      // Top (father/root) sessions for direct number navigation (Ctrl-1..0)
+      const rootSessions = sessions
+        .filter((s) => !s.parentSessionId)
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
 
-      if (sortedSessions.length === 0) return;
+      // Hierarchical ordered list for Ctrl-Tab / Ctrl-Shift-Tab cycling: father first, then children in order
+      const cyclingSessions = getHierarchicalSessionOrder(sessions);
+
+      if (cyclingSessions.length === 0) return;
 
       // 4. Handle Ctrl+Tab / Ctrl+Shift+Tab
       if (e.key === 'Tab') {
         e.preventDefault();
         e.stopPropagation();
 
-        const currentIndex = sortedSessions.findIndex((s) => s.id === activeSessionId);
+        const currentIndex = cyclingSessions.findIndex((s) => s.id === activeSessionId);
         if (e.shiftKey) {
           // Previous session
-          const prevIndex = currentIndex <= 0 ? sortedSessions.length - 1 : currentIndex - 1;
-          setActiveSessionId(sortedSessions[prevIndex].id);
+          const prevIndex = currentIndex <= 0 ? cyclingSessions.length - 1 : currentIndex - 1;
+          setActiveSessionId(cyclingSessions[prevIndex].id);
         } else {
           // Next session
-          const nextIndex = currentIndex === -1 || currentIndex >= sortedSessions.length - 1 ? 0 : currentIndex + 1;
-          setActiveSessionId(sortedSessions[nextIndex].id);
+          const nextIndex = currentIndex === -1 || currentIndex >= cyclingSessions.length - 1 ? 0 : currentIndex + 1;
+          setActiveSessionId(cyclingSessions[nextIndex].id);
         }
         return;
       }
 
-      // 5. Handle Ctrl+1 ... Ctrl+9, Ctrl+0
+      // 5. Handle Ctrl+1 ... Ctrl+9, Ctrl+0 (Always targets the top / father sessions)
       const keyMap: Record<string, number> = {
         '1': 0,
         '2': 1,
@@ -831,10 +1000,10 @@ export function App(): React.JSX.Element {
 
       if (e.key in keyMap && !e.shiftKey && !e.altKey) {
         const targetIndex = keyMap[e.key];
-        if (targetIndex < sortedSessions.length) {
+        if (targetIndex < rootSessions.length) {
           e.preventDefault();
           e.stopPropagation();
-          setActiveSessionId(sortedSessions[targetIndex].id);
+          setActiveSessionId(rootSessions[targetIndex].id);
         }
       }
     };
@@ -882,6 +1051,16 @@ export function App(): React.JSX.Element {
         activeSessionId={activeSessionId}
         onSelectSession={setActiveSessionId}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
+        onOpenCreateChildModal={(parentId) => {
+          const target = (parentId ? sessions.find((s) => s.id === parentId) : null) ||
+            (activeSession
+              ? activeSession.parentSessionId
+                ? sessions.find((s) => s.id === activeSession.parentSessionId)
+                : activeSession
+              : sessions.find((s) => !s.parentSessionId)) ||
+            null;
+          if (target) setSessionToCreateChildFor(target);
+        }}
         onOpenNewProject={() => setIsNewProjectModalOpen(true)}
         onOpenLocalDiscovery={() => setIsLocalDiscoveryOpen(true)}
         onOpenSettings={() => { void handleOpenSettings(); }}
@@ -979,6 +1158,10 @@ export function App(): React.JSX.Element {
               onReportFeedback={() => setIsFeedbackModalOpen(true)}
               onOpenQuickSwitcher={() => setIsQuickSwitcherOpen(true)}
               onRename={handleRenameSession}
+              onCreateChild={(parentId) => {
+                const target = sessions.find((s) => s.id === parentId);
+                if (target) setSessionToCreateChildFor(target);
+              }}
             />
 
             {/* Tabbed Workspace Surface */}
@@ -1105,8 +1288,35 @@ export function App(): React.JSX.Element {
       <FinishSessionModal
         isOpen={sessionToFinish !== null}
         session={sessionToFinish}
-        onClose={() => setSessionToFinish(null)}
+        onClose={() => {
+          setSessionToFinish(null);
+          setPendingCloseAllParentId(null);
+        }}
         onFinish={handleFinishSession}
+      />
+
+      {/* Create Child Session Modal */}
+      <CreateChildSessionModal
+        isOpen={Boolean(sessionToCreateChildFor)}
+        parentSession={sessionToCreateChildFor}
+        agents={agents}
+        servers={servers}
+        onClose={handleCloseCreateChildModal}
+        onSubmit={handleSubmitCreateChildSession}
+      />
+
+      {/* Close Parent Session Modal */}
+      <CloseParentModal
+        isOpen={Boolean(parentSessionToClose)}
+        parentSession={parentSessionToClose}
+        childrenSessions={
+          parentSessionToClose
+            ? sessions.filter((s) => s.parentSessionId === parentSessionToClose.id)
+            : []
+        }
+        gitDirtyBySessionId={gitDirtyBySessionId}
+        onClose={handleCloseParentModal}
+        onConfirm={handleConfirmCloseParentModal}
       />
 
       <ControlFinalizationModal

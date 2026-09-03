@@ -20,6 +20,7 @@ import {
   Check,
   X,
   FileDiff,
+  Plus,
 } from 'lucide-react';
 import { AgentIcon } from './AgentIcon';
 import { SessionSourceBadge } from './SessionSourceBadge';
@@ -41,6 +42,7 @@ interface ContextBarProps {
   onReportFeedback?: (sessionId: string) => void;
   onOpenQuickSwitcher?: () => void;
   onRename?: (sessionId: string, title: string) => Promise<void>;
+  onCreateChild?: (parentSessionId: string) => void;
 }
 
 export function ContextBar({
@@ -60,6 +62,7 @@ export function ContextBar({
   onReportFeedback,
   onOpenQuickSwitcher,
   onRename,
+  onCreateChild,
 }: ContextBarProps): React.JSX.Element {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
@@ -214,6 +217,15 @@ export function ContextBar({
                   </button>
                 )}
               </>
+            )}
+            {session.childAlias && (
+              <span
+                data-testid="contextbar-child-alias-badge"
+                className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0"
+                title={`Child agent alias: ${session.childAlias}`}
+              >
+                {session.childAlias}
+              </span>
             )}
             {session.isExternal && (
               <span
@@ -402,6 +414,20 @@ export function ContextBar({
             >
               <Radio className="w-3 h-3" />
               <span>Release</span>
+            </button>
+          )}
+
+          {/* Create Child Session Option (only for root sessions) */}
+          {!session.parentSessionId && onCreateChild && (
+            <button
+              type="button"
+              data-testid="session-create-child-button"
+              onClick={() => onCreateChild(session.id)}
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-purple-300 hover:text-purple-200 bg-purple-950/60 hover:bg-purple-900/80 border border-purple-500/40 rounded-md transition-colors cursor-pointer"
+              title="Spawn a child session under this parent session"
+            >
+              <Plus className="w-3 h-3 text-purple-400" />
+              <span>+ child session</span>
             </button>
           )}
 

@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { App } from './App';
+import { App, getHierarchicalSessionOrder } from './App';
 import { StatusBadge } from './components/StatusBadge';
 import type { Session, Server, Project, Agent, SessionStatus } from '@spawnea/domain';
 
@@ -231,6 +231,25 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
     saveAgent: vi.fn(),
     deleteAgent: vi.fn(),
     createSession: vi.fn(),
+    createChildSession: vi.fn().mockImplementation(async (input) => ({
+      id: 'sess-child-1',
+      name: input.name || input.task,
+      task: input.task,
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: input.agentId || 'agent-claude',
+      worktreePath: '/code/test',
+      branch: 'main',
+      managedWorktree: input.workspace === 'new-worktree',
+      tmuxSessionName: 'spawnea-child-1',
+      parentSessionId: input.parentSessionId,
+      childAlias: 'child-1',
+      status: 'starting',
+      creationSource: 'ui',
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+    })),
+    sendPrompt: vi.fn().mockResolvedValue({ delivered: true, deliveryMethod: 'pty' }),
     renameSession: vi.fn().mockImplementation(async (sessionId: string, name: string) => {
       const session = mockSessions.find((candidate) => candidate.id === sessionId);
       if (!session) throw new Error(`Session '${sessionId}' not found`);
@@ -1555,6 +1574,190 @@ describe('App Desktop Shell', () => {
     fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true, shiftKey: true });
     await waitFor(() => {
       expect(screen.getAllByText('feat/jwt-auth').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('orders sessions hierarchically with father first followed by children in order', () => {
+    const parentA: Session = {
+      id: 'p-a',
+      name: 'Beta Project Parent',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-1',
+      task: 'Parent task',
+      branch: 'main',
+      worktreePath: '/p/a',
+      tmuxSessionName: 'spawnea-pa',
+      status: 'working',
+      createdAt: new Date('2026-09-01T00:00:00Z'),
+      lastActivityAt: new Date('2026-09-01T00:00:00Z'),
+    };
+    const childA1: Session = {
+      ...parentA,
+      id: 'c-a1',
+      name: 'Alpha child', // alphabetically precedes parent!
+      parentSessionId: 'p-a',
+      childAlias: 'child-1',
+    };
+    const childA2: Session = {
+      ...parentA,
+      id: 'c-a2',
+      name: 'Zeta child',
+      parentSessionId: 'p-a',
+      childAlias: 'child-2',
+    };
+    const parentB: Session = {
+      ...parentA,
+      id: 'p-b',
+      name: 'Alpha Project Parent',
+      parentSessionId: undefined,
+      childAlias: undefined,
+    };
+    const childB1: Session = {
+      ...parentB,
+      id: 'c-b1',
+      name: 'B child',
+      parentSessionId: 'p-b',
+      childAlias: 'child-1',
+    };
+
+    // Unordered input
+    const input = [childA2, childA1, parentA, childB1, parentB];
+    const ordered = getHierarchicalSessionOrder(input);
+
+    // Expected order:
+    // 1. parentB ("Alpha Project Parent")
+    // 2. childB1 ("child-1" under parentB)
+    // 3. parentA ("Beta Project Parent")
+    // 4. childA1 ("child-1" under parentA)
+    // 5. childA2 ("child-2" under parentA)
+    expect(ordered.map((s) => s.id)).toEqual(['p-b', 'c-b1', 'p-a', 'c-a1', 'c-a2']);
+  });
+
+  it('navigates to the father session with Ctrl-4 and cycles father then children with Ctrl-Tab', async () => {
+    const parent1: Session = {
+      id: 'p-1',
+      name: 'Session A',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-claude',
+      task: 'P1 task',
+      branch: 'main',
+      worktreePath: '/p/1',
+      tmuxSessionName: 'spawnea-p1',
+      status: 'working',
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+    };
+    const child1_1: Session = { ...parent1, id: 'c-1-1', name: 'Session A Child 1', parentSessionId: 'p-1', childAlias: 'child-1' };
+    const child1_2: Session = { ...parent1, id: 'c-1-2', name: 'Session A Child 2', parentSessionId: 'p-1', childAlias: 'child-2' };
+    const parent2: Session = { ...parent1, id: 'p-2', name: 'Session B', tmuxSessionName: 'spawnea-p2' };
+    const parent3: Session = { ...parent1, id: 'p-3', name: 'Session C', tmuxSessionName: 'spawnea-p3' };
+    const parent4: Session = { ...parent1, id: 'p-4', name: 'Session D', tmuxSessionName: 'spawnea-p4' };
+    const child4_1: Session = { ...parent4, id: 'c-4-1', name: 'Session D Child 1', parentSessionId: 'p-4', childAlias: 'child-1' };
+
+    const api = createMockSpawneaApi();
+    api.listSessions = vi.fn().mockResolvedValue([child1_1, parent1, child1_2, parent2, parent3, child4_1, parent4]);
+    window.spawneaApi = api;
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Sessions (4)')).toBeDefined();
+    });
+
+    // Press Ctrl+4: MUST navigate to parent4 (Delta Project 4), NOT any child!
+    fireEvent.keyDown(window, { key: '4', ctrlKey: true });
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-p-4').getAttribute('aria-current')).toBe('page');
+    });
+
+    // Press Ctrl+Tab: MUST cycle to child 4-1 (first child of Delta Project 4)
+    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-c-4-1').getAttribute('aria-current')).toBe('page');
+    });
+  });
+
+  it('handles close-all with dirty child by guiding through finish flow and completing parent deletion', async () => {
+    const parent: Session = {
+      id: 'parent-1',
+      name: 'Parent Session',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-1',
+      task: 'Parent Task',
+      branch: 'main',
+      worktreePath: '/p/1',
+      tmuxSessionName: 'spawnea-p1',
+      status: 'done',
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+    };
+    const dirtyChild: Session = {
+      ...parent,
+      id: 'child-1',
+      name: 'Dirty Child Session',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-1',
+      managedWorktree: true,
+      worktreePath: '/p/1-child',
+    };
+
+    const api = createMockSpawneaApi();
+    api.listSessions = vi.fn().mockResolvedValue([parent, dirtyChild]);
+    api.getGitStatus = vi.fn().mockImplementation((id: string) => {
+      if (id === 'child-1') {
+        return Promise.resolve({ isGitRepo: true, isClean: false, uncommittedChanges: 2, ahead: 0, behind: 0 });
+      }
+      return Promise.resolve({ isGitRepo: true, isClean: true, uncommittedChanges: 0, ahead: 0, behind: 0 });
+    });
+    api.inspectWorktree = vi.fn().mockResolvedValue({
+      canFastForward: true,
+      hasUncommittedChanges: true,
+      commitsAhead: 0,
+      targetBranch: 'main',
+    });
+    api.finishSession = vi.fn().mockResolvedValue({ success: true, removed: true });
+    api.deleteSession = vi.fn().mockResolvedValue({ success: true });
+    window.spawneaApi = api;
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Sessions (1)')).toBeDefined();
+    });
+
+    // Wait for git status polling to identify dirty child
+    await waitFor(() => {
+      expect(api.getGitStatus).toHaveBeenCalledWith('child-1');
+    });
+
+    // Attempt to delete parent session
+    const deleteBtn = screen.getByTestId('session-delete-button');
+    fireEvent.click(deleteBtn);
+
+    // Parent has children -> CloseParentModal opens
+    await waitFor(() => {
+      expect(screen.getByTestId('close-parent-modal')).toBeDefined();
+    });
+
+    // Click Close All button
+    const closeAllBtn = screen.getByTestId('parent-close-all-button');
+    fireEvent.click(closeAllBtn);
+
+    // Because child-1 has uncommitted changes, FinishSessionModal opens for the dirty child
+    await waitFor(() => {
+      expect(screen.getByText('Finish Worktree Session')).toBeDefined();
+    });
+
+    // Submit integrate in FinishSessionModal
+    const submitFinishBtn = screen.getByRole('button', { name: /Integrate & Clean Up/i });
+    fireEvent.click(submitFinishBtn);
+
+    // After finishing child, parent deletion with close-all proceeds
+    await waitFor(() => {
+      expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all');
     });
   });
 

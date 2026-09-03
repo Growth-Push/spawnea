@@ -40,6 +40,7 @@ import {
   List,
   Gauge,
   FileDiff,
+  ChevronDown,
 } from 'lucide-react';
 
 export type GroupingMode = 'all' | 'host' | 'project' | 'harness';
@@ -149,6 +150,7 @@ interface SidebarProps {
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
   onOpenCreateModal: () => void;
+  onOpenCreateChildModal?: (parentSessionId?: string) => void;
   onOpenNewProject?: () => void;
   onOpenLocalDiscovery?: () => void;
   onOpenSettings?: () => void;
@@ -325,6 +327,7 @@ export function Sidebar({
   activeSessionId,
   onSelectSession,
   onOpenCreateModal,
+  onOpenCreateChildModal,
   onOpenNewProject,
   onOpenLocalDiscovery,
   onOpenSettings,
@@ -480,8 +483,72 @@ export function Sidebar({
     }
   }, [statusFilter, countNeedsAttention, countWorking, countIdleDone, countDisconnected]);
 
-  // Filter sessions by status chip
-  const statusFiltered = sessions.filter((s) => {
+  // Group children under parents and track expandable parent cards
+  const childrenByParentId = React.useMemo(() => {
+    const map = new Map<string, Session[]>();
+    for (const s of sessions) {
+      if (s.parentSessionId) {
+        const list = map.get(s.parentSessionId) || [];
+        list.push(s);
+        map.set(s.parentSessionId, list);
+      }
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) =>
+        (a.childAlias || a.name).localeCompare(b.childAlias || b.name, undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        })
+      );
+    }
+    return map;
+  }, [sessions]);
+
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
+  const toggleParentExpanded = (parentId: string) => {
+    setExpandedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(parentId)) next.delete(parentId);
+      else next.add(parentId);
+      return next;
+    });
+  };
+
+  // Target parent session for "+ Child" creation in sidebar header
+  const targetParentSession = React.useMemo(() => {
+    const active = sessions.find((s) => s.id === activeSessionId);
+    if (!active) {
+      return sessions.find((s) => !s.parentSessionId) || null;
+    }
+    if (active.parentSessionId) {
+      return sessions.find((s) => s.id === active.parentSessionId) || active;
+    }
+    return active;
+  }, [sessions, activeSessionId]);
+
+  // Auto-expand parent if an active session is a child session
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const active = sessions.find((s) => s.id === activeSessionId);
+    if (active?.parentSessionId) {
+      setExpandedParents((prev) => {
+        if (prev.has(active.parentSessionId!)) return prev;
+        const next = new Set(prev);
+        next.add(active.parentSessionId!);
+        return next;
+      });
+    }
+  }, [activeSessionId, sessions]);
+
+  // Root sessions remain primary top-level list items (2-level hierarchy).
+  // In Spawnea's session hierarchy, child sessions inherit their parent's serverId
+  // and projectId (per docs/tasks/05-session-hierarchy-and-child-agents.md) and are
+  // intentionally grouped with and rendered directly under their parent session card.
+  const rootSessions = React.useMemo(() => {
+    return sessions.filter((s) => !s.parentSessionId);
+  }, [sessions]);
+
+  const sessionMatchesStatus = (s: Session): boolean => {
     if (statusFilter === 'needs_attention') {
       return s.status === 'needs_input' || s.status === 'error';
     }
@@ -495,24 +562,40 @@ export function Sidebar({
       return s.status === 'disconnected';
     }
     return true;
-  });
+  };
 
-  // Filter sessions by search term (matching session fields, server, project, and harness)
-  const filteredSessions = statusFiltered.filter((s) => {
-    if (!searchTerm.trim()) return true;
-    const term = searchTerm.toLowerCase();
+  const sessionMatchesSearch = (s: Session, term: string): boolean => {
     const server = getServer(s.serverId);
     const project = getProject(s.projectId);
     const agent = getAgent(s.agentId);
 
-    return (
+    return Boolean(
       s.name.toLowerCase().includes(term) ||
       s.task.toLowerCase().includes(term) ||
       s.branch.toLowerCase().includes(term) ||
+      (s.childAlias ? s.childAlias.toLowerCase().includes(term) : false) ||
       s.tmuxSessionName.toLowerCase().includes(term) ||
       (server && (server.name.toLowerCase().includes(term) || server.host.toLowerCase().includes(term))) ||
       (project && (project.name.toLowerCase().includes(term) || project.rootPath.toLowerCase().includes(term))) ||
       (agent && (agent.name.toLowerCase().includes(term) || agent.command.toLowerCase().includes(term)))
+    );
+  };
+
+  // Normalize search term once (trims leading/trailing whitespace and lowercases)
+  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+  const hasSearch = Boolean(normalizedSearchTerm);
+
+  // Filter root sessions: matches if root session matches both filters,
+  // or if any of its children matches both filters
+  const filteredSessions = rootSessions.filter((s) => {
+    const rootMatchesSearch = !hasSearch || sessionMatchesSearch(s, normalizedSearchTerm);
+    const rootMatchesStatus = sessionMatchesStatus(s);
+
+    if (rootMatchesSearch && rootMatchesStatus) return true;
+
+    const children = childrenByParentId.get(s.id) || [];
+    return children.some(
+      (c) => sessionMatchesStatus(c) && (!hasSearch || sessionMatchesSearch(c, normalizedSearchTerm))
     );
   });
 
@@ -640,8 +723,66 @@ export function Sidebar({
     shortcutLabels.set(s.id, `Ctrl-${num}`);
   });
 
+  const renderChildListItem = (child: Session) => {
+    const isSelected = child.id === activeSessionId;
+    const statusDetails = statusDetailsMap[child.id];
+    const alertId = getAlertId(child.id, child.status, statusDetails?.detectedPrompt || statusDetails?.reason);
+    const isAcknowledged = acknowledgedAlerts.has(alertId);
+
+    return (
+      <button
+        key={child.id}
+        type="button"
+        data-testid={`session-item-${child.id}`}
+        aria-current={isSelected ? 'page' : undefined}
+        onClick={() => onSelectSession(child.id)}
+        className={`w-full flex items-center justify-between p-2 rounded-md border text-left transition-all cursor-pointer ${
+          isSelected
+            ? 'bg-purple-950/50 border-purple-500/70 text-white ring-1 ring-purple-500/30'
+            : 'bg-[#12161c]/60 border-[#21262d] hover:bg-[#1f242c]/50 hover:border-purple-500/40 text-zinc-300'
+        }`}
+      >
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <span
+            data-testid={`session-child-alias-${child.id}`}
+            className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0"
+          >
+            {child.childAlias || 'child'}
+          </span>
+          <span
+            data-testid={`session-title-${child.id}`}
+            className="text-xs truncate font-medium text-zinc-200"
+            title={child.name}
+          >
+            {child.name}
+          </span>
+        </div>
+        <StatusBadge
+          status={child.status}
+          isFocused={isSelected}
+          isAcknowledged={isAcknowledged}
+          iconOnly
+          className="shrink-0 ml-1.5"
+        />
+      </button>
+    );
+  };
+
   // Consistent session card renderer (FG-4.1.4, FG-4.1.5)
   const renderSessionCard = (session: Session) => {
+    const children = childrenByParentId.get(session.id) || [];
+    const hasFilter = Boolean(normalizedSearchTerm || statusFilter !== 'all');
+    const matchingChildren = hasFilter
+      ? children.filter(
+          (c) =>
+            sessionMatchesStatus(c) &&
+            (!normalizedSearchTerm || sessionMatchesSearch(c, normalizedSearchTerm))
+        )
+      : children;
+    const isExpanded =
+      expandedParents.has(session.id) ||
+      (hasFilter && matchingChildren.length > 0);
+    const visibleChildren = hasFilter ? matchingChildren : children;
     const isSelected = session.id === activeSessionId;
     const shortcut = shortcutLabels.get(session.id);
     const server = getServer(session.serverId);
@@ -662,106 +803,100 @@ export function Sidebar({
     const gitChangeCount = gitChangeCountBySessionId[session.id] ?? (hasUncommittedChanges ? 1 : 0);
     const formattedPath = formatSessionPath(displayPath);
 
-    return (
-      <button
-        type="button"
-        key={session.id}
-        data-testid={`session-item-${session.id}`}
-        aria-current={isSelected ? 'page' : undefined}
-        onClick={() => onSelectSession(session.id)}
-        className={`group w-full min-w-0 text-left p-2.5 rounded-lg border transition-all cursor-pointer flex flex-col gap-1.5 relative ${
-          isSelected
-            ? session.isExternal
-              ? 'bg-[#1f242c] border-cyan-500/60 text-white shadow-md ring-1 ring-cyan-500/30'
-              : 'bg-[#1f242c] border-emerald-500/50 text-white shadow-md ring-1 ring-emerald-500/20'
-            : session.isExternal
-            ? 'bg-[#12161c]/60 border-cyan-950/60 hover:bg-[#1f242c]/50 hover:border-cyan-800/50 text-zinc-300'
-            : 'bg-[#12161c]/60 border-[#21262d] hover:bg-[#1f242c]/50 hover:border-[#30363d] text-zinc-300'
-        }`}
-      >
-        {/* Row 1: [IconHost] [IconProvider]  branch  [IconStatus] [Shortcut] */}
-        <div className="flex items-center justify-between gap-1.5 w-full">
-          <div className="flex items-center gap-1.5 min-w-0 flex-1">
-            <OsIcon osName={osString} className="w-3.5 h-3.5 shrink-0" />
-            <AgentIcon
-              harness={agent?.harness}
-              agentName={agent?.name || session.agentId}
-              command={agent?.command}
-              className="w-3.5 h-3.5 shrink-0"
-            />
-            <div className="flex items-center gap-1 min-w-0 font-mono text-[11px] text-zinc-400 truncate">
-              <GitBranch className="w-3 h-3 text-zinc-500 shrink-0" />
-              <span className="truncate" title={session.branch}>
-                {session.branch}
-              </span>
-            </div>
+    const cardStyle = isSelected
+      ? session.isExternal
+        ? 'bg-[#1f242c] border-cyan-500/60 text-white shadow-md ring-1 ring-cyan-500/30'
+        : 'bg-[#1f242c] border-emerald-500/50 text-white shadow-md ring-1 ring-emerald-500/20'
+      : session.isExternal
+      ? 'bg-[#12161c]/60 border-cyan-950/60 hover:bg-[#1f242c]/50 hover:border-cyan-800/50 text-zinc-300'
+      : 'bg-[#12161c]/60 border-[#21262d] hover:bg-[#1f242c]/50 hover:border-[#30363d] text-zinc-300';
+
+    const renderCardHeader = () => (
+      <div className="flex items-center justify-between gap-1.5 w-full">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <OsIcon osName={osString} className="w-3.5 h-3.5 shrink-0" />
+          <AgentIcon
+            harness={agent?.harness}
+            agentName={agent?.name || session.agentId}
+            command={agent?.command}
+            className="w-3.5 h-3.5 shrink-0"
+          />
+          <div className="flex items-center gap-1 min-w-0 font-mono text-[11px] text-zinc-400 truncate">
+            <GitBranch className="w-3 h-3 text-zinc-500 shrink-0" />
+            <span className="truncate" title={session.branch}>
+              {session.branch}
+            </span>
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <StatusBadge
-              status={session.status}
-              isFocused={isSelected}
-              isAcknowledged={isAcknowledged}
-              promptSnippet={statusDetails?.detectedPrompt}
-              errorReason={statusDetails?.reason}
-              iconOnly={true}
-              className="shrink-0"
-            />
-            {shortcut && (
-              <span
-                data-testid={`session-shortcut-badge-${session.id}`}
-                className="text-[9px] font-mono font-medium px-1 py-0.2 rounded bg-[#0d1117] text-zinc-400 border border-[#30363d] group-hover:text-emerald-300 group-hover:border-emerald-500/40 transition-colors shrink-0"
-                title={`Keyboard shortcut: ${shortcut}`}
-              >
-                {shortcut}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <StatusBadge
+            status={session.status}
+            isFocused={isSelected}
+            isAcknowledged={isAcknowledged}
+            promptSnippet={statusDetails?.detectedPrompt}
+            errorReason={statusDetails?.reason}
+            iconOnly={true}
+            className="shrink-0"
+          />
+          {shortcut && (
+            <span
+              data-testid={`session-shortcut-badge-${session.id}`}
+              className="text-[9px] font-mono font-medium px-1 py-0.2 rounded bg-[#0d1117] text-zinc-400 border border-[#30363d] group-hover:text-emerald-300 group-hover:border-emerald-500/40 transition-colors shrink-0"
+              title={`Keyboard shortcut: ${shortcut}`}
+            >
+              {shortcut}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+
+    const renderCardTitle = () => (
+      <div className="flex w-full min-w-0 items-center justify-between gap-1.5 overflow-hidden">
+        <span
+          data-testid={`session-title-${session.id}`}
+          className="block min-w-0 max-w-full flex-1 truncate text-xs font-semibold leading-snug text-zinc-100"
+          title={displayTitle}
+        >
+          {displayTitle}
+        </span>
+        {session.managedWorktree && (
+          <span
+            data-testid={`session-worktree-badge-${session.id}`}
+            className="flex items-center gap-1 text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-teal-950/80 text-teal-300 border border-teal-500/40 shrink-0"
+            title={`Managed Git worktree\nBranch: ${session.branch}\nPath: ${displayPath}${hasUncommittedChanges ? '\nUncommitted Git changes' : ''}`}
+          >
+            <GitFork className="w-2.5 h-2.5" />
+            <span>Worktree</span>
+            {hasUncommittedChanges && (
+              <span className="inline-flex items-center gap-0.5 text-amber-300" title={`${gitChangeCount} uncommitted Git change${gitChangeCount === 1 ? '' : 's'}`}>
+                <FileDiff data-testid={`session-worktree-dirty-indicator-${session.id}`} aria-label="Uncommitted Git changes" className="w-2.5 h-2.5" />
+                <span data-testid={`session-worktree-change-count-${session.id}`}>{gitChangeCount}</span>
               </span>
             )}
-          </div>
-        </div>
-
-        {/* Row 2: Title & Optional External Tag */}
-        <div className="flex w-full min-w-0 items-center justify-between gap-1.5 overflow-hidden">
-          <span
-            data-testid={`session-title-${session.id}`}
-            className="block min-w-0 max-w-full flex-1 truncate text-xs font-semibold leading-snug text-zinc-100"
-            title={displayTitle}
-          >
-            {displayTitle}
           </span>
-          {session.managedWorktree && (
-            <span
-              data-testid={`session-worktree-badge-${session.id}`}
-              className="flex items-center gap-1 text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-teal-950/80 text-teal-300 border border-teal-500/40 shrink-0"
-              title={`Managed Git worktree\nBranch: ${session.branch}\nPath: ${displayPath}${hasUncommittedChanges ? '\nUncommitted Git changes' : ''}`}
-            >
-              <GitFork className="w-2.5 h-2.5" />
-              <span>Worktree</span>
-              {hasUncommittedChanges && (
-                <span className="inline-flex items-center gap-0.5 text-amber-300" title={`${gitChangeCount} uncommitted Git change${gitChangeCount === 1 ? '' : 's'}`}>
-                  <FileDiff data-testid={`session-worktree-dirty-indicator-${session.id}`} aria-label="Uncommitted Git changes" className="w-2.5 h-2.5" />
-                  <span data-testid={`session-worktree-change-count-${session.id}`}>{gitChangeCount}</span>
-                </span>
-              )}
-            </span>
-          )}
-          {!session.managedWorktree && hasUncommittedChanges && (
-            <span className="inline-flex items-center gap-0.5 text-amber-300" title={`${gitChangeCount} uncommitted Git change${gitChangeCount === 1 ? '' : 's'}`}>
-              <FileDiff data-testid={`session-git-dirty-indicator-${session.id}`} aria-label="Uncommitted Git changes" className="w-3 h-3" />
-              <span data-testid={`session-git-change-count-${session.id}`}>{gitChangeCount}</span>
-            </span>
-          )}
-          {session.isExternal && (
-            <span
-              data-testid={`session-external-badge-${session.id}`}
-              className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-500/40 shrink-0"
-              title="External tmux session adopted into Spawnea"
-            >
-              EXT
-            </span>
-          )}
-          <SessionSourceBadge session={session} />
-        </div>
+        )}
+        {!session.managedWorktree && hasUncommittedChanges && (
+          <span className="inline-flex items-center gap-0.5 text-amber-300" title={`${gitChangeCount} uncommitted Git change${gitChangeCount === 1 ? '' : 's'}`}>
+            <FileDiff data-testid={`session-git-dirty-indicator-${session.id}`} aria-label="Uncommitted Git changes" className="w-3 h-3" />
+            <span data-testid={`session-git-change-count-${session.id}`}>{gitChangeCount}</span>
+          </span>
+        )}
+        {session.isExternal && (
+          <span
+            data-testid={`session-external-badge-${session.id}`}
+            className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-500/40 shrink-0"
+            title="External tmux session adopted into Spawnea"
+          >
+            EXT
+          </span>
+        )}
+        <SessionSourceBadge session={session} />
+      </div>
+    );
 
-        {/* Hidden snippet containers for tests and screen readers */}
+    const renderCardSnippets = () => (
+      <>
         {session.status === 'needs_input' && statusDetails?.detectedPrompt && (
           <span
             data-testid={`session-prompt-snippet-${session.id}`}
@@ -770,7 +905,6 @@ export function Sidebar({
             {statusDetails.detectedPrompt}
           </span>
         )}
-
         {session.status === 'error' && statusDetails?.reason && (
           <span
             data-testid={`session-error-snippet-${session.id}`}
@@ -779,28 +913,112 @@ export function Sidebar({
             {statusDetails.reason}
           </span>
         )}
+      </>
+    );
 
-        {/* Row 3: Path + tmux session */}
-        <div className="flex min-w-0 items-center justify-between text-[10px] text-zinc-500 pt-1 border-t border-[#262c36] gap-2">
-          <span
-            data-testid={`session-path-${session.id}`}
-            className="min-w-0 truncate font-mono text-zinc-400 flex-1"
-            title={displayPath}
+    const renderCardFooter = () => (
+      <div className="flex min-w-0 items-center justify-between text-[10px] text-zinc-500 pt-1 border-t border-[#262c36] gap-2">
+        <span
+          data-testid={`session-path-${session.id}`}
+          className="min-w-0 truncate font-mono text-zinc-400 flex-1"
+          title={displayPath}
+        >
+          {formattedPath}
+        </span>
+        <span
+          className="truncate font-mono text-zinc-500 text-[10px] max-w-[80px] shrink-0"
+          title={session.tmuxSessionName}
+        >
+          {session.tmuxSessionName}
+        </span>
+      </div>
+    );
+
+    if (children.length === 0) {
+      return (
+        <button
+          type="button"
+          key={session.id}
+          data-testid={`session-item-${session.id}`}
+          aria-current={isSelected ? 'page' : undefined}
+          onClick={() => onSelectSession(session.id)}
+          className={`group w-full min-w-0 text-left p-2.5 rounded-lg border transition-all cursor-pointer flex flex-col gap-1.5 relative ${cardStyle}`}
+        >
+          {renderCardHeader()}
+          {renderCardTitle()}
+          {renderCardSnippets()}
+          {renderCardFooter()}
+        </button>
+      );
+    }
+
+    return (
+      <div
+        key={session.id}
+        data-testid={`session-parent-group-${session.id}`}
+        className="space-y-1"
+      >
+        <div
+          className={`group w-full min-w-0 text-left p-2.5 rounded-lg border transition-all flex flex-col gap-1.5 relative ${cardStyle}`}
+        >
+          {/* Main button for session selection */}
+          <button
+            type="button"
+            data-testid={`session-item-${session.id}`}
+            aria-current={isSelected ? 'page' : undefined}
+            onClick={() => onSelectSession(session.id)}
+            className="w-full text-left flex flex-col gap-1.5 cursor-pointer focus:outline-none"
           >
-            {formattedPath}
-          </span>
-          <span
-            className="truncate font-mono text-zinc-500 text-[10px] max-w-[80px] shrink-0"
-            title={session.tmuxSessionName}
+            {renderCardHeader()}
+            {renderCardTitle()}
+            {renderCardSnippets()}
+          </button>
+
+          {/* Children expand/collapse combo in normal flow (below the name) */}
+          <div className="flex items-center justify-between gap-1.5 w-full">
+            <button
+              type="button"
+              data-testid={`session-toggle-children-${session.id}`}
+              aria-label={`${isExpanded ? 'Hide' : 'Show'} ${children.length} child session${children.length === 1 ? '' : 's'}`}
+              aria-expanded={isExpanded}
+              aria-controls={`session-child-list-${session.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleParentExpanded(session.id);
+              }}
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono bg-purple-950/90 hover:bg-purple-900 text-purple-300 border border-purple-500/40 cursor-pointer transition-colors shadow-xs"
+              title={`${children.length} child session${children.length === 1 ? '' : 's'} (click to ${isExpanded ? 'collapse' : 'expand'})`}
+            >
+              <GitFork className="w-2.5 h-2.5 text-purple-400" />
+              <span>{children.length} child{children.length === 1 ? '' : 'ren'}</span>
+              <ChevronDown className={`w-3 h-3 text-purple-400 transition-transform duration-150 ${isExpanded ? 'rotate-180' : ''}`} />
+            </button>
+          </div>
+
+          {/* Card footer (Path + tmux session) */}
+          <div
+            onClick={() => onSelectSession(session.id)}
+            className="cursor-pointer"
           >
-            {session.tmuxSessionName}
-          </span>
+            {renderCardFooter()}
+          </div>
         </div>
-      </button>
+
+        {isExpanded && (
+          <div
+            id={`session-child-list-${session.id}`}
+            data-testid={`session-child-list-${session.id}`}
+            className="ml-3 pl-2 border-l-2 border-purple-500/30 space-y-1 py-0.5 max-h-48 overflow-y-auto"
+          >
+            {visibleChildren.map((child) => renderChildListItem(child))}
+          </div>
+        )}
+      </div>
     );
   };
 
   const renderDenseSessionCard = (session: Session) => {
+    const children = childrenByParentId.get(session.id) || [];
     const isSelected = session.id === activeSessionId;
     const shortcut = shortcutLabels.get(session.id);
     const server = getServer(session.serverId);
@@ -816,7 +1034,7 @@ export function Sidebar({
     const gitChangeCount = gitChangeCountBySessionId[session.id] ?? (hasUncommittedChanges ? 1 : 0);
     const descriptionId = `session-dense-description-${session.id}`;
 
-    return (
+    const denseCard = (
       <div
         key={session.id}
         data-testid={`session-dense-item-${session.id}`}
@@ -924,6 +1142,55 @@ export function Sidebar({
         </span>
       </div>
     );
+
+    const hasFilter = Boolean(normalizedSearchTerm || statusFilter !== 'all');
+    const matchingChildren = hasFilter
+      ? children.filter(
+          (c) =>
+            sessionMatchesStatus(c) &&
+            (!normalizedSearchTerm || sessionMatchesSearch(c, normalizedSearchTerm))
+        )
+      : children;
+    const visibleChildren = hasFilter ? matchingChildren : children;
+
+    if (visibleChildren.length === 0) {
+      return denseCard;
+    }
+
+    return (
+      <div key={session.id} className="flex flex-col gap-1 min-w-0">
+        {denseCard}
+        <div
+          data-testid={`session-dense-subgrid-${session.id}`}
+          className="grid grid-cols-1 gap-1 pl-1.5 border-l-2 border-purple-500/40 mt-0.5"
+        >
+          {visibleChildren.map((child) => (
+            <button
+              key={child.id}
+              type="button"
+              data-testid={`session-item-${child.id}`}
+              onClick={() => onSelectSession(child.id)}
+              className={`px-1.5 py-1 rounded border text-left flex items-center justify-between text-[11px] cursor-pointer transition-colors ${
+                child.id === activeSessionId
+                  ? 'bg-purple-950/60 border-purple-500 text-white'
+                  : 'bg-[#12161c] border-[#30363d] text-zinc-300 hover:border-purple-400'
+              }`}
+            >
+              <span className="truncate flex items-center gap-1 min-w-0">
+                <span
+                  data-testid={`session-child-alias-${child.id}`}
+                  className="font-mono text-[9px] text-purple-400 font-medium px-1 rounded bg-purple-500/10 shrink-0"
+                >
+                  {child.childAlias || 'child'}
+                </span>
+                <span className="truncate text-[10px]">{child.name}</span>
+              </span>
+              <StatusBadge status={child.status} iconOnly className="shrink-0 scale-75" />
+            </button>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   const denseDetailSessionId = denseHoveredSessionId ?? denseFocusedSessionId;
@@ -965,6 +1232,16 @@ export function Sidebar({
 
   // Compact session icon renderer with hover popup card
   const renderCompactSessionCard = (session: Session) => {
+    const children = childrenByParentId.get(session.id) || [];
+    const hasFilter = Boolean(normalizedSearchTerm || statusFilter !== 'all');
+    const matchingChildren = hasFilter
+      ? children.filter(
+          (c) =>
+            sessionMatchesStatus(c) &&
+            (!normalizedSearchTerm || sessionMatchesSearch(c, normalizedSearchTerm))
+        )
+      : children;
+    const visibleChildren = hasFilter ? matchingChildren : children;
     const isSelected = session.id === activeSessionId;
     const shortcut = shortcutLabels.get(session.id);
     const server = getServer(session.serverId);
@@ -1003,6 +1280,17 @@ export function Sidebar({
           }`}
           title={`${displayTitle} (${session.status})${shortcut ? ` — ${shortcut}` : ''}`}
         >
+          {/* Child Count Badge (for parents with children) */}
+          {children.length > 0 && (
+            <span
+              data-testid={`session-compact-child-count-${session.id}`}
+              className="absolute -top-1 -left-1 px-1 min-w-[14px] h-[14px] rounded-full bg-purple-600 text-white font-mono text-[9px] font-bold flex items-center justify-center border border-[#161b22] z-10"
+              title={`${children.length} child session${children.length === 1 ? '' : 's'}`}
+            >
+              {children.length}
+            </span>
+          )}
+
           {agent?.harness && agent.harness !== 'none' ? (
             <AgentIcon
               harness={agent?.harness}
@@ -1045,7 +1333,7 @@ export function Sidebar({
         {/* Floating Hover Popup Card */}
         <div
           data-testid={`session-popup-${session.id}`}
-          className="hidden group-hover/compact:flex flex-col gap-1.5 absolute left-[52px] top-0 ml-2 w-72 p-2.5 rounded-lg border border-emerald-500/50 bg-[#161b22] shadow-2xl z-50 pointer-events-auto backdrop-blur-md"
+          className="hidden group-hover/compact:flex group-focus-within/compact:flex flex-col gap-1.5 absolute left-[52px] top-0 ml-2 w-72 p-2.5 rounded-lg border border-emerald-500/50 bg-[#161b22] shadow-2xl z-50 pointer-events-auto backdrop-blur-md"
           onClick={() => onSelectSession(session.id)}
         >
           {/* Row 1: [IconHost] [IconProvider]  branch  [IconStatus] [Shortcut] */}
@@ -1149,6 +1437,42 @@ export function Sidebar({
               {session.tmuxSessionName}
             </span>
           </div>
+
+          {/* Child Sessions in Hover Popup */}
+          {visibleChildren.length > 0 && (
+            <div className="mt-1 pt-1.5 border-t border-[#30363d]/60 space-y-1">
+              <div className="text-[10px] font-semibold text-purple-300 uppercase tracking-wider flex items-center justify-between">
+                <span>Child Sessions</span>
+                <span className="font-mono text-[9px] text-purple-400">({visibleChildren.length})</span>
+              </div>
+              <div className="space-y-1 max-h-36 overflow-y-auto pr-0.5">
+                {visibleChildren.map((child) => (
+                  <button
+                    key={child.id}
+                    type="button"
+                    data-testid={`session-compact-child-item-${child.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectSession(child.id);
+                    }}
+                    className={`flex w-full items-center justify-between p-1.5 rounded text-xs cursor-pointer transition-colors text-left ${
+                      child.id === activeSessionId
+                        ? 'bg-purple-500/20 text-purple-200 border border-purple-500/40'
+                        : 'hover:bg-[#21262d] text-zinc-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 truncate">
+                      <span className="text-[9px] font-mono font-medium px-1 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 shrink-0">
+                        {child.childAlias || 'child'}
+                      </span>
+                      <span className="truncate text-xs">{child.name}</span>
+                    </div>
+                    <StatusBadge status={child.status} iconOnly className="shrink-0" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1192,6 +1516,23 @@ export function Sidebar({
                   <Plus className="w-3.5 h-3.5" />
                   <span>New</span>
                 </button>
+                {onOpenCreateChildModal && (
+                  <button
+                    type="button"
+                    data-testid="sidebar-new-child-session-button"
+                    title={
+                      targetParentSession
+                        ? `Create child session under "${targetParentSession.name || targetParentSession.task}"`
+                        : 'Select a parent session to create a child session'
+                    }
+                    disabled={!targetParentSession}
+                    onClick={() => targetParentSession && onOpenCreateChildModal(targetParentSession.id)}
+                    className="flex items-center gap-1 px-2.5 py-1 bg-purple-700 hover:bg-purple-600 text-white rounded-md text-xs font-medium transition-colors shadow-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Child</span>
+                  </button>
+                )}
                 <SidebarActionsMenu
                   onRefresh={onRefresh}
                   onReloadCatalog={onReloadCatalog}
@@ -1224,6 +1565,22 @@ export function Sidebar({
               >
                 <Plus className="w-4 h-4" />
               </button>
+              {onOpenCreateChildModal && (
+                <button
+                  type="button"
+                  data-testid="sidebar-new-child-session-button-collapsed"
+                  title={
+                    targetParentSession
+                      ? `Create child session under "${targetParentSession.name || targetParentSession.task}"`
+                      : 'Select a parent session to create a child session'
+                  }
+                  disabled={!targetParentSession}
+                  onClick={() => targetParentSession && onOpenCreateChildModal(targetParentSession.id)}
+                  className="w-8 h-8 rounded-lg bg-purple-700 hover:bg-purple-600 text-white flex items-center justify-center shadow-sm cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <GitFork className="w-4 h-4" />
+                </button>
+              )}
               <SidebarActionsMenu
                 collapsed
                 onRefresh={onRefresh}
@@ -1354,6 +1711,7 @@ export function Sidebar({
               <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-zinc-500" />
               <input
                 type="text"
+                data-testid="session-search-input"
                 placeholder="Filter sessions..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
