@@ -61,7 +61,7 @@ import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
 
 function normalizeWorktreePathForComparison(path: string): string {
-  const normalized = path.replace(/[\\/]+$/, '');
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
   return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
@@ -1156,20 +1156,44 @@ export class SessionManager {
       }
     } else {
       this.logger.info('Promoting child sessions to root before parent removal', { parentId, count: children.length });
-      await this.repos.sessions.promoteChildrenToRoot(parentId);
+      const contextUpdates: Array<{ sessionId: string; previous: SessionContextFile; updated: SessionContextFile }> = [];
       for (const child of children) {
-        try {
-          const existingContext = await this.contextStore.load(child.id);
-          if (existingContext) {
-            await this.contextStore.save({
+        const existingContext = await this.contextStore.load(child.id);
+        if (existingContext) {
+          contextUpdates.push({
+            sessionId: child.id,
+            previous: existingContext,
+            updated: {
               ...existingContext,
               parentSessionId: undefined,
               childAlias: undefined,
+            },
+          });
+        }
+      }
+
+      const savedContexts: typeof contextUpdates = [];
+      const rollbackContexts = async (): Promise<void> => {
+        for (const update of savedContexts.reverse()) {
+          try {
+            await this.contextStore.save(update.previous);
+          } catch (rollbackErr) {
+            this.logger.error('Failed to roll back promoted child context', rollbackErr, {
+              childId: update.sessionId,
             });
           }
-        } catch (ctxErr) {
-          throw new Error(`Failed to update context for promoted child '${child.id}'`, { cause: ctxErr });
         }
+      };
+
+      try {
+        for (const update of contextUpdates) {
+          await this.contextStore.save(update.updated);
+          savedContexts.push(update);
+        }
+        await this.repos.sessions.promoteChildrenToRoot(parentId);
+      } catch (err) {
+        await rollbackContexts();
+        throw new Error('Failed to promote child sessions to root', { cause: err });
       }
     }
   }
@@ -1283,10 +1307,9 @@ export class SessionManager {
       this.logger.warn('Error querying session for tmux cleanup during deletion', { error: err });
     }
 
-    try {
-      await this.contextStore.delete(sessionId);
-    } catch (err) {
-      this.logger.warn('Failed to delete context file during deletion', { error: err });
+    const contextDeleted = await this.contextStore.delete(sessionId);
+    if (!contextDeleted) {
+      throw new Error(`Failed to delete context file for session '${sessionId}'`);
     }
 
     try {
@@ -1382,14 +1405,19 @@ export class SessionManager {
         // leaves the managed worktree available for recovery.
         await this.reconcileChildrenForParentRemoval(sessionId, 'leave-children');
 
-        // 4. Remove worktree
+        // 4. Remove context before the worktree so a failed cleanup leaves the
+        // session and its managed worktree available for retry.
+        if (!(await this.contextStore.delete(sessionId))) {
+          throw new Error(`Failed to delete context file for session '${sessionId}'`);
+        }
+
+        // 5. Remove worktree
         await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
 
-        // 5. Delete integrated task branch
+        // 6. Delete integrated task branch
         await this.gitService.deleteIntegratedBranch(host, identity);
 
-        // 6. Clean up session DB and context store
-        await this.contextStore.delete(sessionId);
+        // 7. Clean up session DB
         await this.repos.sessions.delete(sessionId);
 
         this.logger.info('Session successfully integrated and finalized', { sessionId, branch: identity.branch });
@@ -1425,11 +1453,16 @@ export class SessionManager {
         // leaves the managed worktree available for recovery.
         await this.reconcileChildrenForParentRemoval(sessionId, 'leave-children');
 
-        // 4. Remove worktree (preserves task branch)
+        // 4. Remove context before the worktree so a failed cleanup leaves the
+        // session and its managed worktree available for retry.
+        if (!(await this.contextStore.delete(sessionId))) {
+          throw new Error(`Failed to delete context file for session '${sessionId}'`);
+        }
+
+        // 5. Remove worktree (preserves task branch)
         await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
 
-        // 5. Clean up session DB and context store
-        await this.contextStore.delete(sessionId);
+        // 6. Clean up session DB
         await this.repos.sessions.delete(sessionId);
 
         this.logger.info('Session worktree closed and session record removed while preserving branch', {
