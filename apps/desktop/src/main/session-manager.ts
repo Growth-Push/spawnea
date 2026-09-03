@@ -1371,20 +1371,18 @@ export class SessionManager {
       throw new Error(`Session '${sessionId}' does not have an associated task branch`);
     }
 
-    // Same-project children share the parent's worktree and must not survive
-    // its removal with a path that no longer exists.
     const children = await this.repos.sessions.findByParentId(sessionId);
-    for (const child of children) {
-      if (!child.managedWorktree && child.worktreePath === session.worktreePath) {
-        await this.deleteSession(child.id, 'close-all');
-      }
-    }
+    const sameWorktreeChildIds = new Set(
+      children
+        .filter((child) => !child.managedWorktree && child.worktreePath === session.worktreePath)
+        .map((child) => child.id)
+    );
 
     // Check if any other session is currently using this worktree
     const allSessions = await this.repos.sessions.findAll();
     const normalizedSessionPath = normalizeWorktreePathForComparison(session.worktreePath);
     const sharingSessions = allSessions.filter(
-      (s) => s.id !== sessionId && normalizeWorktreePathForComparison(s.worktreePath) === normalizedSessionPath
+      (s) => s.id !== sessionId && !sameWorktreeChildIds.has(s.id) && normalizeWorktreePathForComparison(s.worktreePath) === normalizedSessionPath
     );
     if (sharingSessions.length > 0) {
       throw new Error(
