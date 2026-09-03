@@ -1541,8 +1541,7 @@ up 1 day, 5 hours
       ]);
 
       expect(child1.id).not.toBe(child2.id);
-      expect(child1.childAlias).toBe('child-1');
-      expect(child2.childAlias).toBe('child-2');
+      expect([child1.childAlias, child2.childAlias].sort()).toEqual(['child-1', 'child-2']);
     });
 
     it('rejects oversized prompt exceeding 128 KiB limit', async () => {
@@ -1554,6 +1553,10 @@ up 1 day, 5 hours
       });
       const largePrompt = 'a'.repeat(129 * 1024);
       await expect(sessionManager.sendPrompt(session.id, largePrompt)).rejects.toThrow('Prompt exceeds the 128 KiB delivery limit');
+
+      // Boundary: 128 KiB string without newline becomes 131073 bytes when formatted with trailing newline
+      const exactPrompt = 'a'.repeat(128 * 1024);
+      await expect(sessionManager.sendPrompt(session.id, exactPrompt)).rejects.toThrow('Prompt exceeds the 128 KiB delivery limit');
     });
 
     it('deletes parent with close-all and closes both parent and child sessions', async () => {

@@ -963,10 +963,10 @@ export class SessionManager {
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
     }
-    if (Buffer.byteLength(prompt, 'utf8') > 128 * 1024) {
+    const formattedPrompt = prompt.endsWith('\n') ? prompt : `${prompt}\n`;
+    if (Buffer.byteLength(formattedPrompt, 'utf8') > 128 * 1024) {
       throw new Error('Prompt exceeds the 128 KiB delivery limit');
     }
-    const formattedPrompt = prompt.endsWith('\n') ? prompt : `${prompt}\n`;
     const ptyChannelId = `pty-${session.id}`;
     const metrics = this.ptyBroker.getMetrics(ptyChannelId);
 
