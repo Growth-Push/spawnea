@@ -62,7 +62,7 @@ import type { PtyBroker } from './pty-broker.js';
 
 function normalizeWorktreePathForComparison(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
-  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+  return /^[A-Za-z]:/.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
 export interface AttachedSessionInfo {
