@@ -657,6 +657,16 @@ function registerIpcHandlers(
     }
   });
 
+  ipcMain.handle('session:clearArtifacts', async (_event, sessionId: string) => {
+    try {
+      logger.info('Handling session:clearArtifacts', { sessionId });
+      return await artManager.clearArtifacts(sessionId);
+    } catch (err) {
+      logger.error('Failed to handle session:clearArtifacts', err, { sessionId });
+      throw err;
+    }
+  });
+
   ipcMain.handle('session:saveArtifactAs', async (event, sessionId: string, artifactId: string) => {
     try {
       const artifact = await repos.artifacts.findById(artifactId);
