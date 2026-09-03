@@ -721,10 +721,11 @@ describe('App Desktop Shell', () => {
       expect(screen.getByTestId('workspace-worktree-change-count').textContent).toBe('1');
     });
 
+    const callsBeforeSwitch = gitStatusCallsBySessionId[nonManagedDirtySession.id] ?? 0;
     fireEvent.click(screen.getByTestId(`session-item-${nonManagedDirtySession.id}`));
 
     await waitFor(() => {
-      expect(gitStatusCallsBySessionId[nonManagedDirtySession.id]).toBeGreaterThan(1);
+      expect(gitStatusCallsBySessionId[nonManagedDirtySession.id]).toBeGreaterThan(callsBeforeSwitch);
       expect(screen.getByTestId('contextbar-git-dirty-indicator')).toBeDefined();
       expect(screen.getByTestId('contextbar-git-change-count').textContent).toBe('3');
       expect(screen.getByTestId('workspace-git-dirty-indicator')).toBeDefined();
