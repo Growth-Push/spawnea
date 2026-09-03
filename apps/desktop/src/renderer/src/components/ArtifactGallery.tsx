@@ -28,7 +28,7 @@ export interface ArtifactGalleryProps {
   sessionId: string;
   artifacts: Artifact[];
   isLoading?: boolean;
-  onRefresh?: () => void;
+  onRefresh: () => void;
   onUploadFile?: (file: File) => Promise<void>;
   onPasteImage?: () => Promise<void>;
   onDeleteArtifact?: (artifactId: string) => Promise<void>;
@@ -52,6 +52,7 @@ export function ArtifactGallery({
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [selectedArtifact, setSelectedArtifact] = useState<Artifact | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Hidden Artifacts & Context Menu State
@@ -210,6 +211,35 @@ export function ArtifactGallery({
     }
   };
 
+  const handleClear = async () => {
+    if (artifacts.length === 0 || isClearing) return;
+    if (!confirm(`Clear all ${artifacts.length} artifacts from this session? Remote files will not be deleted.`)) {
+      return;
+    }
+    if (!window.spawneaApi?.clearArtifacts) {
+      showToast('Artifact clearing is unavailable in this app version');
+      return;
+    }
+
+    setIsClearing(true);
+    try {
+      await window.spawneaApi.clearArtifacts(sessionId);
+      setSelectedArtifact(null);
+      setHiddenArtifactIds(new Set());
+      try {
+        localStorage.removeItem(`spawnea:hiddenArtifacts:${sessionId}`);
+      } catch {
+        // Hidden state is already reset in memory.
+      }
+      onRefresh();
+      showToast('Cleared session artifacts');
+    } catch (err: any) {
+      showToast(`Failed to clear artifacts: ${err?.message || 'Error'}`);
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
   const handleCardContextMenu = (e: React.MouseEvent, art: Artifact) => {
     e.preventDefault();
     e.stopPropagation();
@@ -355,10 +385,19 @@ export function ArtifactGallery({
             {isUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
             <span>Upload File</span>
           </button>
+          <button
+            type="button"
+            onClick={handleClear}
+            disabled={artifacts.length === 0 || isClearing}
+            data-testid="clear-artifacts-button"
+            title="Clear all artifacts from this session"
+            className="flex items-center gap-1.5 px-3 py-1 bg-[#21262d] hover:bg-rose-950 text-zinc-300 hover:text-rose-300 border border-[#30363d] hover:border-rose-800 rounded text-xs font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {isClearing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+            <span>Clear</span>
+          </button>
         </div>
       </div>
-
-      {/* Main Gallery Area */}
       <div className="flex-1 p-4 overflow-y-auto">
         {isLoading ? (
           <div className="h-full flex items-center justify-center p-12 text-zinc-500 text-xs">
@@ -391,7 +430,7 @@ export function ArtifactGallery({
           </div>
         ) : viewMode === 'grid' ? (
           /* Grid View */
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
+          <div data-testid="artifact-grid" className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
             {filteredArtifacts.map((art) => {
               const isHidden = hiddenArtifactIds.has(art.id);
               return (
@@ -400,7 +439,7 @@ export function ArtifactGallery({
                   data-testid={`artifact-card-${art.id}`}
                   onClick={() => setSelectedArtifact(art)}
                   onContextMenu={(e) => handleCardContextMenu(e, art)}
-                  className={`p-3.5 bg-[#12161c] border rounded-xl flex flex-col justify-between gap-3 text-xs transition-all cursor-pointer group shadow-sm hover:shadow-md ${
+                  className={`p-2.5 bg-[#12161c] border rounded-lg flex flex-col justify-between gap-2 text-xs transition-all cursor-pointer group shadow-sm hover:shadow-md ${
                     isHidden
                       ? 'border-amber-900/40 opacity-50 hover:opacity-90 hover:border-amber-500/60'
                       : 'border-[#30363d] hover:border-emerald-500/60'
@@ -408,7 +447,7 @@ export function ArtifactGallery({
                 >
                   <div>
                     <div className="flex items-start justify-between gap-2 mb-2">
-                      <div className="p-2 bg-[#161b22] border border-[#30363d] rounded-lg">
+                      <div className="p-1.5 bg-[#161b22] border border-[#30363d] rounded-md">
                         {getFileIcon(art.mimeType, art.filename)}
                       </div>
                       <div className="flex items-center gap-1">
@@ -432,14 +471,14 @@ export function ArtifactGallery({
                     <p className="font-medium text-zinc-100 truncate text-xs group-hover:text-emerald-300 transition-colors" title={art.filename}>
                       {art.filename}
                     </p>
-                    <p className="text-[10px] text-zinc-500 font-mono mt-0.5 truncate" title={art.remotePath}>
+                    <p className="text-[9px] text-zinc-500 font-mono mt-0.5 truncate" title={art.remotePath}>
                       {formatBytes(art.sizeBytes)} • {new Date(art.createdAt).toLocaleDateString()}
                     </p>
                   </div>
 
                   {/* Card Quick Actions */}
-                  <div className="flex items-center justify-between pt-2 border-t border-[#21262d] text-zinc-400">
-                    <span className="text-[10px] text-zinc-500 font-mono truncate max-w-[90px]">
+                  <div className="flex items-center justify-between pt-1.5 border-t border-[#21262d] text-zinc-400">
+                    <span className="text-[9px] text-zinc-500 font-mono truncate max-w-[70px]">
                       {art.mimeType.split('/').pop()}
                     </span>
                     <div className="flex items-center gap-1">

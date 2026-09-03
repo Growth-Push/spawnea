@@ -51,6 +51,7 @@ describe('ArtifactGallery Component', () => {
         mimeType: 'text/markdown',
       }),
       deleteArtifact: vi.fn().mockResolvedValue(true),
+      clearArtifacts: vi.fn().mockResolvedValue(2),
       saveArtifactAs: vi.fn().mockResolvedValue(true),
       openArtifactInOs: vi.fn().mockResolvedValue(true),
     };
@@ -60,7 +61,7 @@ describe('ArtifactGallery Component', () => {
   });
 
   it('renders artifact cards and counts in filter chips', () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     expect(screen.getByText('All (2)')).toBeDefined();
     expect(screen.getByText('Inputs (1)')).toBeDefined();
@@ -70,7 +71,7 @@ describe('ArtifactGallery Component', () => {
   });
 
   it('filters artifacts by direction', () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     fireEvent.click(screen.getByTestId('filter-artifacts-input'));
     expect(screen.getByText('screenshot.png')).toBeDefined();
@@ -82,7 +83,7 @@ describe('ArtifactGallery Component', () => {
   });
 
   it('searches artifacts by filename', () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     const searchInput = screen.getByTestId('search-artifacts-input');
     fireEvent.change(searchInput, { target: { value: 'README' } });
@@ -92,7 +93,7 @@ describe('ArtifactGallery Component', () => {
   });
 
   it('opens preview modal when clicking an artifact card', async () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     fireEvent.click(screen.getByTestId('artifact-card-art-2'));
 
@@ -106,7 +107,7 @@ describe('ArtifactGallery Component', () => {
   });
 
   it('supports hiding and unhiding an artifact card', async () => {
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     expect(screen.getByText('screenshot.png')).toBeDefined();
 
@@ -131,7 +132,7 @@ describe('ArtifactGallery Component', () => {
     const addBlacklistMock = vi.fn().mockResolvedValue(['package-lock.json', 'screenshot.png']);
     (window as any).spawneaApi.addArtifactToBlacklist = addBlacklistMock;
 
-    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} />);
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
 
     const card = screen.getByTestId('artifact-card-art-1');
     fireEvent.contextMenu(card, { clientX: 100, clientY: 100 });
@@ -141,5 +142,50 @@ describe('ArtifactGallery Component', () => {
 
     fireEvent.click(screen.getByTestId('artifact-context-blacklist-exact'));
     expect(addBlacklistMock).toHaveBeenCalledWith('screenshot.png');
+  });
+
+  it('requires confirmation before clearing and refreshes after accepting', async () => {
+    const confirmMock = vi.fn().mockReturnValue(false);
+    vi.stubGlobal('confirm', confirmMock);
+    const refresh = vi.fn();
+    localStorage.setItem('spawnea:hiddenArtifacts:sess-1', JSON.stringify(['art-1']));
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={refresh} />);
+
+    fireEvent.click(screen.getByTestId('clear-artifacts-button'));
+    expect(confirmMock).toHaveBeenCalledWith(
+      'Clear all 2 artifacts from this session? Remote files will not be deleted.'
+    );
+    expect(window.spawneaApi.clearArtifacts).not.toHaveBeenCalled();
+
+    confirmMock.mockReturnValue(true);
+    fireEvent.click(screen.getByTestId('clear-artifacts-button'));
+    await waitFor(() => {
+      expect(window.spawneaApi.clearArtifacts).toHaveBeenCalledWith('sess-1');
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+    expect(localStorage.getItem('spawnea:hiddenArtifacts:sess-1')).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('uses a dense responsive grid for many artifacts', () => {
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
+    expect(screen.getByTestId('artifact-grid').className).toContain('xl:grid-cols-6');
+  });
+
+  it('reports when the clear bridge is unavailable', async () => {
+    const confirmMock = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('confirm', confirmMock);
+    const clearArtifacts = window.spawneaApi.clearArtifacts;
+    delete (window.spawneaApi as Partial<Window['spawneaApi']>).clearArtifacts;
+
+    render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('clear-artifacts-button'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Artifact clearing is unavailable in this app version')).toBeDefined();
+    });
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    (window.spawneaApi as Window['spawneaApi']).clearArtifacts = clearArtifacts;
+    vi.unstubAllGlobals();
   });
 });

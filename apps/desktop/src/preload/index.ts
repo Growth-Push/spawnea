@@ -186,6 +186,8 @@ export const api = {
     ipcRenderer.invoke('session:getArtifactContent', sessionId, artifactId, maxBytes),
   deleteArtifact: (sessionId: string, artifactId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:deleteArtifact', sessionId, artifactId),
+  clearArtifacts: (sessionId: string): Promise<number> =>
+    ipcRenderer.invoke('session:clearArtifacts', sessionId),
   saveArtifactAs: (sessionId: string, artifactId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:saveArtifactAs', sessionId, artifactId),
   openArtifactInOs: (sessionId: string, artifactId: string): Promise<boolean> =>

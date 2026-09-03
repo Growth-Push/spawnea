@@ -234,6 +234,7 @@ export interface IpcChannels {
     maxBytes?: number
   ) => Promise<import('./index.js').FileContentResult>;
   'session:deleteArtifact': (sessionId: string, artifactId: string) => Promise<boolean>;
+  'session:clearArtifacts': (sessionId: string) => Promise<number>;
   'session:saveArtifactAs': (sessionId: string, artifactId: string) => Promise<boolean>;
   'session:openArtifactInOs': (sessionId: string, artifactId: string) => Promise<boolean>;
 

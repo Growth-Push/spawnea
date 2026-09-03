@@ -37,6 +37,7 @@ export class ArtifactManager {
   private readonly cacheDir: string;
   private readonly blacklistFilePath: string;
   private readonly logger: Logger;
+  private readonly sessionArtifactLocks = new Map<string, Promise<void>>();
 
   constructor(options: ArtifactManagerOptions) {
     this.repos = options.repositories;
@@ -169,6 +170,17 @@ export class ArtifactManager {
     direction: ArtifactDirection = 'input',
     customFilename?: string
   ): Promise<Artifact> {
+    return this.withSessionArtifactLock(sessionId, () =>
+      this.uploadArtifactFileUnlocked(sessionId, localSourcePath, direction, customFilename)
+    );
+  }
+
+  private async uploadArtifactFileUnlocked(
+    sessionId: string,
+    localSourcePath: string,
+    direction: ArtifactDirection = 'input',
+    customFilename?: string
+  ): Promise<Artifact> {
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
@@ -227,6 +239,18 @@ export class ArtifactManager {
    * Writes an in-memory buffer (e.g. pasted clipboard image) to the remote session and local cache.
    */
   async uploadArtifactBuffer(
+    sessionId: string,
+    buffer: Buffer | Uint8Array,
+    filename: string,
+    mimeType: string,
+    direction: ArtifactDirection = 'input'
+  ): Promise<Artifact> {
+    return this.withSessionArtifactLock(sessionId, () =>
+      this.uploadArtifactBufferUnlocked(sessionId, buffer, filename, mimeType, direction)
+    );
+  }
+
+  private async uploadArtifactBufferUnlocked(
     sessionId: string,
     buffer: Buffer | Uint8Array,
     filename: string,
@@ -299,6 +323,15 @@ export class ArtifactManager {
    * Promotes an existing workspace file to a tracked session output artifact.
    */
   async promoteFile(
+    sessionId: string,
+    relativeOrAbsolutePath: string
+  ): Promise<Artifact> {
+    return this.withSessionArtifactLock(sessionId, () =>
+      this.promoteFileUnlocked(sessionId, relativeOrAbsolutePath)
+    );
+  }
+
+  private async promoteFileUnlocked(
     sessionId: string,
     relativeOrAbsolutePath: string
   ): Promise<Artifact> {
@@ -383,6 +416,15 @@ export class ArtifactManager {
     sessionId: string,
     detectedPath: string
   ): Promise<Artifact | null> {
+    return this.withSessionArtifactLock(sessionId, () =>
+      this.handleDetectedOutputUnlocked(sessionId, detectedPath)
+    );
+  }
+
+  private async handleDetectedOutputUnlocked(
+    sessionId: string,
+    detectedPath: string
+  ): Promise<Artifact | null> {
     try {
       const session = await this.repos.sessions.findById(sessionId);
       if (!session) return null;
@@ -403,6 +445,30 @@ export class ArtifactManager {
         return null;
       }
 
+      const host = await this.sessionManager.getHostAdapter(session.serverId);
+      const worktreeForGit = await this.sessionManager.resolveSessionWorktreePath(session);
+      try {
+        const tracked = await host.execute(
+          `git ls-files --error-unmatch -- ${quoteShellArgument(`:(literal)${promotablePath}`)}`,
+          { cwd: worktreeForGit.value }
+        );
+        if (tracked.exitCode === 0) {
+          this.logger.info('Ignoring detected versioned file', { sessionId, path: promotablePath });
+          return null;
+        }
+        if (tracked.exitCode !== 1) {
+          this.logger.warn('Could not determine whether detected file is versioned', {
+            sessionId,
+            path: promotablePath,
+            exitCode: tracked.exitCode,
+            stderr: tracked.stderr,
+          });
+          return null;
+        }
+      } finally {
+        worktreeForGit.release();
+      }
+
       // Check if already registered
       const existing = await this.repos.artifacts.findBySessionId(sessionId);
       const persistedTargetPath = `${session.worktreePath.replace(/\/+$/, '')}/${promotablePath}`;
@@ -410,7 +476,6 @@ export class ArtifactManager {
         return null; // Already tracked
       }
 
-      const host = await this.sessionManager.getHostAdapter(session.serverId);
       const runtimeTargetPath = await this.sessionManager.resolvePersistedSessionPath(session, persistedTargetPath);
       try {
         const rstat = await host.stat(runtimeTargetPath.value).catch(() => null);
@@ -421,7 +486,7 @@ export class ArtifactManager {
         runtimeTargetPath.release();
       }
 
-      return await this.promoteFile(sessionId, promotablePath);
+      return await this.promoteFileUnlocked(sessionId, promotablePath);
     } catch {
       return null;
     }
@@ -431,6 +496,16 @@ export class ArtifactManager {
    * Reads artifact content, using local cache when available or downloading on demand.
    */
   async getArtifactContent(
+    sessionId: string,
+    artifactId: string,
+    maxBytes = 10 * 1024 * 1024
+  ): Promise<FileContentResult> {
+    return this.withSessionArtifactLock(sessionId, () =>
+      this.getArtifactContentUnlocked(sessionId, artifactId, maxBytes)
+    );
+  }
+
+  private async getArtifactContentUnlocked(
     sessionId: string,
     artifactId: string,
     maxBytes = 10 * 1024 * 1024
@@ -522,6 +597,12 @@ export class ArtifactManager {
    * Deletes an artifact from the registry and removes the local cached copy.
    */
   async deleteArtifact(sessionId: string, artifactId: string): Promise<boolean> {
+    return this.withSessionArtifactLock(sessionId, () =>
+      this.deleteArtifactUnlocked(sessionId, artifactId)
+    );
+  }
+
+  private async deleteArtifactUnlocked(sessionId: string, artifactId: string): Promise<boolean> {
     const artifact = await this.repos.artifacts.findById(artifactId);
     if (!artifact || artifact.sessionId !== sessionId) {
       return false;
@@ -540,6 +621,46 @@ export class ArtifactManager {
     this.logger.info('Deleted artifact record', { sessionId, artifactId });
     return this.repos.artifacts.delete(artifactId);
   }
+
+  /** Clears the session registry and local cache without touching remote files. */
+  async clearArtifacts(sessionId: string): Promise<number> {
+    return this.withSessionArtifactLock(sessionId, async () => {
+      const session = await this.repos.sessions.findById(sessionId);
+      if (!session) {
+        throw new Error(`Session '${sessionId}' not found`);
+      }
+
+      const artifacts = await this.repos.artifacts.findBySessionId(sessionId);
+      const deleted = await Promise.all(
+        artifacts.map((artifact) => this.deleteArtifactUnlocked(sessionId, artifact.id))
+      );
+      return deleted.filter(Boolean).length;
+    });
+  }
+
+  private async withSessionArtifactLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.sessionArtifactLocks.get(sessionId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.then(() => current);
+    this.sessionArtifactLocks.set(sessionId, queued);
+
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.sessionArtifactLocks.get(sessionId) === queued) {
+        this.sessionArtifactLocks.delete(sessionId);
+      }
+    }
+  }
+}
+
+function quoteShellArgument(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function getMimeType(filePath: string): string {

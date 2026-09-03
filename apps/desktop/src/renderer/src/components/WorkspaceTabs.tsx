@@ -53,6 +53,7 @@ interface WorkspaceTabsProps {
   gitChangeCount?: number;
   gitAhead?: number;
   gitBehind?: number;
+  onGitStatusChange?: (sessionId: string, status: GitStatusResult) => void;
   activeTab: WorkspaceTabType;
   onTabChange: (tab: WorkspaceTabType) => void;
   onAttach?: (sessionId: string) => void;
@@ -116,6 +117,7 @@ export function WorkspaceTabs({
   gitChangeCount = hasUncommittedChanges ? 1 : 0,
   gitAhead = 0,
   gitBehind = 0,
+  onGitStatusChange,
   activeTab,
   onTabChange,
   onAttach,
@@ -216,6 +218,7 @@ export function WorkspaceTabs({
       const status = await window.spawneaApi.getGitStatus(sessionId);
       if (!isCurrentRequest()) return;
       setGitStatus(status);
+      onGitStatusChange?.(sessionId, status);
 
       const changedFilePaths = new Set([
         ...status.staged,
@@ -240,7 +243,7 @@ export function WorkspaceTabs({
     } finally {
       if (isCurrentRequest()) setIsLoadingGit(false);
     }
-  }, [session?.branch]);
+  }, [onGitStatusChange, session?.branch]);
 
   useEffect(() => {
     gitRequestGeneration.current += 1;

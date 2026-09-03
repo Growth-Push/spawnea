@@ -191,9 +191,9 @@ export const DEFAULT_PATTERN_RULES: PatternRule[] = [
     name: 'Hermes Completed Turn Metrics Checkmark',
     category: 'idle_prompt',
     harness: 'hermes',
-    pattern: /[|│]\s*(?:✓\s*\d+[smh]|⏲\s*\d+[smh])/i,
+    pattern: /^\s*⚕[^\n]*[|│]\s*✓\s*\d+(?:ms|[smh])(?:\s|$)/im,
     confidence: 0.98,
-    description: 'Matches Hermes turn completion checkmark (✓) or frozen timer (⏲) in metrics bar (e.g. | ✓ 4m or | ⏲ 30s)',
+    description: 'Matches the Hermes metrics bar completion checkmark (e.g. | ✓ 4m or | ✓9ms)',
   },
   {
     id: 'hermes-idle-prompt',

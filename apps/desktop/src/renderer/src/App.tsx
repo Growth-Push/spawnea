@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type {
   Session,
   Server,
@@ -10,6 +10,7 @@ import type {
   CatalogValidationError,
   HostSystemInfo,
   HostHealthResult,
+  GitStatusResult,
   FinishSessionAction,
   FinishSessionOptions,
   AddProjectToCatalogInput,
@@ -67,6 +68,23 @@ export function App(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
   const [controlFinalizationRequests, setControlFinalizationRequests] = useState<ControlFinalizationRequest[]>([]);
+  const gitRequestGeneration = useRef(0);
+
+  const handleGitStatusChange = useCallback((sessionId: string, status: GitStatusResult) => {
+    gitRequestGeneration.current += 1;
+    setGitDirtyBySessionId((current) => ({
+      ...current,
+      [sessionId]: status.isGitRepo && !status.isClean,
+    }));
+    setGitChangeCountBySessionId((current) => ({
+      ...current,
+      [sessionId]: status.isGitRepo ? status.totalChanges : 0,
+    }));
+    setGitSyncBySessionId((current) => ({
+      ...current,
+      [sessionId]: { ahead: status.ahead, behind: status.behind },
+    }));
+  }, []);
 
   // Tab persistence helper
   const getSavedTab = (sessionId: string | null): WorkspaceTabType => {
@@ -290,6 +308,7 @@ export function App(): React.JSX.Element {
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
     const refreshGitStatus = async (): Promise<void> => {
+      const requestGeneration = ++gitRequestGeneration.current;
       const results = await Promise.allSettled(
         sessionIds.map(async (sessionId) => ({
           sessionId,
@@ -298,6 +317,10 @@ export function App(): React.JSX.Element {
       );
 
       if (cancelled) return;
+      if (requestGeneration !== gitRequestGeneration.current) {
+        pollTimer = setTimeout(refreshGitStatus, 15_000);
+        return;
+      }
 
       setGitDirtyBySessionId((current) => {
         const next: Record<string, boolean> = {};
@@ -968,6 +991,7 @@ export function App(): React.JSX.Element {
               gitChangeCount={activeSession ? gitChangeCountBySessionId[activeSession.id] : 0}
               gitAhead={activeSession ? gitSyncBySessionId[activeSession.id]?.ahead : 0}
               gitBehind={activeSession ? gitSyncBySessionId[activeSession.id]?.behind : 0}
+              onGitStatusChange={handleGitStatusChange}
               activeTab={activeTab}
               onTabChange={handleTabChange}
               onAttach={handleAttachSession}

@@ -85,6 +85,7 @@ const renderSidebar = (
     onSelectSession?: (id: string) => void;
     activeSessionId?: string | null;
     gitDirtyBySessionId?: Record<string, boolean>;
+    gitChangeCountBySessionId?: Record<string, number>;
     isCollapsed?: boolean;
   } = {}
 ) => render(
@@ -94,6 +95,7 @@ const renderSidebar = (
     projects={mockProjects}
     agents={mockAgents}
     gitDirtyBySessionId={options.gitDirtyBySessionId}
+    gitChangeCountBySessionId={options.gitChangeCountBySessionId}
     activeSessionId={options.activeSessionId ?? sessions[0]?.id ?? null}
     onSelectSession={options.onSelectSession ?? vi.fn()}
     onOpenCreateModal={vi.fn()}
@@ -307,6 +309,16 @@ describe('Sidebar with Parallel Host Health Indicators', () => {
     const path = screen.getByTestId('session-path-sess-1');
     expect(path.textContent).toBe('/w/s/fixovertext-mtcm12u3-vq4l');
     expect(path.getAttribute('title')).toBe(longPath);
+  });
+
+  it('shows the Git change count in the collapsed session popup', () => {
+    renderSidebar(mockSessions, {
+      isCollapsed: true,
+      gitDirtyBySessionId: { 'sess-1': true },
+      gitChangeCountBySessionId: { 'sess-1': 4 },
+    });
+
+    expect(screen.getByTestId('session-compact-worktree-change-count-sess-1').textContent).toBe('4');
   });
 
   it('renders host health dots in server inventory popup', () => {
