@@ -84,6 +84,8 @@ export const AgentSchema = z.object({
 export const SessionSchema = z.object({
   id: z.string().uuid().or(z.string().min(1)),
   name: z.string().min(1),
+  parentSessionId: z.string().optional(),
+  childAlias: z.string().optional(),
   serverId: z.string().min(1),
   projectId: z.string().min(1),
   agentId: z.string().min(1),

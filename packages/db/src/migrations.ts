@@ -103,6 +103,22 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE sessions ADD COLUMN creation_source TEXT NOT NULL DEFAULT 'ui';
     `,
   },
+  {
+    name: '0007_add_session_hierarchy',
+    sql: `
+      ALTER TABLE sessions ADD COLUMN parent_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL;
+      ALTER TABLE sessions ADD COLUMN child_alias TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id ON sessions(parent_session_id);
+
+      CREATE TABLE IF NOT EXISTS session_child_alias_counters (
+        parent_session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        next_alias_index INTEGER NOT NULL DEFAULT 1
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_parent_child_alias ON sessions(parent_session_id, child_alias) WHERE parent_session_id IS NOT NULL AND child_alias IS NOT NULL;
+    `,
+  },
 ];
 
 export function runMigrations(sqlite: Database.Database, migrations: Migration[] = MIGRATIONS): {

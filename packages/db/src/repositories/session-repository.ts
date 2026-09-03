@@ -1,8 +1,8 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Session, SessionRepository, SessionStatus, Logger } from '@spawnea/domain';
 import { createLogger } from '@spawnea/domain';
 import type { DbClient } from '../connection.js';
-import { sessions } from '../schema.js';
+import { sessions, sessionChildAliasCounters } from '../schema.js';
 import { toSession } from '../mappers.js';
 
 export class SqliteSessionRepository implements SessionRepository {
@@ -58,6 +58,86 @@ export class SqliteSessionRepository implements SessionRepository {
     return rows.map(toSession);
   }
 
+  async findByParentId(parentId: string): Promise<Session[]> {
+    this.logger.debug('Finding child sessions by parent ID', { parentId });
+    const rows = await this.db.select().from(sessions).where(eq(sessions.parentSessionId, parentId));
+    return rows.map(toSession);
+  }
+
+  async findByParentAndAlias(parentId: string, childAlias: string): Promise<Session | null> {
+    this.logger.debug('Finding child session by parent ID and alias', { parentId, childAlias });
+    const rows = await this.db
+      .select()
+      .from(sessions)
+      .where(and(eq(sessions.parentSessionId, parentId), eq(sessions.childAlias, childAlias)));
+    return rows.length > 0 ? toSession(rows[0]) : null;
+  }
+
+  async allocateChildAlias(parentId: string): Promise<string> {
+    this.logger.debug('Allocating next child alias for parent', { parentId });
+    return this.db.transaction((tx) => {
+      const existing = tx
+        .select()
+        .from(sessionChildAliasCounters)
+        .where(eq(sessionChildAliasCounters.parentSessionId, parentId))
+        .all();
+
+      let nextIndex = 1;
+      if (existing.length > 0) {
+        nextIndex = existing[0].nextAliasIndex;
+      }
+
+      const existingChildren = tx
+        .select()
+        .from(sessions)
+        .where(eq(sessions.parentSessionId, parentId))
+        .all();
+
+      let maxExisting = 0;
+      for (const child of existingChildren) {
+        const match = child.childAlias?.match(/^child-(\d+)$/);
+        if (match) {
+          maxExisting = Math.max(maxExisting, parseInt(match[1], 10));
+        }
+      }
+      if (nextIndex <= maxExisting) {
+        nextIndex = maxExisting + 1;
+      }
+
+      const assignedAlias = `child-${nextIndex}`;
+      const nextCounterValue = nextIndex + 1;
+
+      if (existing.length > 0) {
+        tx.update(sessionChildAliasCounters)
+          .set({ nextAliasIndex: nextCounterValue })
+          .where(eq(sessionChildAliasCounters.parentSessionId, parentId))
+          .run();
+      } else {
+        tx.insert(sessionChildAliasCounters)
+          .values({
+            parentSessionId: parentId,
+            nextAliasIndex: nextCounterValue,
+          })
+          .run();
+      }
+
+      return assignedAlias;
+    });
+  }
+
+  async promoteChildrenToRoot(parentId: string): Promise<number> {
+    this.logger.info('Promoting child sessions of parent to root', { parentId });
+    const result = await this.db
+      .update(sessions)
+      .set({ parentSessionId: null, childAlias: null })
+      .where(eq(sessions.parentSessionId, parentId));
+    return result.changes;
+  }
+
+  async clearParentReferences(parentId: string): Promise<number> {
+    return this.promoteChildrenToRoot(parentId);
+  }
+
   async save(
     session: Omit<Session, 'createdAt' | 'lastActivityAt'> & {
       createdAt?: Date;
@@ -92,6 +172,8 @@ export class SqliteSessionRepository implements SessionRepository {
         tmuxSessionName: session.tmuxSessionName,
         tmuxWindowName: session.tmuxWindowName ?? null,
         status: session.status,
+        parentSessionId: session.parentSessionId ?? null,
+        childAlias: session.childAlias ?? null,
         creationSource: session.creationSource ?? existing.creationSource ?? 'ui',
         isExternal: session.isExternal ?? existing.isExternal ?? false,
         lastActivityAt: session.lastActivityAt ?? now,
@@ -126,6 +208,8 @@ export class SqliteSessionRepository implements SessionRepository {
       tmuxSessionName: session.tmuxSessionName,
       tmuxWindowName: session.tmuxWindowName ?? null,
       status: session.status,
+      parentSessionId: session.parentSessionId ?? null,
+      childAlias: session.childAlias ?? null,
       creationSource: session.creationSource ?? 'ui',
       isExternal: session.isExternal ?? false,
       createdAt: session.createdAt ?? now,
@@ -173,6 +257,8 @@ export class SqliteSessionRepository implements SessionRepository {
     if (updates.tmuxSessionName !== undefined) setValues.tmuxSessionName = updates.tmuxSessionName;
     if (updates.tmuxWindowName !== undefined) setValues.tmuxWindowName = updates.tmuxWindowName;
     if (updates.status !== undefined) setValues.status = updates.status;
+    if (updates.parentSessionId !== undefined) setValues.parentSessionId = updates.parentSessionId ?? null;
+    if (updates.childAlias !== undefined) setValues.childAlias = updates.childAlias ?? null;
     if (updates.creationSource !== undefined) setValues.creationSource = updates.creationSource;
     if (updates.isExternal !== undefined) setValues.isExternal = updates.isExternal;
     if (updates.lastActivityAt !== undefined) setValues.lastActivityAt = updates.lastActivityAt;
@@ -207,8 +293,15 @@ export class SqliteSessionRepository implements SessionRepository {
   async delete(id: string): Promise<boolean> {
     this.logger.info('Deleting session', { id });
     try {
-      const result = await this.db.delete(sessions).where(eq(sessions.id, id));
-      const deleted = result.changes > 0;
+      // Atomically resolve child references before parent deletion so no orphaned foreign keys remain
+      const deleted = this.db.transaction((tx) => {
+        tx.update(sessions)
+          .set({ parentSessionId: null, childAlias: null })
+          .where(eq(sessions.parentSessionId, id))
+          .run();
+
+        return tx.delete(sessions).where(eq(sessions.id, id)).run().changes > 0;
+      });
       this.logger.debug('Session delete result', { id, deleted });
       return deleted;
     } catch (error) {

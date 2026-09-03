@@ -82,6 +82,30 @@ describe('Domain Schemas', () => {
     expect(parsed.status).toBe('working');
     expect(parsed.creationSource).toBe('ui');
     expect(parsed.tmuxSessionName).toBe('spawnea-sess-001');
+    expect(parsed.parentSessionId).toBeUndefined();
+    expect(parsed.childAlias).toBeUndefined();
+  });
+
+  it('validates a child Session entity with parent reference and alias', () => {
+    const childSession = {
+      id: 'sess-child-001',
+      name: 'Child task',
+      parentSessionId: 'sess-001',
+      childAlias: 'child-1',
+      serverId: 'srv-123',
+      projectId: 'proj-456',
+      agentId: 'agent-789',
+      task: 'Subtask execution',
+      worktreePath: '/workspace/spawnea',
+      branch: 'task-1.1-bootstrap',
+      tmuxSessionName: 'spawnea-child-001',
+      status: 'starting',
+    };
+
+    const parsed = SessionSchema.parse(childSession);
+    expect(parsed.parentSessionId).toBe('sess-001');
+    expect(parsed.childAlias).toBe('child-1');
+    expect(parsed.status).toBe('starting');
   });
 
   it('validates Artifact entity with direction', () => {

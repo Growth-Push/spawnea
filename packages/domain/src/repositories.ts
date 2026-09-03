@@ -32,6 +32,11 @@ export interface SessionRepository {
   findByProjectId(projectId: string): Promise<Session[]>;
   findByAgentId(agentId: string): Promise<Session[]>;
   findByStatus(status: SessionStatus): Promise<Session[]>;
+  findByParentId(parentId: string): Promise<Session[]>;
+  findByParentAndAlias(parentId: string, childAlias: string): Promise<Session | null>;
+  allocateChildAlias(parentId: string): Promise<string>;
+  promoteChildrenToRoot(parentId: string): Promise<number>;
+  clearParentReferences(parentId: string): Promise<number>;
   save(
     session: Omit<Session, 'createdAt' | 'lastActivityAt'> & {
       createdAt?: Date;

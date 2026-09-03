@@ -42,6 +42,8 @@ export function toSession(row: SessionRow): Session {
   return {
     id: row.id,
     name: row.name,
+    parentSessionId: row.parentSessionId ?? undefined,
+    childAlias: row.childAlias ?? undefined,
     serverId: row.serverId,
     projectId: row.projectId,
     agentId: row.agentId,
