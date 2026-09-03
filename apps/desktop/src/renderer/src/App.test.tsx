@@ -689,7 +689,15 @@ describe('App Desktop Shell', () => {
         totalChanges: 0,
       },
     };
-    const getGitStatus = vi.fn().mockImplementation((sessionId: string) => Promise.resolve(statuses[sessionId as keyof typeof statuses]));
+    const gitStatusCallsBySessionId: Record<string, number> = {};
+    const getGitStatus = vi.fn().mockImplementation((sessionId: string) => {
+      gitStatusCallsBySessionId[sessionId] = (gitStatusCallsBySessionId[sessionId] ?? 0) + 1;
+      const status = statuses[sessionId as keyof typeof statuses];
+      if (sessionId === nonManagedDirtySession.id && gitStatusCallsBySessionId[sessionId] > 1) {
+        return Promise.resolve({ ...status, totalChanges: 3 });
+      }
+      return Promise.resolve(status);
+    });
 
     window.spawneaApi = createMockSpawneaApi({
       listSessions: vi.fn().mockResolvedValue(sessions),
@@ -708,14 +716,20 @@ describe('App Desktop Shell', () => {
       expect(screen.queryByTestId(`session-worktree-dirty-indicator-${managedCleanSession.id}`)).toBeNull();
       expect(screen.queryByTestId(`session-git-dirty-indicator-${nonManagedCleanSession.id}`)).toBeNull();
       expect(screen.getByTestId('contextbar-worktree-dirty-indicator')).toBeDefined();
+      expect(screen.getByTestId('contextbar-worktree-change-count').textContent).toBe('1');
       expect(screen.getByTestId('workspace-worktree-dirty-indicator')).toBeDefined();
+      expect(screen.getByTestId('workspace-worktree-change-count').textContent).toBe('1');
     });
 
     fireEvent.click(screen.getByTestId(`session-item-${nonManagedDirtySession.id}`));
 
     await waitFor(() => {
+      expect(gitStatusCallsBySessionId[nonManagedDirtySession.id]).toBeGreaterThan(1);
       expect(screen.getByTestId('contextbar-git-dirty-indicator')).toBeDefined();
+      expect(screen.getByTestId('contextbar-git-change-count').textContent).toBe('3');
       expect(screen.getByTestId('workspace-git-dirty-indicator')).toBeDefined();
+      expect(screen.getByTestId('workspace-git-change-count').textContent).toBe('3');
+      expect(screen.getByTestId(`session-git-change-count-${nonManagedDirtySession.id}`).textContent).toBe('3');
       expect(screen.queryByTestId('contextbar-worktree-badge')).toBeNull();
       expect(screen.queryByTestId('workspace-worktree-badge')).toBeNull();
     });
