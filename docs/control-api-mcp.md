@@ -146,7 +146,7 @@ A repeated correlation ID with a different payload is rejected. An exact retry r
 
 ### `spawnea_activate`
 
-Input: `{ "sessionId": "session-id-or-alias", "parentSessionId": "parent-session-id-optional", "tab": "terminal|files|diff|artifacts|details" }`. Selects a known session/tab in the live renderer. When targeting a child alias (such as `child-1`), optional `parentSessionId` disambiguates child sessions across different parents. It does not run host or Git commands. The result says whether delivery to a live renderer occurred.
+Input: `{ "sessionId": "session-id", "tab": "terminal|files|diff|artifacts|details" }`. Selects a known session/tab in the live renderer. It does not run host or Git commands. The result says whether delivery to a live renderer occurred.
 
 ### `spawnea_request_finalization`
 
@@ -218,6 +218,10 @@ Input:
   "prompt": "Run the test suite and report results"
 }
 ```
+
+Canonical session IDs always work. A `child-*` alias must include
+`parentSession` when it is not globally unique; ambiguous aliases are rejected
+without that scope.
 
 Writes prompt text directly to the target session's active PTY stream or underlying tmux session. Returns immediately after delivering prompt input without waiting for agent completion.
 

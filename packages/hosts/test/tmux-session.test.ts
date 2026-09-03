@@ -48,6 +48,18 @@ describe('TmuxManager', () => {
     expect(result.error).toContain('tmux is not installed');
   });
 
+  it('does not press Enter when literal input delivery fails', async () => {
+    const host = new MockHostAdapter('host-1');
+    host.customRules.push({
+      pattern: "tmux send-keys -t 'spawnea-input-failure' -l",
+      response: { stdout: '', stderr: 'send failed', exitCode: 1 },
+    });
+
+    const tmux = new TmuxManager();
+    await expect(tmux.sendInput(host, 'spawnea-input-failure', 'partial input\n')).resolves.toBe(false);
+    expect(host.executedCommands).toHaveLength(1);
+  });
+
   it('detects duplicate tmux session names and rejects start (FG-2.2.10)', async () => {
     const host = new MockHostAdapter('host-1');
     host.customRules.push({

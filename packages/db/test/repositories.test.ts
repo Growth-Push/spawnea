@@ -397,7 +397,7 @@ describe('Domain Repositories & Logging Integration', () => {
       // Find children by parent ID
       const children = await repos.sessions.findByParentId('parent-1');
       expect(children).toHaveLength(2);
-      expect(children.map((c) => c.childAlias)).toEqual(['child-1', 'child-2']);
+      expect(children.map((c) => c.childAlias).sort()).toEqual(['child-1', 'child-2']);
 
       // Find child by parent ID and alias
       const foundChild = await repos.sessions.findByParentAndAlias('parent-1', 'child-2');

@@ -152,7 +152,7 @@ export class SessionContextStore {
         return false;
       }
     }
-    return false;
+    // Deletion is idempotent: an already-absent context is successfully clean.
+    return true;
   }
 }
-

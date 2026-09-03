@@ -1723,31 +1723,9 @@ describe('App Desktop Shell', () => {
     api.listSessions = vi.fn().mockResolvedValue([parent, dirtyChild]);
     api.getGitStatus = vi.fn().mockImplementation((id: string) => {
       if (id === 'child-1') {
-        return Promise.resolve({
-          isGitRepo: true,
-          isClean: false,
-          uncommittedChanges: 2,
-          totalChanges: 2,
-          ahead: 0,
-          behind: 0,
-          branch: 'task/child-1',
-          modifiedFiles: ['file1.ts', 'file2.ts'],
-          untrackedFiles: [],
-          stagedFiles: [],
-        });
+        return Promise.resolve({ isGitRepo: true, isClean: false, uncommittedChanges: 2, ahead: 0, behind: 0 });
       }
-      return Promise.resolve({
-        isGitRepo: true,
-        isClean: true,
-        uncommittedChanges: 0,
-        totalChanges: 0,
-        ahead: 0,
-        behind: 0,
-        branch: 'main',
-        modifiedFiles: [],
-        untrackedFiles: [],
-        stagedFiles: [],
-      });
+      return Promise.resolve({ isGitRepo: true, isClean: true, uncommittedChanges: 0, ahead: 0, behind: 0 });
     });
     api.inspectWorktree = vi.fn().mockResolvedValue({
       canFastForward: true,
@@ -1794,6 +1772,7 @@ describe('App Desktop Shell', () => {
 
     // After finishing child, parent deletion with close-all proceeds
     await waitFor(() => {
+      expect(api.finishSession).toHaveBeenCalledWith('child-1', 'integrate', undefined);
       expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all');
     });
   });

@@ -545,7 +545,9 @@ export function Sidebar({
   // and projectId (per docs/tasks/05-session-hierarchy-and-child-agents.md) and are
   // intentionally grouped with and rendered directly under their parent session card.
   const rootSessions = React.useMemo(() => {
-    return sessions.filter((s) => !s.parentSessionId);
+    return sessions
+      .filter((s) => !s.parentSessionId)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
   }, [sessions]);
 
   const sessionMatchesStatus = (s: Session): boolean => {
@@ -718,7 +720,7 @@ export function Sidebar({
   }, [denseFocusedSessionId, denseHoveredSessionId, isDenseLayout, visibleSessions]);
 
   const shortcutLabels = new Map<string, string>();
-  visibleSessions.slice(0, 10).forEach((s, idx) => {
+  rootSessions.slice(0, 10).forEach((s, idx) => {
     const num = idx === 9 ? 0 : idx + 1;
     shortcutLabels.set(s.id, `Ctrl-${num}`);
   });
@@ -975,7 +977,7 @@ export function Sidebar({
           </button>
 
           {/* Children expand/collapse combo in normal flow (below the name) */}
-          <div className="flex items-center justify-between gap-1.5 w-full">
+          {visibleChildren.length > 0 && <div className="flex items-center justify-between gap-1.5 w-full">
             <button
               type="button"
               data-testid={`session-toggle-children-${session.id}`}
@@ -993,10 +995,15 @@ export function Sidebar({
               <span>{visibleChildren.length} child{visibleChildren.length === 1 ? '' : 'ren'}</span>
               <ChevronDown className={`w-3 h-3 text-purple-400 transition-transform duration-150 ${isExpanded ? 'rotate-180' : ''}`} />
             </button>
-          </div>
+          </div>}
 
           {/* Card footer (Path + tmux session) */}
-          {renderCardFooter()}
+          <div
+            onClick={() => onSelectSession(session.id)}
+            className="cursor-pointer"
+          >
+            {renderCardFooter()}
+          </div>
         </div>
 
         {isExpanded && (

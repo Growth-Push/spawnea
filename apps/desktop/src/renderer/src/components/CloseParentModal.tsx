@@ -149,8 +149,8 @@ export function CloseParentModal({
           {dirtyChildrenCount > 0 && (
             <p className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded px-2.5 py-1.5">
               {dirtyChildrenCount === 1
-                ? '1 child has uncommitted changes and will prompt for finalization if you choose "Close All".'
-                : `${dirtyChildrenCount} children have uncommitted changes and will prompt for finalization if you choose "Close All".`}
+                ? '1 child has uncommitted changes and will prompt for finalization.'
+                : `${dirtyChildrenCount} children have uncommitted changes and will prompt for finalization.`}
             </p>
           )}
 

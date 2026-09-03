@@ -144,6 +144,7 @@ export function CreateChildSessionModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
     if (!task.trim()) {
       setError('Task description is required.');
       return;
@@ -154,6 +155,7 @@ export function CreateChildSessionModal({
     }
 
     setSubmitting(true);
+    submittingRef.current = true;
     setError(null);
 
     try {
@@ -168,6 +170,7 @@ export function CreateChildSessionModal({
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create child session');
       setSubmitting(false);
+      submittingRef.current = false;
     }
   };
 

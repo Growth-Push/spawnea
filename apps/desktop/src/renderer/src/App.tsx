@@ -644,7 +644,6 @@ export function App(): React.JSX.Element {
   ) => {
     if (action === 'ignore') {
       setSessionToFinish(null);
-      setPendingCloseAllParentId(null);
       return;
     }
 
@@ -687,8 +686,6 @@ export function App(): React.JSX.Element {
       } else {
         setPendingCloseAllParentId(null);
       }
-    } else {
-      setPendingCloseAllParentId(null);
     }
     setSessionToFinish(null);
   };
@@ -712,7 +709,7 @@ export function App(): React.JSX.Element {
   ) => {
     if (childAction === 'close-all' && !options?.skipDirtyChildCheck) {
       const children = sessions.filter((s) => s.parentSessionId === sessionId);
-      const dirtyChild = children.find((c) => c.managedWorktree && gitDirtyBySessionId[c.id]);
+      const dirtyChild = children.find((c) => c.managedWorktree && gitDirtyBySessionId[c.id] !== false);
       if (dirtyChild) {
         setPendingCloseAllParentId(sessionId);
         setSessionToFinish(dirtyChild);
@@ -734,10 +731,11 @@ export function App(): React.JSX.Element {
     }
 
     setSessions((prev) => {
+      let next: Session[];
       if (childAction === 'close-all') {
-        return prev.filter((s) => s.id !== sessionId && s.parentSessionId !== sessionId);
+        next = prev.filter((s) => s.id !== sessionId && s.parentSessionId !== sessionId);
       } else {
-        return prev
+        next = prev
           .filter((s) => s.id !== sessionId)
           .map((s) =>
             s.parentSessionId === sessionId
@@ -745,21 +743,11 @@ export function App(): React.JSX.Element {
               : s
           );
       }
-    });
-
-    setActiveSessionId((currentActiveId) => {
-      if (
-        currentActiveId === sessionId ||
-        (childAction === 'close-all' &&
-          sessions.find((s) => s.id === currentActiveId)?.parentSessionId === sessionId)
-      ) {
-        const remaining = sessions.filter(
-          (s) =>
-            s.id !== sessionId && (childAction !== 'close-all' || s.parentSessionId !== sessionId)
-        );
-        return remaining.length > 0 ? remaining[0].id : null;
-      }
-      return currentActiveId;
+      setActiveSessionId((currentActiveId) => {
+        const activeWasRemoved = next.every((s) => s.id !== currentActiveId);
+        return activeWasRemoved ? (next[0]?.id ?? null) : currentActiveId;
+      });
+      return next;
     });
   };
 
@@ -1161,6 +1149,10 @@ export function App(): React.JSX.Element {
               onReportFeedback={() => setIsFeedbackModalOpen(true)}
               onOpenQuickSwitcher={() => setIsQuickSwitcherOpen(true)}
               onRename={handleRenameSession}
+              onCreateChild={(parentId) => {
+                const target = sessions.find((s) => s.id === parentId);
+                if (target) setSessionToCreateChildFor(target);
+              }}
             />
 
             {/* Tabbed Workspace Surface */}

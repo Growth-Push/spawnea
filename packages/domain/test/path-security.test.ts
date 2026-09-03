@@ -22,6 +22,24 @@ describe('path security helpers', () => {
     expect(() => relativeContainedPath('/workspace/spawnea', '/tmp/file.txt')).toThrow();
   });
 
+  it('normalizes and contains Windows paths', () => {
+    const windowsRoot = ['C:', 'Users', 'demo', 'demo-proj'].join('\\');
+    expect(resolveContainedPath(windowsRoot, '.\\artifact-demo.md')).toBe(
+      ['C:', 'Users', 'demo', 'demo-proj', 'artifact-demo.md'].join('/')
+    );
+    expect(
+      relativeContainedPath(windowsRoot, `${windowsRoot}\\artifact-demo.md`)
+    ).toBe('artifact-demo.md');
+    expect(() =>
+      resolveContainedPath(windowsRoot, ['C:', 'Users', 'other', 'file.md'].join('\\'))
+    ).toThrow();
+    const differentlyCasedRoot = ['C:', 'Users', 'Demo', 'Demo-Proj'].join('\\');
+    const differentlyCasedCandidate = ['c:', 'users', 'demo', 'demo-proj', 'artifact.md'].join('\\');
+    expect(
+      resolveContainedPath(differentlyCasedRoot, differentlyCasedCandidate)
+    ).toBe(differentlyCasedCandidate.replace(/\\/g, '/'));
+  });
+
   it('accepts only a single safe artifact filename', () => {
     expect(assertSafeFilename('report.pdf')).toBe('report.pdf');
     for (const filename of ['', '.', '..', '../report.pdf', 'nested/report.pdf', '/tmp/report.pdf', 'nested\\report.pdf']) {

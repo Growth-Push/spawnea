@@ -270,9 +270,7 @@ describe('CreateChildSessionModal', () => {
     expect(agentSelect.value).toBe('srv-1:codex');
 
     // Only agents for srv-1 are shown, srv-2 agents are excluded
-    const agentOptions = Array.from(agentSelect.options).map((opt) => opt.textContent?.trim());
-    expect(agentOptions).toContain('Claude Code');
-    expect(agentOptions).toContain('Codex (Parent Default)');
-    expect(agentOptions).not.toContain('Hermes');
+    const agentOptionValues = Array.from(agentSelect.options).map((opt) => opt.value);
+    expect(agentOptionValues).toEqual(['srv-1:claude', 'srv-1:codex']);
   });
 });
