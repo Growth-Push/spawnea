@@ -18,6 +18,7 @@ export function attachMcpBridgeSocket(
   socket.once('connect', () => {
     const sessionId = process.env.SPAWNEA_SESSION_ID;
     if (!sessionId) {
+      connectionFailed = true;
       io.reportConnectionError(new Error('SPAWNEA_SESSION_ID is required for scoped MCP access'));
       socket.destroy();
       return;

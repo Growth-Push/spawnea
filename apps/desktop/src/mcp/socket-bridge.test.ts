@@ -26,56 +26,59 @@ describe('packaged MCP socket bridge', () => {
 
   it('drains output larger than the writable high-water mark before natural exit', async () => {
     const previousSessionId = process.env.SPAWNEA_SESSION_ID;
-    process.env.SPAWNEA_SESSION_ID = 'demo-root';
-    const token = 'a'.repeat(64);
-    const payload = Buffer.alloc(1024 * 1024, 'x');
-    const directory = await mkdtemp(join(tmpdir(), 'spawnea-mcp-bridge-'));
-    directories.push(directory);
-    const socketPath = join(directory, 'control.sock');
-    let authenticationLine = '';
-    const server = createServer((connection) => {
-      sockets.push(connection);
-      connection.once('data', (chunk) => {
-        authenticationLine = chunk.toString('utf8');
-        connection.end(payload);
-      });
-    });
-    servers.push(server);
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(socketPath, resolve);
-    });
-
-    const received: Buffer[] = [];
-    const stdout = new Writable({
-      highWaterMark: 1024,
-      write(chunk, _encoding, callback) {
-        setImmediate(() => {
-          received.push(Buffer.from(chunk));
-          callback();
+    try {
+      process.env.SPAWNEA_SESSION_ID = 'demo-root';
+      const token = 'a'.repeat(64);
+      const payload = Buffer.alloc(1024 * 1024, 'x');
+      const directory = await mkdtemp(join(tmpdir(), 'spawnea-mcp-bridge-'));
+      directories.push(directory);
+      const socketPath = join(directory, 'control.sock');
+      let authenticationLine = '';
+      const server = createServer((connection) => {
+        sockets.push(connection);
+        connection.once('data', (chunk) => {
+          authenticationLine = chunk.toString('utf8');
+          connection.end(payload);
         });
-      },
-    });
-    const stdin = new PassThrough();
-    const client = createConnection(socketPath);
-    sockets.push(client);
-    const exitCode = new Promise<number>((resolve) => {
-      attachMcpBridgeSocket(client, token, {
-        stdin,
-        stdout,
-        reportConnectionError: (error) => {
-          throw error;
-        },
-        setExitCode: resolve,
       });
-    });
+      servers.push(server);
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(socketPath, resolve);
+      });
 
-    await expect(exitCode).resolves.toBe(0);
-    await finished(stdout);
-    expect(authenticationLine).toBe(`${JSON.stringify({ type: 'spawnea-auth', token, sessionId: 'demo-root' })}\n`);
-    expect(Buffer.concat(received)).toEqual(payload);
-    if (previousSessionId === undefined) delete process.env.SPAWNEA_SESSION_ID;
-    else process.env.SPAWNEA_SESSION_ID = previousSessionId;
+      const received: Buffer[] = [];
+      const stdout = new Writable({
+        highWaterMark: 1024,
+        write(chunk, _encoding, callback) {
+          setImmediate(() => {
+            received.push(Buffer.from(chunk));
+            callback();
+          });
+        },
+      });
+      const stdin = new PassThrough();
+      const client = createConnection(socketPath);
+      sockets.push(client);
+      const exitCode = new Promise<number>((resolve) => {
+        attachMcpBridgeSocket(client, token, {
+          stdin,
+          stdout,
+          reportConnectionError: (error) => {
+            throw error;
+          },
+          setExitCode: resolve,
+        });
+      });
+
+      await expect(exitCode).resolves.toBe(0);
+      await finished(stdout);
+      expect(authenticationLine).toBe(`${JSON.stringify({ type: 'spawnea-auth', token, sessionId: 'demo-root' })}\n`);
+      expect(Buffer.concat(received)).toEqual(payload);
+    } finally {
+      if (previousSessionId === undefined) delete process.env.SPAWNEA_SESSION_ID;
+      else process.env.SPAWNEA_SESSION_ID = previousSessionId;
+    }
   }, 15000);
 
   it('reports a failed connection through the process exit code', () => {
