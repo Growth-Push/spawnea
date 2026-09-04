@@ -93,7 +93,11 @@ export function detectPromptInTail(
           if (
             reg.test(line) ||
             (category === 'choice' && (line.startsWith('Question') || line.startsWith('>') || line.startsWith('1.'))) ||
-            (category === 'question' && (line.startsWith('?') || line.endsWith('?'))) ||
+            (category === 'question' && (
+              line.startsWith('?') ||
+              line.endsWith('?') ||
+              (rule.id === 'hermes-question-header' && (line.includes('❓') || line.includes('❔')))
+            )) ||
             (category === 'confirmation' && (
               line.startsWith('Requesting') ||
               line.startsWith('Do you') ||

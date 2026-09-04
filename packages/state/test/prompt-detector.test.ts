@@ -232,6 +232,24 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('hermes-needs-input-menu');
   });
 
+  it('detects a Hermes consultation question with emoji Q3 / QN3', () => {
+    const tail = [
+      'La tabla debe vivir en algo similar a HarnessLaunchRegistry.',
+      '',
+      '❓ Q3 — Precedencia del modelo: si el harness ya tiene un modelo dentro de sus args configurados y el MCP también envía model, ¿cuál debe prevalecer?',
+      '',
+      '➡️ Recomiendo que el model explícito de la solicitud reemplace el argumento...',
+      '╰───────────────────────────────────────────────────────────────────╯',
+      ' ⚕ gpt-5.6-sol │ 112K/272K │ [████░░░░░░] 41% │ ✓ 0s',
+      '❯ Ask anything, or type / for commands…',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'hermes', tailLinesCount: 20 });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('hermes-question-header');
+    expect(res.promptLine).toContain('❓ Q3 — Precedencia del modelo');
+  });
+
   it('detects Hermes turn completed checkmark indicator in metrics bar', () => {
     const tail = [
       'Task completed.',
