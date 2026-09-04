@@ -742,7 +742,7 @@ export class SessionManager {
           cwd: runtimePath,
           command: harnessCommand,
           args: harnessArgs,
-          env: undefined,
+          env: { SPAWNEA_SESSION_ID: options.parentSessionId ?? sessionId },
           tmuxOptions: catProject?.tmux?.options,
           tmuxCommands: catProject?.tmux?.commands,
           logger: this.logger.child('tmux'),

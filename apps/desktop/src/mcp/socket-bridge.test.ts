@@ -25,6 +25,8 @@ describe('packaged MCP socket bridge', () => {
   });
 
   it('drains output larger than the writable high-water mark before natural exit', async () => {
+    const previousSessionId = process.env.SPAWNEA_SESSION_ID;
+    process.env.SPAWNEA_SESSION_ID = 'demo-root';
     const token = 'a'.repeat(64);
     const payload = Buffer.alloc(1024 * 1024, 'x');
     const directory = await mkdtemp(join(tmpdir(), 'spawnea-mcp-bridge-'));
@@ -70,8 +72,10 @@ describe('packaged MCP socket bridge', () => {
 
     await expect(exitCode).resolves.toBe(0);
     await finished(stdout);
-    expect(authenticationLine).toBe(`${JSON.stringify({ type: 'spawnea-auth', token })}\n`);
+    expect(authenticationLine).toBe(`${JSON.stringify({ type: 'spawnea-auth', token, sessionId: 'demo-root' })}\n`);
     expect(Buffer.concat(received)).toEqual(payload);
+    if (previousSessionId === undefined) delete process.env.SPAWNEA_SESSION_ID;
+    else process.env.SPAWNEA_SESSION_ID = previousSessionId;
   }, 15000);
 
   it('reports a failed connection through the process exit code', () => {

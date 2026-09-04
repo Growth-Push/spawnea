@@ -27,6 +27,7 @@ class AuthenticatedSocketTransport implements Transport {
     private readonly socketPath: string,
     private readonly token: string,
     private readonly authType: 'spawnea-auth' | 'spawnea-auth' = 'spawnea-auth',
+    private readonly authSessionId = 'session-1',
   ) {}
 
   async start(): Promise<void> {
@@ -42,7 +43,7 @@ class AuthenticatedSocketTransport implements Transport {
     socket.on('close', () => this.onclose?.());
     await new Promise<void>((resolve, reject) => {
       socket.once('connect', () => {
-        socket.write(`${JSON.stringify({ type: this.authType, token: this.token })}\n`);
+        socket.write(`${JSON.stringify({ type: this.authType, token: this.token, sessionId: this.authSessionId })}\n`);
         resolve();
       });
       socket.once('error', reject);
@@ -124,7 +125,7 @@ describe('ControlMcpGateway security boundary', () => {
       session: { id: 'session-1', name: 'Socket title', task: 'Original task' },
     });
     const gateway = new ControlMcpGateway({
-      control: { renameSession } as unknown as AgentControlServiceType,
+      control: { renameSession, createScopedControl: vi.fn().mockResolvedValue({ renameSession }) } as unknown as AgentControlServiceType,
       logger: createLogger('ControlMcpGatewayTest'),
       runtimeFilePath: join(directory, 'runtime.json'),
       socketPath: join(directory, 'control.sock'),
@@ -165,7 +166,7 @@ describe('ControlMcpGateway security boundary', () => {
       result: { action: 'close', removed: true },
     });
     const gateway = new ControlMcpGateway({
-      control: { requestFinalization } as unknown as AgentControlService,
+      control: { requestFinalization, createScopedControl: vi.fn().mockResolvedValue({ requestFinalization }) } as unknown as AgentControlService,
       logger: createLogger('ControlMcpGatewayTest'),
       runtimeFilePath: join(directory, 'runtime.json'),
       socketPath: join(directory, 'control.sock'),
@@ -226,6 +227,7 @@ describe('ControlMcpGateway security boundary', () => {
       lastActivityAt: new Date('2026-08-27T10:01:00.000Z'),
     };
     await repositories.sessions.save(session);
+    await repositories.sessions.save({ ...session, id: 'child-1', name: 'Child', parentSessionId: 'session-1', childAlias: 'child-1' });
     const finishSession = vi.fn().mockResolvedValue({ action: 'close', removed: true });
     const notifyFinalizationRequested = vi.fn();
     const control = new AgentControlService({
@@ -252,7 +254,7 @@ describe('ControlMcpGateway security boundary', () => {
         name: 'spawnea_request_finalization',
         arguments: {
           clientRequestId: 'e2e-close-1',
-          sessionId: 'session-1',
+          sessionId: 'child-1',
           action: 'close',
           dirtyChanges: 'stash',
           confirmation: 'llm-validated',
@@ -266,7 +268,7 @@ describe('ControlMcpGateway security boundary', () => {
         result: { action: 'close', removed: true },
       });
       expect(finishSession).toHaveBeenCalledWith(
-        'session-1',
+        'child-1',
         'close',
         { stashChanges: true },
         'mcp-validated'

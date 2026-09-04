@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { SPAWNEA_CONTROL_API_VERSION } from '@spawnea/domain';
-import type { AgentControlService } from './agent-control-service.js';
+import type { ScopedAgentControlService } from './agent-control-service.js';
 
 const workspaceTabSchema = z.enum(['terminal', 'files', 'diff', 'artifacts', 'details']);
 const sessionInputSchema = z.object({
@@ -49,7 +49,7 @@ function safeTool<T>(operation: () => Promise<T> | T) {
   };
 }
 
-export function createSpawneaMcpServer(control: AgentControlService): McpServer {
+export function createSpawneaMcpServer(control: ScopedAgentControlService): McpServer {
   const server = new McpServer({
     name: 'spawnea-control',
     version: '1.0.0',
