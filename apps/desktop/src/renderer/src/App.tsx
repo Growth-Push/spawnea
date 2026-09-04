@@ -1164,10 +1164,6 @@ export function App(): React.JSX.Element {
               onReportFeedback={() => setIsFeedbackModalOpen(true)}
               onOpenQuickSwitcher={() => setIsQuickSwitcherOpen(true)}
               onRename={handleRenameSession}
-              onCreateChild={(parentId) => {
-                const target = sessions.find((s) => s.id === parentId);
-                if (target) setSessionToCreateChildFor(target);
-              }}
             />
 
             {/* Tabbed Workspace Surface */}

@@ -20,7 +20,6 @@ import {
   Check,
   X,
   FileDiff,
-  Plus,
 } from 'lucide-react';
 import { AgentIcon } from './AgentIcon';
 import { SessionSourceBadge } from './SessionSourceBadge';
@@ -42,7 +41,6 @@ interface ContextBarProps {
   onReportFeedback?: (sessionId: string) => void;
   onOpenQuickSwitcher?: () => void;
   onRename?: (sessionId: string, title: string) => Promise<void>;
-  onCreateChild?: (parentSessionId: string) => void;
 }
 
 export function ContextBar({
@@ -62,7 +60,6 @@ export function ContextBar({
   onReportFeedback,
   onOpenQuickSwitcher,
   onRename,
-  onCreateChild,
 }: ContextBarProps): React.JSX.Element {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
@@ -417,19 +414,6 @@ export function ContextBar({
             </button>
           )}
 
-          {/* Create Child Session Option (only for root sessions) */}
-          {!session.parentSessionId && onCreateChild && (
-            <button
-              type="button"
-              data-testid="session-create-child-button"
-              onClick={() => onCreateChild(session.id)}
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-purple-300 hover:text-purple-200 bg-purple-950/60 hover:bg-purple-900/80 border border-purple-500/40 rounded-md transition-colors cursor-pointer"
-              title="Spawn a child session under this parent session"
-            >
-              <Plus className="w-3 h-3 text-purple-400" />
-              <span>+ child session</span>
-            </button>
-          )}
 
           {/* Managed Worktree Finalization Option (Task 6.2.1) */}
           {session.managedWorktree && onFinish && (
