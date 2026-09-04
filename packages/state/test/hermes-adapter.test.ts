@@ -124,6 +124,304 @@ describe('HermesStatusAdapter', () => {
     expect(res.source).toBe('terminal_prompt');
   });
 
+  it('detects needs_input when Hermes displays a consultation question (❓ Q3 — ...) even with turn metrics bar', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 5000),
+      tailLines: [
+        '╭─ ⚕ Hermes ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮',
+        'Decisión actualizada',
+        '',
+        'La tabla debe vivir en algo similar a HarnessLaunchRegistry, consumido por el application service. Así UI, MCP y una futura CLI obtendrían exactamente la misma resolución.',
+        '',
+        '❓ Q3 — Precedencia del modelo: si el harness ya tiene un modelo dentro de sus args configurados y el MCP también envía model, ¿cuál debe prevalecer?',
+        '',
+        '➡️ Recomiendo que el model explícito de la solicitud reemplace el argumento de modelo configurado para esa sesión únicamente. Si no viene model, se conservan los args originales. Esto evita flags duplicados y hace que el resultado sea determinista sin modificar la configuración permanente del harness.',
+        '╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯',
+        ' ⚕ gpt-5.6-sol │ 112K/272K │ [████░░░░░░] 41% │ ◎ 79.4% │ ◷ 15.2s │ ↑ 44 t/s │ 31m │ ⏲ 36s │ ✓ 0s                                                                                                             ─ Adjust model self-identif...',
+        '─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────',
+        '❯ Ask anything, or type / for commands…',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toContain('❓ Q3 — Precedencia del modelo');
+  });
+
+  it('detects working when active progress indicators follow an older consultation question in tailLines', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 1000),
+      tailLines: [
+        '❓ Q3 — Precedencia del modelo: si el harness ya tiene un modelo...',
+        'User answered: Usar la opción B.',
+        'formulating...',
+        '> msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toContain('msg=interrupt');
+  });
+
+  it('ignores consultation questions outside the detector inspection window', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 5000),
+      tailLines: [
+        '❓ Q1 — Stale question from an older turn',
+        ...Array.from({ length: 20 }, (_, index) => `Historical output ${index + 1}`),
+        'Current unrelated output',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.source).toBe('tmux');
+  });
+
+  it('detects idle when an answered question is followed by a user response and completed turn metrics', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 3000),
+      tailLines: [
+        '❓ Q3 — Precedencia del modelo: si el harness ya tiene un modelo...',
+        'User answered: Usar la opción B.',
+        'Done! Applied configuration changes cleanly.',
+        ' ⚕ gpt-5.6-sol │ 81K/128K │ [██████░░░░] 63% │ 🗜️ 1 │ 2h │ ⏲ 30s │ ✓ 4m',
+        '❯ Ask anything, or type / for commands…',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('detects needs_input when a second newer question appears after an older question and working output', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 3000),
+      tailLines: [
+        '❓ Q1 — Old question',
+        'User answered: Proceed.',
+        '> msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel',
+        '❓ Q2 — Newer question: which database port to bind?',
+        ' ⚕ gpt-5.6-sol │ 112K/272K │ ✓ 0s',
+        '❯ Ask anything, or type / for commands…',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toContain('❓ Q2 — Newer question');
+  });
+
+  it('detects error when a fatal error occurs in a subsequent turn after an older question', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 3000),
+      tailLines: [
+        '❓ Q1 — Old question',
+        'custom-profile > Proceed with migrations',
+        'Traceback (most recent call last):',
+        '  File "main.py", line 10, in <module>',
+        'Exit status 1',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('error');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('detects idle when working footer remains in history but a newer turn completion checkmark followed', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 3000),
+      tailLines: [
+        '❓ Q3 — Question?',
+        'User answered: option B',
+        'formulating...',
+        '> msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel',
+        'Done!',
+        ' ⚕ gpt-5.6-sol │ 81K/128K │ ✓ 4m',
+        '❯ Ask anything, or type / for commands…',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('detects working from active PTY streaming when answered question has fresh ordinary output', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 100),
+      recentOutputBytes: 50,
+      tailLines: [
+        '❓ Q3 — Question?',
+        'User answered: option B',
+        'Reading package metadata',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('pty_activity');
+  });
+
+  it('detects working from active PTY streaming when answered question is followed by profile-prefixed user echo and fresh output', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 100),
+      recentOutputBytes: 50,
+      tailLines: [
+        '❓ Q3 — Question?',
+        'gp-dev > Use option B',
+        'Reading package metadata',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('pty_activity');
+  });
+
+  it('detects needs_input when answered question is followed by a new question-category prompt', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 5000),
+      tailLines: [
+        '❓ Q3 — Question?',
+        'gp-dev > Use option B',
+        'Enter value: ',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('does not treat answered text with question marks as a new prompt', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(),
+      recentOutputBytes: 50,
+      tailLines: ['❓ Q3 — Should the subprocess continue?', 'gp-dev > Yes, continue?'],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('pty_activity');
+  });
+
+  it('treats completed turn with informational emoji question heading as idle rather than consultation question', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 3000),
+      tailLines: [
+        '❓ Why did this happen?',
+        'Here is the explanation for the previous behavior.',
+        ' ⚕ gpt-5.6-sol │ 81K/128K │ ✓ 4m',
+        '❯ Ask anything, or type / for commands…',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('detects idle when an answered question is followed by a user response with an arbitrary profile prefix', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 3000),
+      tailLines: [
+        '❓ Q3 — Question?',
+        'arbitrary-agent-profile > Use option B',
+        ' ⚕ gpt-5.6-sol │ 81K/128K │ [██████░░░░] 63% │ ✓ 4m',
+        '❯ Ask anything, or type / for commands…',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
   it('detects idle after multilingual output when the metrics bar contains a completion checkmark (| ✓ 4m)', () => {
     const signals: SessionSignals = {
       sessionId: 'hermes-1',

@@ -187,6 +187,15 @@ export const DEFAULT_PATTERN_RULES: PatternRule[] = [
     description: 'Matches Hermes question prompt line (? >)',
   },
   {
+    id: 'hermes-question-header',
+    name: 'Hermes Question Header or Consultation',
+    category: 'question',
+    harness: 'hermes',
+    pattern: /(?:^|\n)\s*[❓❔]\s*(?:Q\d+|QN\d+|Pregunta\s*\d+|Question\s*\d+)\s*[-—:]?\s*.+/i,
+    confidence: 0.95,
+    description: 'Matches Hermes consultation question headers prefixed with question emoji (❓/❔) like ❓ Q3 — ...',
+  },
+  {
     id: 'hermes-idle-completion-checkmark',
     name: 'Hermes Completed Turn Metrics Checkmark',
     category: 'idle_prompt',
