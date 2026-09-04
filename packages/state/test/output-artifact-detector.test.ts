@@ -182,7 +182,7 @@ Other matches:
 [/workspace/spawnea/notes.md]
 </workspace/spawnea/config.json>
 /workspace/spawnea/foo+bar.pdf
-/workspace/spawnea/user@org-doc.txt
+/workspace/spawnea/git@build-report.txt
 /workspace/spawnea/_private-notes.md
 /workspace/spawnea/trailing-colon.md: complete
 `;
@@ -195,7 +195,7 @@ Other matches:
     expect(paths).toContain('/workspace/spawnea/notes.md');
     expect(paths).toContain('/workspace/spawnea/config.json');
     expect(paths).toContain('/workspace/spawnea/foo+bar.pdf');
-    expect(paths).toContain('/workspace/spawnea/user@org-doc.txt');
+    expect(paths).toContain('/workspace/spawnea/git@build-report.txt');
     expect(paths).toContain('/workspace/spawnea/_private-notes.md');
     expect(paths).toContain('/workspace/spawnea/trailing-colon.md');
     // Ensure that foo+bar.pdf is NOT split into bar.pdf
