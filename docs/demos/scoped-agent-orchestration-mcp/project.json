@@ -1,0 +1,16 @@
+{
+  "name": "scoped-orchestration-demo",
+  "server": { "id": "local", "name": "Local demo host", "host": "localhost" },
+  "project": { "id": "scoped-demo", "name": "Scoped MCP Demo", "rootPath": "/tmp/spawnea-scoped-demo" },
+  "sessions": [
+    { "id": "root-alpha", "parentSessionId": null, "name": "Alpha root", "status": "working" },
+    { "id": "child-alpha-1", "parentSessionId": "root-alpha", "name": "Alpha child", "status": "working" },
+    { "id": "root-beta", "parentSessionId": null, "name": "Beta root", "status": "working" },
+    { "id": "child-beta-1", "parentSessionId": "root-beta", "name": "Beta child", "status": "working" }
+  ],
+  "checks": [
+    { "authenticatedRoot": "root-alpha", "allowed": ["root-alpha", "child-alpha-1"], "denied": ["root-beta", "child-beta-1"] },
+    { "authenticatedRoot": "child-alpha-1", "expected": "reject-handshake" },
+    { "authenticatedRoot": "missing-root", "expected": "reject-handshake" }
+  ]
+}

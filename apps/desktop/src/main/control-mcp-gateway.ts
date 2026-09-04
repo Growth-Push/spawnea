@@ -161,6 +161,7 @@ export class ControlMcpGateway {
   private authenticate(socket: Socket): void {
     socket.pause();
     let buffered = Buffer.alloc(0);
+    let authenticating = false;
     const timeout = setTimeout(() => socket.destroy(), AUTH_TIMEOUT_MS);
     const fail = () => {
       clearTimeout(timeout);
@@ -168,26 +169,35 @@ export class ControlMcpGateway {
       socket.destroy();
       this.logger.warn('Rejected unauthorized Spawnea MCP socket connection');
     };
-    const onData = (chunk: Buffer) => {
+    const onData = async (chunk: Buffer) => {
+      if (authenticating) return;
       buffered = Buffer.concat([buffered, chunk]);
       if (buffered.length > MAX_AUTH_BYTES) return fail();
       const newline = buffered.indexOf(0x0a);
       if (newline === -1) return;
 
-      let auth: { type?: unknown; token?: unknown };
+      let auth: { type?: unknown; token?: unknown; sessionId?: unknown };
       try {
         auth = JSON.parse(buffered.subarray(0, newline).toString('utf8'));
       } catch {
         return fail();
       }
-      if (auth.type !== 'spawnea-auth' || !sameToken(auth.token, this.token)) return fail();
+      if (auth.type !== 'spawnea-auth' || !sameToken(auth.token, this.token) || typeof auth.sessionId !== 'string') return fail();
+      authenticating = true;
+      socket.pause();
+      socket.removeListener('data', onData);
+      let scopedControl: Awaited<ReturnType<AgentControlService['createScopedControl']>>;
+      try {
+        scopedControl = await this.control.createScopedControl(auth.sessionId);
+      } catch {
+        return fail();
+      }
 
       clearTimeout(timeout);
-      socket.removeListener('data', onData);
       const remainder = buffered.subarray(newline + 1);
       if (remainder.length > 0) socket.unshift(remainder);
       const transport = new StdioServerTransport(socket, socket, { maxBufferSize: 2 * 1024 * 1024 });
-      const handle = serveStdio(() => createSpawneaMcpServer(this.control), {
+      const handle = serveStdio(() => createSpawneaMcpServer(scopedControl), {
         transport,
         onerror: (error) => this.logger.warn('Spawnea MCP transport error', { error: error.message }),
       });

@@ -55,7 +55,8 @@ The v1 bridge exposes only the canonical `spawnea_*` tools documented below; no 
 - The bridge connects to a Unix-domain socket owned by the current OS user. The runtime directory is mode `0700`; the socket and ephemeral-token descriptor are mode `0600`.
 - A detached same-user watchdog removes the descriptor and socket after abrupt Electron termination, but only while the protected descriptor still names the exited Electron PID.
 - The gateway starts by default with the desktop app on Unix-like systems. It is disabled on Windows until named-pipe transport is implemented. Set `SPAWNEA_CONTROL_ENABLED=0` (or `false`, `off`, `no`, `disabled`) to disable it elsewhere. There is no TCP listener, public API, remote daemon, or remote host installation.
-- Every socket connection must authenticate with the random 256-bit token from the protected runtime descriptor before MCP messages are accepted.
+- Every socket connection must authenticate with the random 256-bit token from the protected runtime descriptor and an active root session ID before MCP messages are accepted. The gateway rejects unknown IDs, child IDs, and roots that are not local.
+- After authentication, the MCP server is scoped to the authenticated root and its direct child sessions. Requests targeting another root or an unrelated session are rejected.
 - The read model returns host IDs and display names, never SSH targets, usernames, passwords, tokens, secret references, or resolved credentials.
 - Zod schemas reject malformed tool input before the control service can call a host adapter, tmux, or Git.
 

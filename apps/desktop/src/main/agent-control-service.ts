@@ -51,6 +51,19 @@ export interface AgentControlServiceOptions {
   notifyDataChanged?: () => boolean;
 }
 
+export interface ScopedAgentControlService {
+  getState(): Promise<ControlStateSnapshot>;
+  createSessions(request: ControlCreateSessionsRequest): Promise<ControlCreateSessionsResult>;
+  inspectWorktree(sessionId: string): Promise<ControlWorktreeInspectionResult>;
+  renameSession(request: ControlRenameSessionRequest): Promise<ControlRenameSessionResult>;
+  createChildSession(request: ControlCreateChildSessionRequest): Promise<ControlCreateChildSessionResult>;
+  listSessions(): Promise<ControlListSessionsResult>;
+  sendPrompt(request: ControlSendPromptRequest): Promise<ControlSendPromptResult>;
+  navigate(request: ControlNavigationRequest): Promise<ControlNavigationResult>;
+  requestFinalization(input: FinalizationInput): Promise<ControlFinalizationRequest>;
+  getFinalizationRequest(requestId: string): ControlFinalizationRequest | Promise<ControlFinalizationRequest>;
+}
+
 function toIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
@@ -91,6 +104,87 @@ export class AgentControlService {
 
   setUiState(state: ControlUiState): void {
     this.uiState = { ...state };
+  }
+
+  async createScopedControl(rootSessionId: string): Promise<ScopedAgentControlService> {
+    const resolveInScope = async (sessionId: string, allowRoot = false): Promise<Session> => {
+      const root = await this.repos.sessions.findById(rootSessionId);
+      if (!root || root.parentSessionId) throw new Error('MCP session identity is not an active local root');
+      const session = await this.repos.sessions.findById(sessionId);
+      if (!session || (session.id !== root.id && session.parentSessionId !== root.id) || (!allowRoot && session.id === root.id)) {
+        throw new Error('Session is outside the authenticated MCP scope');
+      }
+      return session;
+    };
+
+    const root = await this.repos.sessions.findById(rootSessionId);
+    const rootServer = root ? await this.repos.servers.findById(root.serverId) : null;
+    const localHost = rootServer && ['localhost', '127.0.0.1', '::1'].includes(rootServer.host);
+    const active = root && !['done', 'error', 'disconnected'].includes(root.status);
+    if (!root || root.parentSessionId || !rootServer?.enabled || !localHost || !active) {
+      throw new Error('MCP session identity is not an active local root');
+    }
+
+    return {
+      getState: async () => {
+        const state = await this.getState();
+        const sessions = state.sessions.filter((item) => item.id === rootSessionId || item.parentSessionId === rootSessionId);
+        const hostIds = new Set(sessions.map((item) => item.host?.id));
+        const projectIds = new Set(sessions.map((item) => item.project?.id));
+        const harnessIds = new Set(sessions.map((item) => item.harness?.id));
+        return {
+          ...state,
+          ui: state.ui.activeSessionId && sessions.some((item) => item.id === state.ui.activeSessionId) ? state.ui : { ...state.ui, activeSessionId: null },
+          sessions,
+          hosts: state.hosts.filter((item) => hostIds.has(item.id)),
+          projects: state.projects.filter((item) => projectIds.has(item.id)),
+          harnesses: state.harnesses.filter((item) => harnessIds.has(item.id)),
+          recentErrors: [],
+        };
+      },
+      createSessions: async () => {
+        throw new Error('Batch session creation is not available through scoped MCP');
+      },
+      inspectWorktree: async (sessionId) => {
+        await resolveInScope(sessionId, true);
+        return this.inspectWorktree(sessionId);
+      },
+      renameSession: async (request) => {
+        await resolveInScope(request.sessionId, true);
+        return this.renameSession(request);
+      },
+      createChildSession: async (request) => {
+        await resolveInScope(request.parentSession, true);
+        return this.createChildSession(request);
+      },
+      listSessions: async () => {
+        const state = await this.getState();
+        return { apiVersion: state.apiVersion, sessions: state.sessions.filter((item) => item.id === rootSessionId || item.parentSessionId === rootSessionId) };
+      },
+      sendPrompt: async (request) => {
+        let target = await this.repos.sessions.findById(request.target);
+        if (!target && request.parentSession) target = await this.repos.sessions.findByParentAndAlias(request.parentSession, request.target);
+        if (!target) throw new Error('Session is outside the authenticated MCP scope');
+        await resolveInScope(target.id, true);
+        return this.sendPrompt({ ...request, target: target.id });
+      },
+      navigate: async (request) => {
+        let target = await this.repos.sessions.findById(request.sessionId);
+        if (!target && request.parentSessionId) target = await this.repos.sessions.findByParentAndAlias(request.parentSessionId, request.sessionId);
+        if (!target) throw new Error('Session is outside the authenticated MCP scope');
+        await resolveInScope(target.id, true);
+        return this.navigate({ ...request, sessionId: target.id });
+      },
+      requestFinalization: async (input) => {
+        await resolveInScope(input.sessionId, true);
+        return this.requestFinalization(input);
+      },
+      getFinalizationRequest: async (requestId) => {
+        const request = this.getFinalizationRequest(requestId);
+        await resolveInScope(request.sessionId, true);
+        return request;
+      },
+    };
   }
 
   private rememberError(operation: string, error: unknown): void {
