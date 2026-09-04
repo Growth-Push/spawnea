@@ -138,10 +138,26 @@ export function stripPathLineNumber(candidate: string): string {
 }
 
 /**
+ * Set of characters allowed in paths and filenames.
+ */
+const VALID_PATH_CHAR_REGEX = /[a-zA-Z0-9_@+/~.\\-]/;
+
+/**
  * Strips enclosing punctuation, brackets, quotes, and symbols from the ends of a candidate string.
+ * Uses a linear scan to avoid polynomial regular expression evaluation (ReDoS).
  */
 export function stripPathDelimiters(candidate: string): string {
-  return candidate.replace(/^[^a-zA-Z0-9_@+/~.\\-]+|[^a-zA-Z0-9_@+/~.\\-]+$/g, '').trim();
+  let start = 0;
+  let end = candidate.length;
+
+  while (start < end && !VALID_PATH_CHAR_REGEX.test(candidate[start])) {
+    start++;
+  }
+  while (end > start && !VALID_PATH_CHAR_REGEX.test(candidate[end - 1])) {
+    end--;
+  }
+
+  return candidate.slice(start, end).trim();
 }
 
 function expandHomePath(candidate: string, worktreePath: string): string {
