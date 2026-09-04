@@ -20,6 +20,7 @@ import type { SessionManager } from './session-manager.js';
 
 import {
   DEFAULT_BLACKLIST_PATTERNS,
+  detectOutputArtifacts,
   matchesBlacklistPattern,
 } from '@spawnea/state';
 
@@ -407,6 +408,48 @@ export class ArtifactManager {
     } finally {
       worktreePath.release();
     }
+  }
+
+  /**
+   * Processes terminal lines or stream chunks, detects candidate artifact paths,
+   * validates them against workspace/git/filesystem, and persists any new artifacts.
+   */
+  async processOutputChunk(
+    sessionId: string,
+    lines: string[] | string,
+    harness?: string
+  ): Promise<Artifact[]> {
+    if (!lines || (Array.isArray(lines) && lines.length === 0)) {
+      return [];
+    }
+
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session) return [];
+
+    const worktreePath = await this.sessionManager.resolveSessionWorktreePath(session);
+    let detectedCandidates: ReturnType<typeof detectOutputArtifacts>;
+    try {
+      detectedCandidates = detectOutputArtifacts(lines, {
+        worktreePath: worktreePath.value,
+        harness,
+      });
+    } finally {
+      worktreePath.release();
+    }
+
+    if (detectedCandidates.length === 0) {
+      return [];
+    }
+
+    const createdArtifacts: Artifact[] = [];
+    for (const candidate of detectedCandidates) {
+      const created = await this.handleDetectedOutput(sessionId, candidate.normalizedPath);
+      if (created) {
+        createdArtifacts.push(created);
+      }
+    }
+
+    return createdArtifacts;
   }
 
   /**

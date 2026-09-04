@@ -124,8 +124,9 @@ const PATTERNS: { regex: RegExp; source: 'tool_call' | 'terminal_output'; confid
   // Standalone paths. The existence and Git checks happen in ArtifactManager;
   // this matcher intentionally accepts any file extension so artifacts are not
   // limited to a hard-coded list of document and source formats.
+  // We match paths bounded by whitespace, common structural delimiters (quotes, parens, brackets, arrows, colons, commas), or line boundaries.
   {
-    regex: /(?:^|[\s"'`(])((?:~[\\/]|\/|[A-Za-z]:[\\/]|\.\.?[\\/])?[\w.-]+(?:[\\/][\w.-]+)*\.[A-Za-z0-9_-]{1,32}(?::\d+){0,2})(?=$|[\s"'`),.;!?])/g,
+    regex: /(?:^|[\s"'`()[\]{}<>|→⇒\r\n=:])((?:~[\\/]|\/|[A-Za-z]:[\\/]|\.\.?[\\/])?[\w.@+-]+(?:[\\/][\w.@+-]+)*\.[A-Za-z0-9_-]{1,32}(?::\d+){0,2})(?=$|[\s"'`()[\]{}<>|→⇒\r\n=:,;!?])/g,
     source: 'terminal_output',
     confidence: 0.75,
   },
@@ -134,6 +135,13 @@ const PATTERNS: { regex: RegExp; source: 'tool_call' | 'terminal_output'; confid
 /** Removes editor-style line/column suffixes from a detected file path. */
 export function stripPathLineNumber(candidate: string): string {
   return candidate.replace(/:\d+(?::\d+)?$/, '');
+}
+
+/**
+ * Strips enclosing punctuation, brackets, quotes, and symbols from the ends of a candidate string.
+ */
+export function stripPathDelimiters(candidate: string): string {
+  return candidate.replace(/^[^a-zA-Z0-9_@+/~.\\-]+|[^a-zA-Z0-9_@+/~.\\-]+$/g, '').trim();
 }
 
 function expandHomePath(candidate: string, worktreePath: string): string {
@@ -179,9 +187,9 @@ export function detectOutputArtifacts(
       const candidateRaw = match[1] ? match[1].trim() : '';
       if (!candidateRaw || candidateRaw.length < 2) continue;
 
-      // Clean surrounding quotes or parenthesis
+      // Clean surrounding quotes, brackets, or delimiters
       const cleanPath = stripPathLineNumber(
-        candidateRaw.replace(/^['"`(]+|['"`)]+$/g, '').trim()
+        stripPathDelimiters(candidateRaw)
       );
       if (/^v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$/i.test(cleanPath)) continue;
       if (!cleanPath || cleanPath.includes(' ') || cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
