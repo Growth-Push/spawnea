@@ -166,4 +166,50 @@ Created file /workspace/spawnea/artifact-demo.md`;
     expect(results[0].filename).toBe('artifact-demo.md');
     expect(results[0].normalizedPath).toBe('/workspace/spawnea/artifact-demo.md');
   });
+
+  it('detects paths wrapped in arbitrary delimiters, quotes, parentheses, brackets, or arrows (e.g. Hermes paste)', () => {
+    const output = `
+Welcome to Hermes Agent! Type your message or /help for commands.
+────────────────────────────────────────
+● [Pasted text #1: 28 lines → /workspace/spawnea/pastes/paste_1_095410.txt
+Initializing agent...
+────────────────────────────────────────
+
+Other matches:
+"(/workspace/spawnea/apps/desktop/src/main/session-supervisor.ts)
+"d(/workspace/spawnea/apps/desktop/src/main/session-supervisor.ts
+"/workspace/spawnea/apps/desktop/src/main/session-supervisor.ts"
+[/workspace/spawnea/notes.md]
+</workspace/spawnea/config.json>
+/workspace/spawnea/foo+bar.pdf
+/workspace/spawnea/git@build-report.txt
+/workspace/spawnea/_private-notes.md
+/workspace/spawnea/trailing-colon.md: complete
+/workspace/spawnea/first-list.md,/workspace/spawnea/second-list.md;/workspace/spawnea/third-list.md!/workspace/spawnea/fourth-list.md?
+`;
+
+    const results = detectOutputArtifacts(output, { worktreePath });
+
+    const paths = results.map((r) => r.normalizedPath);
+    expect(paths).toContain('/workspace/spawnea/pastes/paste_1_095410.txt');
+    expect(paths).toContain('/workspace/spawnea/apps/desktop/src/main/session-supervisor.ts');
+    expect(paths).toContain('/workspace/spawnea/notes.md');
+    expect(paths).toContain('/workspace/spawnea/config.json');
+    expect(paths).toContain('/workspace/spawnea/foo+bar.pdf');
+    expect(paths).toContain('/workspace/spawnea/git@build-report.txt');
+    expect(paths).toContain('/workspace/spawnea/_private-notes.md');
+    expect(paths).toContain('/workspace/spawnea/trailing-colon.md');
+    expect(paths).toContain('/workspace/spawnea/first-list.md');
+    expect(paths).toContain('/workspace/spawnea/second-list.md');
+    expect(paths).toContain('/workspace/spawnea/third-list.md');
+    expect(paths).toContain('/workspace/spawnea/fourth-list.md');
+    // Ensure that foo+bar.pdf is NOT split into bar.pdf
+    expect(paths).not.toContain('/workspace/spawnea/bar.pdf');
+
+    // Verify deduplication
+    const supervisorMatches = results.filter(
+      (r) => r.normalizedPath === '/workspace/spawnea/apps/desktop/src/main/session-supervisor.ts'
+    );
+    expect(supervisorMatches).toHaveLength(1);
+  });
 });

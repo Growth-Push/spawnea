@@ -459,4 +459,45 @@ describe('ArtifactManager', () => {
     await artifactManager.removeFromBlacklist('*.csv');
     expect(await artifactManager.isPathBlacklisted('temp-data.csv')).toBe(false);
   });
+
+  it('processes output chunks, filters non-existent or git-tracked files, and registers artifacts', async () => {
+    // 1. Prepare files on mockHost
+    mockHost.mockFiles.set('/workspace/spawnea/generated-report.md', {
+      content: '# Generated Report',
+      mimeType: 'text/markdown',
+      size: 18,
+    });
+    // Tracked git file should be ignored
+    mockHost.mockFiles.set('/workspace/spawnea/tracked-code.ts', {
+      content: 'export const a = 1;',
+      mimeType: 'text/typescript',
+      size: 19,
+    });
+    mockHost.customRules.push({
+      pattern: 'git ls-files --error-unmatch -- \':(literal)tracked-code.ts\'',
+      response: { stdout: 'tracked-code.ts\n', stderr: '', exitCode: 0 },
+    });
+    mockHost.customRules.push({
+      pattern: 'git ls-files --error-unmatch -- \':(literal)generated-report.md\'',
+      response: { stdout: '', stderr: 'did not match', exitCode: 1 },
+    });
+
+    const terminalChunk = [
+      'Some agent output...',
+      '● [Pasted text #1: 28 lines → /workspace/spawnea/generated-report.md',
+      'Created file /workspace/spawnea/tracked-code.ts',
+      'Also mentioned /workspace/spawnea/does-not-exist.txt',
+      'Done!',
+    ];
+
+    const results = await artifactManager.processOutputChunk(sessionId, terminalChunk, 'hermes');
+
+    expect(results).toHaveLength(1);
+    expect(results[0].filename).toBe('generated-report.md');
+    expect(results[0].remotePath).toBe('/workspace/spawnea/generated-report.md');
+
+    // Calling again with the same chunk should deduplicate and return empty
+    const duplicateResults = await artifactManager.processOutputChunk(sessionId, terminalChunk, 'hermes');
+    expect(duplicateResults).toHaveLength(0);
+  });
 });

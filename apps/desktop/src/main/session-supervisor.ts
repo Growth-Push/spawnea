@@ -15,7 +15,7 @@ import type {
 import { createLogger } from '@spawnea/domain';
 import type { Repositories } from '@spawnea/db';
 import { TmuxManager } from '@spawnea/hosts';
-import { StateDetector, detectOutputArtifacts } from '@spawnea/state';
+import { StateDetector } from '@spawnea/state';
 import type { SessionManager } from './session-manager.js';
 import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
@@ -165,7 +165,7 @@ export class SessionSupervisor {
         }
 
         if (!paneDead) {
-          tailLines = await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, 25);
+          tailLines = await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, 50);
         }
       }
     } catch (err) {
@@ -197,30 +197,23 @@ export class SessionSupervisor {
     // Auto-detect candidate output artifacts from terminal tail lines
     if (this.artifactManager && tailLines && tailLines.length > 0) {
       try {
-        const worktreePath = await this.sessionManager.resolveSessionWorktreePath(session);
-        try {
-          const detectedArtifacts = detectOutputArtifacts(tailLines, {
-            worktreePath: worktreePath.value,
-            harness: harnessName,
-          });
+        const createdArtifacts = await this.artifactManager.processOutputChunk(
+          sessionId,
+          tailLines,
+          harnessName
+        );
 
-          for (const det of detectedArtifacts) {
-            const created = await this.artifactManager.handleDetectedOutput(sessionId, det.normalizedPath);
-            if (created) {
-              this.logger.info('Auto-registered output artifact from session stream', {
-                sessionId,
-                artifactId: created.id,
-                filename: created.filename,
-                remotePath: created.remotePath,
-              });
-              const wc = this.webContentsGetter?.();
-              if (wc && !wc.isDestroyed()) {
-                wc.send('session:artifactCreated', sessionId, created);
-              }
-            }
+        for (const created of createdArtifacts) {
+          this.logger.info('Auto-registered output artifact from session stream', {
+            sessionId,
+            artifactId: created.id,
+            filename: created.filename,
+            remotePath: created.remotePath,
+          });
+          const wc = this.webContentsGetter?.();
+          if (wc && !wc.isDestroyed()) {
+            wc.send('session:artifactCreated', sessionId, created);
           }
-        } finally {
-          worktreePath.release();
         }
       } catch (err) {
         this.logger.debug('Error detecting output artifacts from tailLines', { error: err });
