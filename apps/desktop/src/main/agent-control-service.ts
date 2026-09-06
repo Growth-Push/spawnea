@@ -645,7 +645,8 @@ export class AgentControlService {
   }
 
   async sendPrompt(request: ControlSendPromptRequest): Promise<ControlSendPromptResult> {
-    const lockKey = `${request.parentSession ?? ''}:${request.target}`;
+    const targetSession = await this.resolvePromptTarget(request);
+    const lockKey = targetSession.id;
     const previous = this.promptLocks.get(lockKey) ?? Promise.resolve();
     let release!: () => void;
     const current = new Promise<void>((resolve) => { release = resolve; });
@@ -653,38 +654,32 @@ export class AgentControlService {
     this.promptLocks.set(lockKey, queued);
     await previous;
     try {
-      return await this.sendPromptUnlocked(request);
+      return await this.sendPromptUnlocked(request, targetSession);
     } finally {
       release();
       if (this.promptLocks.get(lockKey) === queued) this.promptLocks.delete(lockKey);
     }
   }
 
-  private async sendPromptUnlocked(request: ControlSendPromptRequest): Promise<ControlSendPromptResult> {
-    try {
-      let targetSession = await this.repos.sessions.findById(request.target);
-      if (!targetSession) {
-        if (request.parentSession) {
-          targetSession = await this.repos.sessions.findByParentAndAlias(
-            request.parentSession,
-            request.target,
-          );
-        } else if (request.target.startsWith('child-')) {
-          const all = await this.repos.sessions.findAll();
-          const matches = all.filter((s) => s.childAlias === request.target);
-          if (matches.length === 1) {
-            targetSession = matches[0];
-          } else if (matches.length > 1) {
-            throw new Error(
-              `Multiple sessions match alias '${request.target}'. Specify parentSession to disambiguate.`,
-            );
-          }
-        }
+  private async resolvePromptTarget(request: ControlSendPromptRequest): Promise<Session> {
+    let targetSession = await this.repos.sessions.findById(request.target);
+    if (!targetSession) {
+      if (request.parentSession) {
+        targetSession = await this.repos.sessions.findByParentAndAlias(request.parentSession, request.target);
+      } else if (request.target.startsWith('child-')) {
+        const all = await this.repos.sessions.findAll();
+        const matches = all.filter((session) => session.childAlias === request.target);
+        if (matches.length === 1) targetSession = matches[0];
+        else if (matches.length > 1) throw new Error(`Multiple sessions match alias '${request.target}'. Specify parentSession to disambiguate.`);
       }
+    }
+    if (!targetSession) throw new Error(`Session '${request.target}' not found`);
+    return targetSession;
+  }
 
-      if (!targetSession) {
-        throw new Error(`Session '${request.target}' not found`);
-      }
+  private async sendPromptUnlocked(request: ControlSendPromptRequest, resolvedTarget: Session): Promise<ControlSendPromptResult> {
+    try {
+      let targetSession = resolvedTarget;
 
       const requestId = request.clientRequestId ?? randomUUID();
       const fingerprint = JSON.stringify({ sessionId: targetSession.id, prompt: request.prompt });

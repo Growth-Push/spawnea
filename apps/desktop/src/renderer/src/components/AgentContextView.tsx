@@ -12,6 +12,9 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
 
   useEffect(() => {
     let active = true;
+    setSnapshot(null);
+    setSelected(null);
+    setLoadError(null);
     const load = async () => {
       try {
         const next = await window.spawneaApi.getAgentContext(sessionId);
@@ -23,10 +26,9 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
         if (active) setLoadError(error instanceof Error ? error.message : String(error));
       }
     };
-    void load();
     let timer: number | undefined;
     const schedule = () => { timer = window.setTimeout(async () => { await load(); if (active) schedule(); }, 1_500); };
-    schedule();
+    void load().finally(() => { if (active) schedule(); });
     return () => {
       active = false;
       if (timer !== undefined) window.clearTimeout(timer);
