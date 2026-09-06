@@ -154,7 +154,8 @@ export function App(): React.JSX.Element {
         saved === 'files' ||
         saved === 'diff' ||
         saved === 'artifacts' ||
-        saved === 'details'
+        saved === 'details' ||
+        saved === 'agent-context'
       ) {
         return saved as WorkspaceTabType;
       }
@@ -920,7 +921,7 @@ export function App(): React.JSX.Element {
 
   // Global keyboard navigation shortcuts:
   // - Quick Switcher: Ctrl+P / Cmd+P / Ctrl+K / Cmd+K
-  // - Workspace Tabs: Alt+1..5
+  // - Workspace Tabs: Alt+1..6
   // - Sidebar Toggle: Ctrl+Shift+B
   // - Session Navigation: Ctrl+1..0, Ctrl+Tab, Ctrl+Shift+Tab
   useEffect(() => {
@@ -935,7 +936,7 @@ export function App(): React.JSX.Element {
         return;
       }
 
-      // 2. Tab Navigation: Alt+1..5
+      // 2. Tab Navigation: Alt+1..6
       if (e.altKey && !isCtrl && !e.shiftKey) {
         const tabKeyMap: Record<string, WorkspaceTabType> = {
           '1': 'terminal',
@@ -943,6 +944,7 @@ export function App(): React.JSX.Element {
           '3': 'diff',
           '4': 'artifacts',
           '5': 'details',
+          '6': 'agent-context',
         };
         if (e.key in tabKeyMap) {
           e.preventDefault();

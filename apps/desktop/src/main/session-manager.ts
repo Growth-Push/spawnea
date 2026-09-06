@@ -59,6 +59,7 @@ import { StateDetector } from '@spawnea/state';
 import type { CatalogManager } from './catalog-manager.js';
 import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
+import { HarnessLaunchRegistry } from './harness-launch-registry.js';
 
 function normalizeWorktreePathForComparison(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -97,12 +98,14 @@ export class SessionManager {
   private readonly customHostFactory?: (serverId: string) => Promise<HostAdapter>;
   private readonly logger: Logger;
   private readonly onePasswordResolver: OnePasswordResolver;
+  private readonly harnessLaunchRegistry = new HarnessLaunchRegistry();
   private webContentsGetter?: () => WebContents | null;
 
   // Active Host Adapters by serverId (pooled)
   private readonly hostPool: Map<string, HostAdapter> = new Map();
   // Active session locks to prevent concurrent duplicate starts (FG-2.2.10)
   private readonly startingSessions: Map<string, Promise<void>> = new Map();
+  private readonly creatingSessionIds = new Set<string>();
   private readonly finalizingParents: Set<string> = new Set();
   private readonly childCreationsInProgress: Map<string, number> = new Map();
   // In-memory host system telemetry cache
@@ -573,8 +576,8 @@ export class SessionManager {
 
   /**
    * Creates an Spawnea-owned persistent session, powering root and child creation.
-   * It validates the task, prepares the project folder, starts tmux, and persists
-   * the session context and database record.
+   * It validates the task, prepares the project folder, persists the session
+   * identity, and then starts tmux.
    */
   private async createSessionCore(options: {
     serverId: string;
@@ -588,6 +591,7 @@ export class SessionManager {
     childAlias?: string;
     initialStatus?: SessionStatus;
     creationSource?: SessionCreationSource;
+    model?: string;
   }): Promise<Session> {
     if (!options.task || options.task.trim() === '') {
       throw new Error('Task description is required to create a session');
@@ -611,6 +615,7 @@ export class SessionManager {
     let allocatedChildAlias: string | undefined;
     let releaseProjectPath: () => void = () => undefined;
     let releaseParentPath: () => void = () => undefined;
+    let creatingSessionId: string | undefined;
     try {
       if (options.parentSessionId && !options.childAlias) {
         allocatedChildAlias = await this.repos.sessions.allocateChildAlias(options.parentSessionId);
@@ -667,7 +672,12 @@ export class SessionManager {
       const effectiveBaseBranch = configuredBaseBranch || options.baseBranch?.trim() || undefined;
 
       const harnessCommand = catHarness?.command || dbAgent?.command || 'bash';
-      const harnessArgs = catHarness?.args || dbAgent?.argsTemplate || [];
+      const harnessArgs = this.harnessLaunchRegistry.withModel(
+        harnessCommand,
+        catHarness?.id || dbAgent?.harness,
+        catHarness?.args || dbAgent?.argsTemplate || [],
+        options.model,
+      );
       const harnessName = catHarness?.name || dbAgent?.name || 'Harness';
 
       // 2. Prepare remote project folder (FG-2.2.2 - FG-2.2.5)
@@ -684,15 +694,21 @@ export class SessionManager {
 
       // 3. Provision the optional session-owned worktree.
       const sessionId = `sess-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+      creatingSessionId = sessionId;
+      this.creatingSessionIds.add(sessionId);
       const tmuxSessionName = `spawnea-${slug}-${Date.now().toString(36).substring(3)}`;
       const worktreeConfig = catProject?.worktree;
       let runtimePath = prepResult.path;
       let repositoryPath = prepResult.path;
-      let branchName = effectiveBaseBranch || `task/${slug}`;
+      const currentBranchResult = await host.execute('git branch --show-current', { cwd: prepResult.path });
+      let branchName = currentBranchResult.exitCode === 0 && currentBranchResult.stdout.trim()
+        ? currentBranchResult.stdout.trim()
+        : effectiveBaseBranch || `spawnea/session-${sessionId.slice('sess-'.length)}`;
       let baseBranch: string | undefined;
       let baseCommit: string | undefined;
       let managedWorktree = false;
       let tmuxCreated = false;
+      let sessionPersisted = false;
       const shouldUseWorktree = options.useWorktree ?? (worktreeConfig?.enabled ?? false);
       let inheritedWorktreeLocator: string | undefined;
 
@@ -714,7 +730,7 @@ export class SessionManager {
           const provisioned = await this.gitService.createManagedWorktree({
             host,
             repositoryPath: prepResult.path,
-            taskSlug: slug,
+            taskSlug: 'task',
             sessionSuffix: sessionId.slice('sess-'.length),
             baseBranch: effectiveBaseBranch,
           });
@@ -735,24 +751,6 @@ export class SessionManager {
           }
         }
 
-        // 4. Establish the persistent tmux session in the effective runtime directory.
-        const tmuxResult = await this.tmuxManager.createPersistentSession({
-          host,
-          sessionName: tmuxSessionName,
-          cwd: runtimePath,
-          command: harnessCommand,
-          args: harnessArgs,
-          env: { SPAWNEA_SESSION_ID: options.parentSessionId ?? sessionId },
-          tmuxOptions: catProject?.tmux?.options,
-          tmuxCommands: catProject?.tmux?.commands,
-          logger: this.logger.child('tmux'),
-        });
-
-        if (!tmuxResult.success) {
-          throw new Error(tmuxResult.error || `Failed to establish persistent tmux session '${tmuxSessionName}'`);
-        }
-        tmuxCreated = true;
-
         const nowIso = new Date().toISOString();
         const credentialBackedProject = isOnePasswordReference(catProject?.path);
         const persistedRuntimePath = credentialBackedProject
@@ -771,7 +769,8 @@ export class SessionManager {
         const effectiveStatus: SessionStatus = options.initialStatus || 'working';
         const creationSource: SessionCreationSource = options.creationSource || 'ui';
 
-        // 5. Persist session context file before returning (FG-2.2.8)
+        // 4. Persist the session identity before launching the harness. Scoped MCP
+        // authentication can then resolve SPAWNEA_SESSION_ID as soon as Codex starts.
         const contextFile: SessionContextFile = {
           version: 1,
           sessionId,
@@ -829,7 +828,7 @@ export class SessionManager {
 
         await this.contextStore.save(contextFile);
 
-        // 6. Save in SQLite database
+        // 5. Save in SQLite before starting tmux so the harness cannot outrun its identity.
         const savedSession = await this.repos.sessions.save({
           id: sessionId,
           name: effectiveName,
@@ -848,6 +847,25 @@ export class SessionManager {
           status: effectiveStatus,
           creationSource,
         });
+        sessionPersisted = true;
+
+        // 6. Establish the persistent tmux session in the effective runtime directory.
+        const tmuxResult = await this.tmuxManager.createPersistentSession({
+          host,
+          sessionName: tmuxSessionName,
+          cwd: runtimePath,
+          command: harnessCommand,
+          args: harnessArgs,
+          env: { SPAWNEA_SESSION_ID: options.parentSessionId ?? sessionId },
+          tmuxOptions: catProject?.tmux?.options,
+          tmuxCommands: catProject?.tmux?.commands,
+          logger: this.logger.child('tmux'),
+        });
+
+        if (!tmuxResult.success) {
+          throw new Error(tmuxResult.error || `Failed to establish persistent tmux session '${tmuxSessionName}'`);
+        }
+        tmuxCreated = true;
 
         this.logger.info('Session successfully created and persisted', {
           sessionId,
@@ -869,6 +887,9 @@ export class SessionManager {
           await this.repos.sessions.releaseChildAlias(options.parentSessionId, allocatedChildAlias).catch(() => false);
         }
         await this.contextStore.delete(sessionId).catch(() => false);
+        if (sessionPersisted) {
+          await this.repos.sessions.delete(sessionId).catch(() => false);
+        }
 
         let runtimeStopped = !tmuxCreated;
         if (tmuxCreated) {
@@ -896,6 +917,7 @@ export class SessionManager {
         throw error;
       }
     } finally {
+      if (creatingSessionId) this.creatingSessionIds.delete(creatingSessionId);
       releaseProjectPath();
       releaseParentPath();
       if (this.startingSessions.get(lockKey) === startLock) {
@@ -945,23 +967,50 @@ export class SessionManager {
     this.childCreationsInProgress.set(parent.id, (this.childCreationsInProgress.get(parent.id) || 0) + 1);
 
     try {
+      const childServerId = input.serverId ?? parent.serverId;
+      const childProjectId = input.projectId ?? parent.projectId;
+      if (input.projectId) {
+        if (input.projectId.includes(':')) {
+          const [projectHost] = input.projectId.split(':', 2);
+          if (projectHost !== childServerId) {
+            throw new Error(`Project '${input.projectId}' belongs to host '${projectHost}', but the child runs on '${childServerId}'`);
+          }
+        }
+        const childProject = await this.repos.projects.findById(childProjectId);
+        if (childProject && childProject.serverId !== childServerId) {
+          throw new Error(`Project '${childProjectId}' belongs to host '${childProject.serverId}', but the child runs on '${childServerId}'`);
+        }
+        const rawProjectId = childProjectId.includes(':') ? childProjectId.split(':')[1] : childProjectId;
+        const catalogProject = this.catalogManager.getState().catalog?.hosts[childServerId]?.projects?.[rawProjectId];
+        if (!childProject && !catalogProject) {
+          throw new Error(`Project '${childProjectId}' not found on child host '${childServerId}'`);
+        }
+      }
+      if (childServerId !== parent.serverId) {
+        if (!input.serverId || !input.projectId) {
+          throw new Error('Different-host child creation requires serverId and projectId');
+        }
+        if (input.workspace !== 'new-worktree') {
+          throw new Error('Different-host child creation requires new-worktree workspace');
+        }
+      }
       if (input.agentId) {
       if (input.agentId.includes(':')) {
         const [hostId] = input.agentId.split(':');
-        if (hostId !== parent.serverId) {
-          throw new Error(`Agent '${input.agentId}' belongs to host '${hostId}', but child sessions must run on parent host '${parent.serverId}'`);
+        if (hostId !== childServerId) {
+          throw new Error(`Agent '${input.agentId}' belongs to host '${hostId}', but the child runs on '${childServerId}'`);
         }
       }
       const dbAgent = await this.repos.agents.findById(input.agentId);
       const catalog = this.catalogManager.getState().catalog;
-      const catalogHost = catalog?.hosts[parent.serverId];
+      const catalogHost = catalog?.hosts[childServerId];
       let rawAgentId = input.agentId;
       if (rawAgentId.includes(':')) {
         rawAgentId = rawAgentId.split(':')[1];
       }
       const catHarness = catalogHost?.harnesses?.[rawAgentId];
       if (!dbAgent && !catHarness) {
-        throw new Error(`Agent '${input.agentId}' not found on parent host '${parent.serverId}'`);
+        throw new Error(`Agent '${input.agentId}' not found on child host '${childServerId}'`);
       }
       }
 
@@ -971,8 +1020,8 @@ export class SessionManager {
       const displayName = input.name?.trim() || input.task;
 
       return this.createSessionCore({
-        serverId: parent.serverId,
-        projectId: parent.projectId,
+        serverId: childServerId,
+        projectId: childProjectId,
         agentId: input.agentId || parent.agentId,
         task: input.task,
         name: displayName,
@@ -980,6 +1029,7 @@ export class SessionManager {
         parentSessionId: parent.id,
         initialStatus: 'starting',
         creationSource,
+        model: input.model,
       });
     } finally {
       const remaining = (this.childCreationsInProgress.get(parent.id) || 1) - 1;
@@ -996,25 +1046,47 @@ export class SessionManager {
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
     }
+    if (this.creatingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is still being created; attach after tmux is ready`);
+    }
     const ptyChannelId = `pty-${session.id}`;
     const metrics = this.ptyBroker.getMetrics(ptyChannelId);
-    const formattedPrompt = prompt.endsWith('\n') ? prompt : `${prompt}\n`;
+    const ptyPrompt = prompt.endsWith('\r') ? prompt : `${prompt.replace(/\r?\n$/, '')}\r`;
+    const agent = await this.repos.agents.findById(session.agentId);
+    const context = agent ? undefined : await this.contextStore.load(session.id);
+    const commandSource = agent?.command ?? context?.harness.command;
+    const command = commandSource?.trim().split(/\s+/)[0]?.split('/').pop()?.toLowerCase();
+    const submitCount = command === 'codex' && prompt.includes('\n') ? 2 : 1;
 
     if (metrics !== undefined) {
       // The channel can disappear after getMetrics() during reconnect or
       // shutdown. PtyBroker reports the authoritative write result so callers
       // do not receive a false delivery confirmation.
-      if (this.ptyBroker.write(ptyChannelId, formattedPrompt)) {
+      if (this.ptyBroker.write(ptyChannelId, ptyPrompt)) {
+        if (submitCount === 2) {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          if (!this.ptyBroker.write(ptyChannelId, '\r')) return { delivered: false, deliveryMethod: 'pty' };
+        }
         return { delivered: true, deliveryMethod: 'pty' };
       }
     }
 
     const host = await this.getHostAdapter(session.serverId);
-    const sent = await this.tmuxManager.sendInput(host, session.tmuxSessionName, formattedPrompt);
+    // Codex treats a multiline literal tmux write as a paste. TmuxManager
+    // submits a second delayed Enter for this exact case.
+    const sent = await this.tmuxManager.sendInput(host, session.tmuxSessionName, prompt, submitCount);
     if (!sent) {
       throw new Error(`Failed to deliver prompt to tmux session '${session.tmuxSessionName}'`);
     }
     return { delivered: true, deliveryMethod: 'tmux' };
+  }
+
+  /** Captures bounded terminal context without changing the pane or its history. */
+  async captureSessionTerminal(sessionId: string, lines = 2_000): Promise<string> {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session) throw new Error(`Session '${sessionId}' not found`);
+    const host = await this.getHostAdapter(session.serverId);
+    return (await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, lines)).join('\n');
   }
 
   /** Updates the operator-facing name without changing task or runtime identity. */
@@ -1058,6 +1130,9 @@ export class SessionManager {
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
+    }
+    if (this.creatingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is still being created; attach after tmux is ready`);
     }
 
     const host = await this.getHostAdapter(session.serverId);
@@ -1833,12 +1908,6 @@ export class SessionManager {
     });
     for (const ctx of orderedContextFiles) {
       if (!dbSessionMap.has(ctx.sessionId)) {
-        const slug = ctx.task
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '')
-          .substring(0, 30) || 'task';
-
         const restoredSession = await this.repos.sessions.save({
           id: ctx.sessionId,
           name: ctx.sessionName || ctx.task,
@@ -1847,7 +1916,7 @@ export class SessionManager {
           agentId: ctx.harness.id,
           task: ctx.task,
           worktreePath: ctx.project.path,
-          branch: ctx.worktree?.branch ?? `task/${slug}`,
+          branch: ctx.worktree?.branch ?? `spawnea/session-${ctx.sessionId.replace(/^sess-/, '')}`,
           baseBranch: ctx.worktree?.baseBranch,
           baseCommit: ctx.worktree?.baseCommit,
           managedWorktree: ctx.worktree?.managed ?? false,
@@ -1900,6 +1969,7 @@ export class SessionManager {
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
     }
+    if (this.creatingSessionIds.has(sessionId)) return session;
 
     let currentStatus = session.status;
     try {
@@ -1999,7 +2069,11 @@ export class SessionManager {
     const host = await this.getHostAdapter(session.serverId);
     const worktreePath = await this.resolveSessionWorktreePath(session);
     try {
-      return await this.gitService.getGitStatus(host, worktreePath.value);
+      const status = await this.gitService.getGitStatus(host, worktreePath.value);
+      if (!session.managedWorktree && status.isGitRepo && status.branch && status.branch !== session.branch) {
+        await this.repos.sessions.update(session.id, { branch: status.branch });
+      }
+      return status;
     } finally {
       worktreePath.release();
     }

@@ -12,6 +12,7 @@ import {
   GitBranch,
   FileCode2,
   Info,
+  Network,
   Plus,
   RefreshCw,
   FileCode,
@@ -174,6 +175,13 @@ export function QuickSwitcherModal({
         subtitle: 'Session details and host environment telemetry',
         shortcut: 'Alt+5',
         icon: Info,
+      },
+      {
+        id: 'agent-context',
+        title: 'Switch to Agent Context',
+        subtitle: 'Inspect bounded volatile MCP orchestration context',
+        shortcut: 'Alt+6',
+        icon: Network,
       },
     ];
 

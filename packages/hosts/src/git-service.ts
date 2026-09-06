@@ -114,7 +114,7 @@ export class GitService {
       { cwd: repositoryRoot }
     );
     const baseCommit = baseCommitResult.stdout.trim();
-    if (baseCommitResult.exitCode !== 0 || !/^[0-9a-f]{40,64}$/i.test(baseCommit)) {
+    if (baseCommitResult.exitCode !== 0 || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(baseCommit)) {
       throw new Error(`Could not resolve the creation commit for base branch '${baseBranch}'`);
     }
 
@@ -719,14 +719,18 @@ export class GitService {
       if (options?.staged || options?.cached) {
         cmd = 'git diff --staged';
       } else {
-        cmd = 'git diff HEAD';
+        const baseCommit = options?.baseCommit;
+        if (baseCommit && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(baseCommit)) {
+          throw new Error('Git diff baseCommit must be a full hexadecimal commit ID');
+        }
+        cmd = `git diff ${baseCommit ? escapeShellPath(baseCommit) : 'HEAD'}`;
       }
 
       if (options?.filePath) {
         cmd += ` -- ${escapeShellPath(options.filePath)}`;
       }
 
-      const result = await host.execute(cmd, { cwd });
+      const result = await host.execute(cmd, { cwd, maxOutputBytes: 4 * 1024 * 1024 });
       let rawDiff = result.stdout;
 
       // If diff is empty and options.filePath is specified, check if it's an untracked file
@@ -749,7 +753,11 @@ export class GitService {
         }
       }
 
-      return parseGitDiff(rawDiff);
+      const requestedMaxLines = options?.maxLines;
+      const maxLines = Number.isFinite(requestedMaxLines)
+        ? Math.min(Math.max(Math.trunc(requestedMaxLines!), 1), 10_000)
+        : 10_000;
+      return parseGitDiff(rawDiff.split('\n').slice(0, maxLines).join('\n'));
     } catch (err: any) {
       this.logger.error('Failed to execute Git diff', err, { serverId: host.serverId, cwd });
       return {

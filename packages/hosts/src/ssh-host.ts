@@ -393,13 +393,33 @@ export class SSHHostAdapter implements HostAdapter {
 
         let stdout = '';
         let stderr = '';
+        const maxOutputBytes = options?.maxOutputBytes ?? 10 * 1024 * 1024;
+        let stdoutBytes = 0;
+        let stderrBytes = 0;
+        let truncated = false;
 
         stream.on('data', (data: Buffer) => {
-          stdout += data.toString('utf8');
+          if (stdoutBytes >= maxOutputBytes) {
+            truncated = true;
+            return;
+          }
+          const remaining = maxOutputBytes - stdoutBytes;
+          const chunk = data.subarray(0, remaining);
+          truncated ||= data.byteLength > remaining;
+          stdout += chunk.toString('utf8');
+          stdoutBytes += chunk.byteLength;
         });
 
         stream.stderr.on('data', (data: Buffer) => {
-          stderr += data.toString('utf8');
+          if (stderrBytes >= maxOutputBytes) {
+            truncated = true;
+            return;
+          }
+          const remaining = maxOutputBytes - stderrBytes;
+          const chunk = data.subarray(0, remaining);
+          truncated ||= data.byteLength > remaining;
+          stderr += chunk.toString('utf8');
+          stderrBytes += chunk.byteLength;
         });
 
         stream.on('close', (exitCode: number) => {
@@ -407,7 +427,8 @@ export class SSHHostAdapter implements HostAdapter {
           resolve({
             stdout,
             stderr,
-            exitCode: typeof exitCode === 'number' ? exitCode : 0,
+            exitCode: truncated ? 1 : typeof exitCode === 'number' ? exitCode : 0,
+            truncated,
           });
         });
 

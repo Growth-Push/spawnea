@@ -36,9 +36,11 @@ import {
   AlertCircle,
   UploadCloud,
   FileDiff,
+  Network,
 } from 'lucide-react';
+import { AgentContextView } from './AgentContextView';
 
-export type WorkspaceTabType = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details';
+export type WorkspaceTabType = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details' | 'agent-context';
 
 function isLocalClipboardBridgeEndpoint(endpoint?: HostConnectionEndpoint | null): boolean {
   return endpoint?.transport === 'local' && isLoopbackHost(endpoint.hostname);
@@ -487,6 +489,7 @@ export function WorkspaceTabs({
       shortcut: 'Alt+4',
     },
     { id: 'details', label: 'Session Info', icon: Info, shortcut: 'Alt+5' },
+    { id: 'agent-context', label: 'Agent Context', icon: Network, shortcut: 'Alt+6' },
   ];
 
   if (!session) {
@@ -811,6 +814,7 @@ export function WorkspaceTabs({
             </div>
           </div>
         )}
+        {activeTab === 'agent-context' && <AgentContextView sessionId={session.id} />}
       </div>
 
       {/* Floating Toast Notification */}

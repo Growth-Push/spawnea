@@ -15,8 +15,11 @@ describe('AgentControlService', () => {
     finishSession: ReturnType<typeof vi.fn>;
     createChildSession: ReturnType<typeof vi.fn>;
     sendPrompt: ReturnType<typeof vi.fn>;
+    captureSessionTerminal: ReturnType<typeof vi.fn>;
+    getGitStatus: ReturnType<typeof vi.fn>;
   };
   let service: AgentControlService;
+  let terminalOutput: string;
 
   const session = (id: string, overrides: Partial<Session> = {}): Session => ({
     id,
@@ -50,6 +53,7 @@ describe('AgentControlService', () => {
     });
     await repositories.sessions.save(session('existing'));
     createdCount = 0;
+    terminalOutput = 'Codex ready';
     sessionManager = {
       createSession: vi.fn(async (input) => {
         if (input.task === 'fail') throw new Error('Host unavailable');
@@ -80,6 +84,8 @@ describe('AgentControlService', () => {
         delivered: true,
         deliveryMethod: 'pty' as const,
       })),
+      captureSessionTerminal: vi.fn(async () => terminalOutput),
+      getGitStatus: vi.fn().mockResolvedValue({ isClean: true }),
     };
     service = new AgentControlService({
       repositories,
@@ -285,6 +291,7 @@ describe('AgentControlService', () => {
       expect(result.childAlias).toBe('child-1');
       expect(result.parentSessionId).toBe('existing');
       expect(result.status).toBe('starting');
+      expect(result).toMatchObject({ startupStatus: 'starting', promptStatus: 'not_requested', replayed: false });
       expect(sessionManager.createChildSession).toHaveBeenCalledWith(
         {
           parentSessionId: 'existing',
@@ -292,9 +299,26 @@ describe('AgentControlService', () => {
           name: 'Child Task',
           workspace: 'same-project',
           agentId: undefined,
+          serverId: undefined,
+          projectId: undefined,
+          model: undefined,
         },
         'mcp'
       );
+    });
+
+    it('makes child creation idempotent by client request ID', async () => {
+      const request = {
+        clientRequestId: 'child-review-1',
+        parentSession: 'existing',
+        task: 'Review changes',
+        workspace: 'same-project' as const,
+      };
+      const first = await service.createChildSession(request);
+      const replay = await service.createChildSession(request);
+
+      expect(replay).toMatchObject({ sessionId: first.sessionId, replayed: true });
+      expect(sessionManager.createChildSession).toHaveBeenCalledTimes(1);
     });
 
     it('lists sessions including parentSessionId and childAlias metadata', async () => {
@@ -328,8 +352,97 @@ describe('AgentControlService', () => {
         sessionId: 'existing',
         delivered: true,
         deliveryMethod: 'pty',
+        status: 'working',
+        replayed: false,
       });
       expect(sessionManager.sendPrompt).toHaveBeenCalledWith('existing', 'Run tests');
+    });
+
+    it('reads only terminal output produced after the prompt cursor', async () => {
+      const sent = await service.sendPrompt({
+        target: 'existing',
+        clientRequestId: 'review-1',
+        prompt: '/review',
+      });
+      terminalOutput = 'Codex ready\nReview finding one';
+
+      const first = await service.getTurn({ turnId: sent.turnId });
+      const unchanged = await service.getTurn({
+        turnId: sent.turnId,
+        cursor: first.cursor,
+        afterVersion: first.version,
+      });
+
+      expect(first).toMatchObject({ output: '\nReview finding one', cursorExpired: false });
+      expect(unchanged).toMatchObject({ status: 'unchanged', output: '' });
+    });
+
+    it('does not append repeated TUI redraws to the retained turn output', async () => {
+      const sent = await service.sendPrompt({ target: 'existing', prompt: '/review' });
+      terminalOutput = 'Codex ready\nReviewing files…';
+
+      const first = await service.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+      const redraw = await service.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+
+      expect(first.output).toBe('\nReviewing files…');
+      expect(redraw.output).toBe('\nReviewing files…');
+      expect(redraw.version).toBe(first.version);
+    });
+
+    it('replays identical prompt request IDs without writing twice', async () => {
+      const request = { target: 'existing', clientRequestId: 'review-retry', prompt: '/review' };
+      const first = await service.sendPrompt(request);
+      const replay = await service.sendPrompt(request);
+
+      expect(replay).toMatchObject({ turnId: first.turnId, replayed: true });
+      expect(sessionManager.sendPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    it('blocks a second prompt while the child turn is working', async () => {
+      await service.sendPrompt({ target: 'existing', clientRequestId: 'turn-one', prompt: '/review' });
+      await expect(service.sendPrompt({
+        target: 'existing', clientRequestId: 'turn-two', prompt: 'Another request',
+      })).rejects.toThrow('already has an open turn');
+      expect(sessionManager.sendPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts an answer when the tracked turn needs input', async () => {
+      const first = await service.sendPrompt({ target: 'existing', clientRequestId: 'turn-question', prompt: '/review' });
+      await repositories.sessions.updateStatus('existing', 'needs_input');
+      terminalOutput = 'Codex ready\nShould I include docs?';
+      await expect(service.getTurn({ turnId: first.turnId })).resolves.toMatchObject({ status: 'needs_input' });
+
+      const answer = await service.sendPrompt({
+        target: 'existing', clientRequestId: 'turn-answer', prompt: 'Yes, include docs.',
+      });
+      expect(answer).toMatchObject({ turnId: first.turnId, status: 'working' });
+      expect(sessionManager.sendPrompt).toHaveBeenCalledTimes(2);
+    });
+
+    it('discloses expired cursor context when the terminal snapshot no longer overlaps', async () => {
+      const sent = await service.sendPrompt({ target: 'existing', prompt: '/review' });
+      terminalOutput = 'x'.repeat(300_000);
+
+      const result = await service.getTurn({
+        turnId: sent.turnId,
+        cursor: `${sent.turnId}:0`,
+        outputMode: 'raw',
+      });
+      expect(result.cursorExpired).toBe(true);
+      expect(result.output.length).toBeLessThanOrEqual(131_072);
+    });
+
+    it('does not mistake response markers echoed from the prompt for child completion', async () => {
+      const prompt = 'Use this format:\n<<<SPAWNEA_RESPONSE_BEGIN>>>\nexample\n<<<SPAWNEA_RESPONSE_END>>>';
+      const sent = await service.sendPrompt({ target: 'existing', prompt });
+      terminalOutput = `Codex ready\n${prompt}`;
+
+      const echoed = await service.getTurn({ turnId: sent.turnId });
+      expect(echoed).toMatchObject({ status: 'working', extraction: 'none' });
+
+      terminalOutput += '\n<<<SPAWNEA_RESPONSE_BEGIN>>>\nactual result\n<<<SPAWNEA_RESPONSE_END>>>';
+      const response = await service.getTurn({ turnId: sent.turnId, cursor: echoed.cursor });
+      expect(response).toMatchObject({ output: 'actual result', extraction: 'delimited', confidence: 'high' });
     });
 
     it('navigates to session by child alias when parentSessionId is provided', async () => {

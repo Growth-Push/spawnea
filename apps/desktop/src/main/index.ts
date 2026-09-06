@@ -437,6 +437,9 @@ function registerIpcHandlers(
   ipcMain.handle('control:listFinalizationRequests', async (_event, includeResolved?: boolean) =>
     controlService.listFinalizationRequests(includeResolved)
   );
+  ipcMain.handle('control:getAgentContext', async (_event, sessionId: string) =>
+    controlService.getAgentContext(sessionId)
+  );
   ipcMain.handle('control:resolveFinalizationRequest', async (
     _event,
     requestId: string,

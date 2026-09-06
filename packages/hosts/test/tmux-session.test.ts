@@ -91,6 +91,15 @@ describe('TmuxManager', () => {
     expect(host.executedCommands).toHaveLength(1);
   });
 
+  it('can submit multiline paste-aware harness input with a confirming Enter', async () => {
+    const host = new MockHostAdapter('host-1');
+    const tmux = new TmuxManager();
+
+    await expect(tmux.sendInput(host, 'spawnea-codex', 'line one\nline two', 2)).resolves.toBe(true);
+
+    expect(host.executedCommands.filter(({ command }) => command.includes("tmux send-keys -t 'spawnea-codex' Enter"))).toHaveLength(2);
+  });
+
   it('detects duplicate tmux session names and rejects start (FG-2.2.10)', async () => {
     const host = new MockHostAdapter('host-1');
     host.customRules.push({

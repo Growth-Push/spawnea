@@ -225,7 +225,7 @@ hosts:
         delivered: true,
         deliveryMethod: 'pty',
       });
-      expect(write).toHaveBeenCalledWith('pty-sess-prompt', 'Run tests\n');
+      expect(write).toHaveBeenCalledWith('pty-sess-prompt', 'Run tests\r');
     });
 
     it('falls back to tmux when the PTY closes after its metrics are read', async () => {
@@ -307,6 +307,26 @@ hosts:
     expect(context?.persistentSession.name).toBe(session.tmuxSessionName);
     expect(context?.creationSource).toBe('ui');
     expect(session.creationSource).toBe('ui');
+  });
+
+  it('persists the root identity before launching its harness', async () => {
+    let persistedBeforeTmux = false;
+    mockHost.customRules.unshift({
+      pattern: 'tmux new-session',
+      response: async () => {
+        persistedBeforeTmux = (await repos.sessions.findAll()).length === 1;
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    });
+
+    await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Authenticate MCP on startup',
+    });
+
+    expect(persistedBeforeTmux).toBe(true);
   });
 
   it('persists the MCP creation source when the control path creates a session', async () => {
@@ -593,8 +613,9 @@ hosts:
     expect(session.managedWorktree).toBe(true);
     expect(session.baseBranch).toBe('main');
     expect(session.baseCommit).toBe('0123456789abcdef0123456789abcdef01234567');
-    expect(session.branch).toMatch(/^spawnea\/isolated-feature-/);
-    expect(session.worktreePath).toMatch(/spawnea__worktrees\/isolated-feature-/);
+    expect(session.branch).toMatch(/^spawnea\/task-/);
+    expect(session.branch).not.toContain('isolated-feature');
+    expect(session.worktreePath).toMatch(/spawnea__worktrees\/task-/);
 
     const tmuxCreate = mockHost.executedCommands.find(({ command }) => command.includes('tmux new-session'));
     expect(tmuxCreate?.command).toContain(`-c '${session.worktreePath}'`);
@@ -638,7 +659,8 @@ hosts:
     });
 
     expect(session.managedWorktree).toBe(true);
-    expect(session.worktreePath).toMatch(/spawnea__worktrees\/explicit-worktree-task-/);
+    expect(session.worktreePath).toMatch(/spawnea__worktrees\/task-/);
+    expect(session.branch).not.toContain('explicit-worktree-task');
   });
 
   it('keeps five isolated sessions active on distinct branches and worktrees', async () => {

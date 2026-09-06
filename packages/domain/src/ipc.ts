@@ -37,6 +37,9 @@ export interface CreateChildSessionInput {
   task: string;
   workspace: ChildSessionWorkspaceMode;
   agentId?: string;
+  serverId?: string;
+  projectId?: string;
+  model?: string;
 }
 
 export type ParentCloseAction = 'close-all' | 'leave-children';

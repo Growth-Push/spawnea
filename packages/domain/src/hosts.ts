@@ -2,12 +2,14 @@ export interface ExecOptions {
   cwd?: string;
   env?: Record<string, string>;
   timeoutMs?: number;
+  maxOutputBytes?: number;
 }
 
 export interface ExecResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  truncated?: boolean;
 }
 
 export interface PtyOptions {

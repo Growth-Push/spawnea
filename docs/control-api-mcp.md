@@ -45,9 +45,13 @@ The macOS example uses the default install location. If Spawnea is installed
 elsewhere, replace only the helper path. On Unix-like systems, ensure the helper
 or AppImage is executable.
 
-The bridge finds the active desktop process through `${XDG_RUNTIME_DIR}/spawnea/control-runtime.json`. Set `SPAWNEA_CONTROL_RUNTIME_FILE` in both processes only when a non-default runtime file is required. Stop the desktop app to disable the integration; without an active app, the bridge exits because its owner socket closes. Set `SPAWNEA_CONTROL_ENABLED=0`, `false`, `off`, `no`, or `disabled` only when the local MCP socket should be disabled intentionally. The integration is currently disabled on Windows because named-pipe transport is not implemented yet.
+The bridge finds the active desktop process through `${XDG_RUNTIME_DIR}/spawnea/control-runtime.json`. On Linux it also checks `/run/user/<uid>/spawnea/control-runtime.json` so harnesses launched through tmux still connect when that shell does not inherit `XDG_RUNTIME_DIR`; the private temporary-directory location remains a fallback. Set `SPAWNEA_CONTROL_RUNTIME_FILE` in both processes only when a non-default runtime file is required. Stop the desktop app to disable the integration; without an active app, the bridge exits because its owner socket closes. Set `SPAWNEA_CONTROL_ENABLED=0`, `false`, `off`, `no`, or `disabled` only when the local MCP socket should be disabled intentionally. The integration is currently disabled on Windows because named-pipe transport is not implemented yet.
 
 The v1 bridge exposes only the canonical `spawnea_*` tools documented below; no legacy MCP tool aliases are currently registered. `SPAWNEA_CONTROL_*` environment variables remain fallbacks, the legacy runtime descriptor location is discovered by the bridge, and both local authentication message names are accepted. New integrations should use the canonical Spawnea names.
+
+The desktop workspace includes a read-only **Agent Context** tab (`Alt+6`). It shows bounded calls made through the scoped MCP connection, groups consecutive unchanged turn polls, and exposes request/response and cursor metadata in a detail pane. This volatile context is never written as a transcript and is reported unavailable after restart.
+
+Child close requests for a `working` or `starting` child must include `force: true` in addition to an explicit `dirtyChanges` policy. Integration is accepted only for a local managed worktree child whose parent is local; remote children remain inspectable but cannot be integrated automatically.
 
 ## Transport and authorization boundary
 
@@ -56,6 +60,7 @@ The v1 bridge exposes only the canonical `spawnea_*` tools documented below; no 
 - A detached same-user watchdog removes the descriptor and socket after abrupt Electron termination, but only while the protected descriptor still names the exited Electron PID.
 - The gateway starts by default with the desktop app on Unix-like systems. It is disabled on Windows until named-pipe transport is implemented. Set `SPAWNEA_CONTROL_ENABLED=0` (or `false`, `off`, `no`, `disabled`) to disable it elsewhere. There is no TCP listener, public API, remote daemon, or remote host installation.
 - Every socket connection must authenticate with the random 256-bit token from the protected runtime descriptor and an active root session ID before MCP messages are accepted. The gateway rejects unknown IDs, child IDs, and roots that are not local.
+- Spawnea persists a new root session's scoped identity before launching its harness. If tmux startup fails, that persistence is rolled back. Authentication also rechecks the same identity during the existing three-second window, then rejects it if the root never becomes active.
 - After authentication, the MCP server is scoped to the authenticated root and its direct child sessions. Requests targeting another root or an unrelated session are rejected.
 - The read model returns host IDs and display names, never SSH targets, usernames, passwords, tokens, secret references, or resolved credentials.
 - Zod schemas reject malformed tool input before the control service can call a host adapter, tmux, or Git.
@@ -147,7 +152,7 @@ A repeated correlation ID with a different payload is rejected. An exact retry r
 
 ### `spawnea_activate`
 
-Input: `{ "sessionId": "session-id", "tab": "terminal|files|diff|artifacts|details" }`. Selects a known session/tab in the live renderer. It does not run host or Git commands. The result says whether delivery to a live renderer occurred.
+Input: `{ "sessionId": "session-id", "tab": "terminal|files|diff|artifacts|details|agent-context" }`. Selects a known session/tab in the live renderer. It does not run host or Git commands. The result says whether delivery to a live renderer occurred.
 
 ### `spawnea_request_finalization`
 
@@ -193,15 +198,20 @@ Input: `{ "requestId": "uuid-returned-above" }`. Returns one of `pending`, `exec
 Input:
 ```json
 {
+  "clientRequestId": "review-child-1",
   "parentSession": "parent-session-id",
   "name": "Investigate unit test regression",
+  "serverId": "local",
+  "projectId": "spawnea",
+  "model": "gpt-5",
   "task": "Investigate regression in test suite",
   "workspace": "same-project",
-  "agentId": "agent-id"
+  "agentId": "agent-id",
+  "initialPrompt": "Review the current changes"
 }
 ```
 
-Creates a direct child session under an existing root parent session. Server, project, and default agent harness are inherited from the parent session. `workspace` must be either `"same-project"` (runs directly in parent's working directory) or `"new-worktree"` (creates an isolated managed git worktree). Enforces a strict 2-level cap: child sessions cannot spawn grandchildren. Returns the allocated monotonic child alias (`child-1`, `child-2`, etc.), parent session ID, and session status (`starting`).
+Creates a direct child session under an existing root parent session. Optional `serverId`, `projectId`, and `model` default to the parent server, project, and harness configuration. `model` must use the supported model identifier format. A different-host child requires both `serverId` and `projectId` plus `workspace: "new-worktree"`; invalid combinations are rejected. `workspace` must be either `"same-project"` (runs directly in parent's working directory) or `"new-worktree"` (creates an isolated managed git worktree). Enforces a strict 2-level cap: child sessions cannot spawn grandchildren. An optional `clientRequestId` makes exact retries idempotent. When `initialPrompt` is present, Spawnea waits for the session to leave `starting` for a bounded period and reports `promptStatus`, `turnId`, and any prompt error separately from successful session creation.
 
 ### `spawnea_list_sessions`
 
@@ -216,6 +226,7 @@ Input:
 {
   "target": "session-id-or-child-alias",
   "parentSession": "parent-session-id",
+  "clientRequestId": "review-turn-1",
   "prompt": "Run the test suite and report results"
 }
 ```
@@ -224,7 +235,23 @@ Canonical session IDs always work. A `child-*` alias must include
 `parentSession` when it is not globally unique; ambiguous aliases are rejected
 without that scope.
 
-Writes prompt text directly to the target session's active PTY stream or underlying tmux session. Returns immediately after delivering prompt input without waiting for agent completion.
+Waits for a `starting` session to become usable for a bounded period, captures an initial terminal cursor, and submits the prompt through the active PTY or underlying tmux session. Active PTYs receive a carriage return matching the terminal Enter key. The result contains `turnId`, `version`, and delivery metadata. Exact `clientRequestId` retries do not submit twice. A second unrelated prompt is rejected while the turn is working; an answer is accepted after the turn reaches `needs_input`.
+
+### `spawnea_get_turn`
+
+Input:
+```json
+{
+  "turnId": "uuid-returned-by-send-prompt",
+  "cursor": "opaque-cursor-from-prior-read",
+  "afterVersion": 2,
+  "waitMs": 30000,
+  "outputMode": "compact",
+  "maxBytes": 32768
+}
+```
+
+Reads output produced after the prompt's initial cursor or after the supplied cursor. `waitMs` is bounded to 30 seconds and wakes when the turn changes or reaches `needs_input`, `completed`, or `failed`. The result always includes a replacement cursor, version, `truncated`, and `cursorExpired`. `compact` is the default and conservatively removes only harness output recognized by stable adapter rules; every omission is reported. `raw` returns the bounded captured terminal output without filtering. Turn state and cursors are volatile and disappear when Spawnea restarts.
 
 ## Threat-model decisions
 
@@ -249,7 +276,8 @@ Use a disposable Git repository and a disposable Spawnea managed-worktree sessio
 2. Call `spawnea_get_state`; confirm host addresses and credentials are absent.
 3. Call `spawnea_rename_session`; confirm the context bar/sidebar update, `spawnea_get_state` returns the new title, and the task/tmux/branch/worktree fields are unchanged.
 4. Call `spawnea_create_sessions` with one valid and one deliberately invalid item; confirm explicit partial results, then retry the exact request and confirm `replayed: true`.
-5. Call `spawnea_activate` and `spawnea_inspect_worktree`; confirm the selected tab changes and the repository remains unchanged.
-6. Request `close` with `dirtyChanges: "discard"` and no confirmation; confirm no Git/tmux mutation occurs while the dialog is pending, reject it, and verify status `rejected`.
-7. Submit a fresh `close` request with `confirmation: "llm-validated"`; verify no confirmation dialog opens and the returned status/result matches the actual disposable worktree/session state.
-8. Stop Spawnea and verify the bridge can no longer connect.
+5. Create a disposable child with `initialPrompt`; call `spawnea_get_turn` using `afterVersion` and `waitMs`, then continue from the returned cursor. Confirm questions wake with `needs_input` and an answer can be submitted on the same turn.
+6. Call `spawnea_activate` and `spawnea_inspect_worktree`; confirm the selected tab changes and the repository remains unchanged.
+7. Request `close` with `dirtyChanges: "discard"` and no confirmation; confirm no Git/tmux mutation occurs while the dialog is pending, reject it, and verify status `rejected`.
+8. Submit a fresh `close` request with `confirmation: "llm-validated"`; verify no confirmation dialog opens and the returned status/result matches the actual disposable worktree/session state.
+9. Stop Spawnea and verify the bridge can no longer connect.
