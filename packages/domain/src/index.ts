@@ -229,6 +229,8 @@ export interface GitStatusResult {
 
 export interface GitDiffOptions {
   filePath?: string;
+  /** Immutable managed-worktree baseline, when supplied by orchestration. */
+  baseCommit?: string;
   staged?: boolean;
   cached?: boolean;
   maxLines?: number;

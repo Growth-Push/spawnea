@@ -19,5 +19,20 @@ export function resolveControlSocketPath(env: NodeJS.ProcessEnv = process.env): 
 }
 
 export function resolveControlRuntimeFileCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
-  return [resolveControlRuntimeFile(env)];
+  if (env.SPAWNEA_CONTROL_RUNTIME_FILE || env.SPAWNEA_CONTROL_RUNTIME_DIR) {
+    return [resolveControlRuntimeFile(env)];
+  }
+
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 'user';
+  const candidates = [
+    env.XDG_RUNTIME_DIR
+      ? join(resolve(env.XDG_RUNTIME_DIR), 'spawnea', 'control-runtime.json')
+      : undefined,
+    typeof process.getuid === 'function'
+      ? join('/run/user', String(uid), 'spawnea', 'control-runtime.json')
+      : undefined,
+    join(tmpdir(), `spawnea-${uid}`, 'control-runtime.json'),
+  ];
+
+  return [...new Set(candidates.filter((candidate): candidate is string => Boolean(candidate)))];
 }

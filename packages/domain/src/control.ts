@@ -9,7 +9,7 @@ import type { SessionStatus } from './index.js';
 export const SPAWNEA_CONTROL_API_VERSION = 'v1' as const;
 
 export type SpawneaControlApiVersion = typeof SPAWNEA_CONTROL_API_VERSION;
-export type ControlWorkspaceTab = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details';
+export type ControlWorkspaceTab = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details' | 'agent-context';
 
 export interface ControlUiState {
   activeSessionId: string | null;
@@ -99,6 +99,7 @@ export interface ControlFinalizationRequest {
   worktreePath: string;
   action: ControlFinalizationAction;
   dirtyChanges?: ControlDirtyChangesPolicy;
+  force?: boolean;
   /** Explicit protocol signal for a close already approved by the MCP caller's LLM. */
   mode: ControlFinalizationMode;
   status: ControlFinalizationStatus;
@@ -147,15 +148,21 @@ export interface ControlRuntimeDescriptor {
 export interface ControlNavigateEvent extends ControlUiState {}
 
 export interface ControlCreateChildSessionRequest {
+  clientRequestId?: string;
   parentSession: string;
   name?: string;
   task: string;
   workspace: ChildSessionWorkspaceMode;
   agentId?: string;
+  serverId?: string;
+  projectId?: string;
+  model?: string;
+  initialPrompt?: string;
 }
 
 export interface ControlCreateChildSessionResult {
   apiVersion: SpawneaControlApiVersion;
+  sessionCreated: true;
   parentSessionId: string;
   childAlias: string;
   sessionId: string;
@@ -166,6 +173,35 @@ export interface ControlCreateChildSessionResult {
   workspaceMode: ChildSessionWorkspaceMode;
   status: SessionStatus;
   initialStatus: SessionStatus;
+  startupStatus: 'starting' | 'ready' | 'needs_human' | 'failed' | 'unknown';
+  promptStatus: 'not_requested' | 'launch_injected' | 'queued' | 'delivered' | 'failed';
+  turnId?: string;
+  replayed: boolean;
+  promptError?: string;
+  baseCommit?: string;
+  parentBranch: string;
+  parentWasDirty: boolean;
+  excludedParentChanges: boolean;
+}
+
+export interface ControlAgentContextCall {
+  id: string;
+  operation: string;
+  status: 'completed' | 'failed' | 'unchanged';
+  startedAt: string;
+  completedAt: string;
+  repeatCount: number;
+  request: unknown;
+  response?: unknown;
+  error?: string;
+}
+
+export interface ControlAgentContextSnapshot {
+  apiVersion: SpawneaControlApiVersion;
+  rootSessionId: string;
+  available: boolean;
+  volatileNotice: string;
+  calls: ControlAgentContextCall[];
 }
 
 export interface ControlListSessionsResult {
@@ -176,6 +212,7 @@ export interface ControlListSessionsResult {
 export interface ControlSendPromptRequest {
   target: string;
   parentSession?: string;
+  clientRequestId?: string;
   prompt: string;
 }
 
@@ -185,5 +222,50 @@ export interface ControlSendPromptResult {
   delivered: boolean;
   deliveryMethod: 'pty' | 'tmux';
   acceptedAt: string;
+  turnId: string;
+  version: number;
+  status: ControlTurnStatus;
+  replayed: boolean;
   message: string;
+}
+
+export type ControlTurnStatus =
+  | 'working'
+  | 'needs_input'
+  | 'completed'
+  | 'failed'
+  | 'unknown'
+  | 'unchanged';
+
+export type ControlTurnOutputMode = 'compact' | 'raw';
+
+export interface ControlGetTurnRequest {
+  turnId: string;
+  cursor?: string;
+  afterVersion?: number;
+  waitMs?: number;
+  outputMode?: ControlTurnOutputMode;
+  maxBytes?: number;
+}
+
+export interface ControlGetTurnResult {
+  apiVersion: SpawneaControlApiVersion;
+  turnId: string;
+  sessionId: string;
+  status: ControlTurnStatus;
+  version: number;
+  cursor: string;
+  output: string;
+  outputMode: ControlTurnOutputMode;
+  truncated: boolean;
+  cursorExpired: boolean;
+  extraction: 'none' | 'delimited' | 'best_effort';
+  confidence: 'high' | 'medium' | 'low';
+  omitted: Array<{
+    adapter: string;
+    rule: string;
+    category: 'chrome' | 'progress' | 'tool_activity';
+    lineCount: number;
+  }>;
+  changedAt: string;
 }

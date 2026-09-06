@@ -37,6 +37,7 @@ import type {
   ControlUiState,
   ControlNavigateEvent,
   ControlFinalizationRequest,
+  ControlAgentContextSnapshot,
 } from '@spawnea/domain';
 
 export const api = {
@@ -116,6 +117,8 @@ export const api = {
   },
   listControlFinalizationRequests: (includeResolved = false): Promise<ControlFinalizationRequest[]> =>
     ipcRenderer.invoke('control:listFinalizationRequests', includeResolved),
+  getAgentContext: (sessionId: string): Promise<ControlAgentContextSnapshot> =>
+    ipcRenderer.invoke('control:getAgentContext', sessionId),
   resolveControlFinalizationRequest: (
     requestId: string,
     decision: 'approve' | 'reject'

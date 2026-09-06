@@ -271,6 +271,13 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
     deleteSession: vi.fn().mockResolvedValue(true),
     syncControlUiState: vi.fn(),
     listControlFinalizationRequests: vi.fn().mockResolvedValue([]),
+    getAgentContext: vi.fn().mockResolvedValue({
+      apiVersion: 'v1',
+      rootSessionId: 'sess-1',
+      available: false,
+      volatileNotice: 'Prior volatile MCP context is unavailable.',
+      calls: [],
+    }),
     resolveControlFinalizationRequest: vi.fn(),
     onControlNavigate: vi.fn().mockReturnValue(() => {}),
     onControlFinalizationRequested: vi.fn().mockReturnValue(() => {}),
@@ -2070,7 +2077,7 @@ describe('App Desktop Shell', () => {
     });
   });
 
-  it('navigates workspace tabs using Alt+1 through Alt+5 keyboard shortcuts (Task 3.2)', async () => {
+  it('navigates workspace tabs using Alt+1 through Alt+6 keyboard shortcuts', async () => {
     const setActiveSession = vi.fn();
     window.spawneaApi = createMockSpawneaApi({
       listFiles: vi.fn().mockResolvedValue([
@@ -2113,7 +2120,14 @@ describe('App Desktop Shell', () => {
       expect(screen.getByText('Session Entity Details')).toBeDefined();
     });
 
-    // 5. Press Alt+1 -> Switch back to Terminal tab
+    // 5. Press Alt+6 -> Switch to volatile Agent Context
+    fireEvent.keyDown(window, { key: '6', altKey: true });
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-context-view')).toBeDefined();
+      expect(screen.getByTestId('agent-context-unavailable')).toBeDefined();
+    });
+
+    // 6. Press Alt+1 -> Switch back to Terminal tab
     fireEvent.keyDown(window, { key: '1', altKey: true });
     await waitFor(() => {
       expect(screen.getByTestId('xterm-container')).toBeDefined();

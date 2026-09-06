@@ -152,6 +152,35 @@ describe('ControlMcpGateway security boundary', () => {
     }
   });
 
+  it('waits for a newly launched root session to become available during authentication', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'spawnea-control-gateway-'));
+    directories.push(directory);
+    const getState = vi.fn().mockResolvedValue({ apiVersion: 'v1', sessions: [] });
+    const createScopedControl = vi.fn()
+      .mockRejectedValueOnce(new Error('MCP session identity is not an active local root'))
+      .mockResolvedValue({ getState });
+    const gateway = new ControlMcpGateway({
+      control: { createScopedControl } as unknown as AgentControlServiceType,
+      logger: createLogger('ControlMcpGatewayTest'),
+      runtimeFilePath: join(directory, 'runtime.json'),
+      socketPath: join(directory, 'control.sock'),
+    });
+    gateways.push(gateway);
+    const descriptor = await gateway.start();
+    const client = new Client({ name: 'spawnea-gateway-test', version: '1.0.0' });
+
+    try {
+      await client.connect(new AuthenticatedSocketTransport(descriptor.socketPath, descriptor.token));
+      const result = await client.callTool({ name: 'spawnea_get_state', arguments: {} });
+
+      expect(result.isError).not.toBe(true);
+      expect(createScopedControl).toHaveBeenCalledTimes(2);
+      expect(createScopedControl).toHaveBeenCalledWith('session-1');
+    } finally {
+      await client.close();
+    }
+  });
+
   it('passes the explicit validated-close protocol through the authenticated gateway', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'spawnea-control-gateway-'));
     directories.push(directory);
@@ -185,6 +214,7 @@ describe('ControlMcpGateway security boundary', () => {
           action: 'close',
           dirtyChanges: 'stash',
           confirmation: 'llm-validated',
+          force: true,
         },
       });
 
@@ -258,6 +288,7 @@ describe('ControlMcpGateway security boundary', () => {
           action: 'close',
           dirtyChanges: 'stash',
           confirmation: 'llm-validated',
+          force: true,
         },
       });
 

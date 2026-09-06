@@ -35,6 +35,12 @@ describe('Spawnea MCP v1 contract', () => {
       'spawnea_create_child_session',
       'spawnea_list_sessions',
       'spawnea_send_prompt',
+      'spawnea_get_turn',
+      'spawnea_list_child_files',
+      'spawnea_read_child_file',
+      'spawnea_get_child_git_status',
+      'spawnea_get_child_git_diff',
+      'spawnea_list_child_artifacts',
     ]);
     expect(new Set(toolNames).size).toBe(toolNames.length);
     expect(toolNames.every((name) => name.startsWith('spawnea_'))).toBe(true);
@@ -283,7 +289,11 @@ describe('Spawnea MCP v1 contract', () => {
       delivered: true,
       deliveryMethod: 'pty',
       acceptedAt: '2026-09-03T00:00:01.000Z',
-      message: 'Prompt delivered to terminal stream. Response handoff is manual.',
+      turnId: '00000000-0000-4000-8000-000000000001',
+      version: 2,
+      status: 'working',
+      replayed: false,
+      message: 'Prompt submitted. Use spawnea_get_turn to read or wait for the response.',
     };
     const sendPrompt = vi.fn().mockResolvedValue(sendResult);
     const client = await connect({ sendPrompt } as Partial<AgentControlService>);
@@ -299,11 +309,54 @@ describe('Spawnea MCP v1 contract', () => {
     expect(result.structuredContent).toMatchObject({
       delivered: true,
       deliveryMethod: 'pty',
-      message: 'Prompt delivered to terminal stream. Response handoff is manual.',
+      turnId: '00000000-0000-4000-8000-000000000001',
+      message: 'Prompt submitted. Use spawnea_get_turn to read or wait for the response.',
     });
     expect(sendPrompt).toHaveBeenCalledWith({
       target: 'session-child-1',
       prompt: 'Run test suite',
+    });
+  });
+
+  it('reads a tracked turn with bounded cursor options', async () => {
+    const getTurn = vi.fn().mockResolvedValue({
+      apiVersion: 'v1',
+      turnId: '00000000-0000-4000-8000-000000000001',
+      sessionId: 'session-child-1',
+      status: 'needs_input',
+      version: 3,
+      cursor: '00000000-0000-4000-8000-000000000001:42',
+      output: 'Should I update the documentation?',
+      outputMode: 'compact',
+      truncated: false,
+      cursorExpired: false,
+      extraction: 'none',
+      confidence: 'low',
+      omitted: [],
+      changedAt: '2026-09-05T20:00:00.000Z',
+    });
+    const client = await connect({ getTurn } as Partial<AgentControlService>);
+
+    const result = await client.callTool({
+      name: 'spawnea_get_turn',
+      arguments: {
+        turnId: '00000000-0000-4000-8000-000000000001',
+        afterVersion: 2,
+        waitMs: 5_000,
+        maxBytes: 16_384,
+      },
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      status: 'needs_input',
+      output: 'Should I update the documentation?',
+      cursorExpired: false,
+    });
+    expect(getTurn).toHaveBeenCalledWith({
+      turnId: '00000000-0000-4000-8000-000000000001',
+      afterVersion: 2,
+      waitMs: 5_000,
+      maxBytes: 16_384,
     });
   });
 });

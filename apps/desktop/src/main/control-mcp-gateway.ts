@@ -15,6 +15,7 @@ import { createSpawneaMcpServer } from './control-mcp-server.js';
 import { resolveControlRuntimeFile, resolveControlSocketPath } from './control-runtime.js';
 
 const AUTH_TIMEOUT_MS = 3_000;
+const AUTH_SCOPE_RETRY_INTERVAL_MS = 50;
 const MAX_AUTH_BYTES = 4_096;
 
 export interface ControlMcpGatewayOptions {
@@ -187,10 +188,15 @@ export class ControlMcpGateway {
       socket.pause();
       socket.removeListener('data', onData);
       let scopedControl: Awaited<ReturnType<AgentControlService['createScopedControl']>>;
-      try {
-        scopedControl = await this.control.createScopedControl(auth.sessionId);
-      } catch {
-        return fail();
+      const deadline = Date.now() + AUTH_TIMEOUT_MS;
+      while (true) {
+        try {
+          scopedControl = await this.control.createScopedControl(auth.sessionId);
+          break;
+        } catch {
+          if (socket.destroyed || Date.now() >= deadline) return fail();
+          await new Promise((resolve) => setTimeout(resolve, AUTH_SCOPE_RETRY_INTERVAL_MS));
+        }
       }
 
       clearTimeout(timeout);

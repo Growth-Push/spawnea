@@ -130,7 +130,10 @@ export class TmuxManager {
   /**
    * Sends keyboard input / prompt text directly to the tmux session.
    */
-  async sendInput(host: HostAdapter, sessionName: string, text: string): Promise<boolean> {
+  async sendInput(host: HostAdapter, sessionName: string, text: string, submitCount = 1): Promise<boolean> {
+    if (!Number.isSafeInteger(submitCount) || submitCount < 1 || submitCount > 2) {
+      throw new Error('tmux submitCount must be a safe integer between 1 and 2');
+    }
     this.logger.info('Sending input to tmux session', { serverId: host.serverId, sessionName });
     // Using -l sends the literal characters without duplicate newline before Enter
     const sanitizedText = text.replace(/\r?\n$/, '');
@@ -138,7 +141,13 @@ export class TmuxManager {
     const sendResult = await host.execute(sendCmd);
     if (sendResult.exitCode !== 0) return false;
     const enterResult = await host.execute(`tmux send-keys -t ${escapeShellArg(sessionName)} Enter`);
-    return enterResult.exitCode === 0;
+    if (enterResult.exitCode !== 0) return false;
+    for (let index = 1; index < submitCount; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const confirmation = await host.execute(`tmux send-keys -t ${escapeShellArg(sessionName)} Enter`);
+      if (confirmation.exitCode !== 0) return false;
+    }
+    return true;
   }
 
   /**
