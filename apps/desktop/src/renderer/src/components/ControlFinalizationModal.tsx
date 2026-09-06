@@ -73,6 +73,12 @@ export function ControlFinalizationModal({
             <p>{destructiveSummary}</p>
           </div>
 
+          <p className="text-xs text-slate-400">
+            Close and integration are blocked while another session shares this worktree.
+            Close those sessions first; reparenting does not move their workspace.
+            Children with independent worktrees remain running as root sessions.
+          </p>
+
           {request.status === 'completed' && (
             <div className="flex items-center gap-2 text-sm text-emerald-300">
               <CheckCircle2 className="h-4 w-4" /> Action completed successfully.

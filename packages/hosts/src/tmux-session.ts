@@ -326,7 +326,12 @@ export class TmuxManager {
     this.logger.info('Killing tmux session', { serverId: host.serverId, sessionName });
     const killCmd = `tmux kill-session -t ${escapeShellArg(sessionName)}`;
     await host.execute(killCmd);
-    const stillExists = await this.hasSession(host, sessionName);
-    return !stillExists;
+    // Keep diagnostics deterministic without changing the host or session locale.
+    const verification = await host.execute(`LC_ALL=C tmux has-session -t ${escapeShellArg(sessionName)}`);
+    if (verification.exitCode === 0) return false;
+    if (verification.exitCode === 1 && /^(can't find session(?:\b|:)|no server running on |error connecting to .+ \(No such file or directory\))/m.test(verification.stderr.trim())) {
+      return true;
+    }
+    throw new Error(`Failed to verify termination of tmux session '${sessionName}': ${verification.stderr.trim() || `exit code ${verification.exitCode}`}`);
   }
 }

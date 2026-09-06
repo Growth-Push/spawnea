@@ -189,6 +189,27 @@ For close, the caller must state what should happen to dirty changes:
 
 `dirtyChanges` must be `stash` or `discard`. The latter is explicitly permanent. UI-confirmation requests display a blocking confirmation dialog containing the session, branches, worktree path, and exact consequences. Validated MCP closes do not display that dialog, but they still pass the same authoritative finalization checks. Only the renderer preload exposes approval/rejection for pending requests.
 
+Close and integration refuse to proceed while another session on the same host
+uses the worktree, including same-project children and promoted root sessions.
+Close those sessions before retrying; changing hierarchy alone does not change
+their working directory. Children with independent worktrees remain running and
+are promoted to roots after successful finalization. Ordinary session deletion
+with `leave-children` preserves a shared worktree and transfers managed ownership
+to a surviving session.
+
+Removal and unadoption wait up to 30 seconds for in-progress child creation to finish or roll
+back; shutdown cancels this wait. Timeout or cancellation returns an error without
+starting cleanup. The lifecycle guard remains until every active creation settles,
+rejecting new children and concurrent removal attempts. Retry after creation
+completes or rolls back.
+A failed or inconclusive tmux termination check fails the operation before merge,
+stash, discard, or worktree removal. An explicitly verified absent tmux session is
+safe to finalize. Retries recheck workspace use and termination, skip only cleanup
+steps recorded as complete, and report failure if remaining cleanup fails. These
+failures appear in the desktop dialog and in the queryable MCP request result.
+Authorization is unchanged: integration requires UI approval; close may use UI
+approval or explicit LLM validation.
+
 ### `spawnea_get_finalization_request`
 
 Input: `{ "requestId": "uuid-returned-above" }`. Returns one of `pending`, `executing`, `completed`, `rejected`, or `failed`, plus the truthful result/error. Clients must not interpret a pending request as success.

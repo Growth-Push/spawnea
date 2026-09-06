@@ -237,6 +237,12 @@ export function FinishSessionModal({
             </div>
           )}
 
+          <p className="text-xs text-slate-400">
+            Close and integration are blocked while another session shares this worktree.
+            Close those sessions first; reparenting does not move their workspace.
+            Children with independent worktrees remain running as root sessions.
+          </p>
+
           {/* Action selection cards */}
           <div className="space-y-3">
             <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">

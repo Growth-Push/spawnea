@@ -3,6 +3,46 @@ import { MockHostAdapter } from '../src/mock-host.js';
 import { TmuxManager } from '../src/tmux-session.js';
 
 describe('TmuxManager', () => {
+  it.each([
+    { diagnostic: 'No such file or directory', absent: true },
+    { diagnostic: 'Permission denied', absent: false },
+  ])('uses deterministic diagnostics on a localized host: $diagnostic', async ({ diagnostic, absent }) => {
+    const host = new MockHostAdapter('host-1');
+    host.customRules.push({
+      pattern: 'tmux has-session',
+      response: (command) => ({
+        stdout: '',
+        // Multilingual fixture: simulate a host whose diagnostics follow LC_MESSAGES.
+        stderr: `error connecting to /tmp/spawnea-test/socket (${command.startsWith('LC_ALL=C ') ? diagnostic : 'diagnóstico localizado'})`,
+        exitCode: 1,
+      }),
+    });
+    const result = new TmuxManager().killSession(host, 'localized-host');
+    if (absent) await expect(result).resolves.toBe(true);
+    else await expect(result).rejects.toThrow('Permission denied');
+  });
+
+  it.each([
+    { exitCode: 1, stderr: "can't find session: missing" },
+    { exitCode: 1, stderr: 'no server running on /tmp/spawnea-test/socket' },
+    { exitCode: 1, stderr: 'error connecting to /tmp/spawnea-test/socket (No such file or directory)' },
+  ])('verifies an absent session before accepting termination: $stderr', async ({ exitCode, stderr }) => {
+    const host = new MockHostAdapter('host-1');
+    host.customRules.push({ pattern: 'tmux has-session', response: { stdout: '', stderr, exitCode } });
+    await expect(new TmuxManager().killSession(host, 'missing')).resolves.toBe(true);
+  });
+
+  it.each([
+    { exitCode: 1, stderr: 'error connecting to /tmp/spawnea-test/socket (Permission denied)' },
+    { exitCode: 127, stderr: 'tmux: command not found' },
+    { exitCode: 255, stderr: 'Connection closed' },
+    { exitCode: 1, stderr: '' },
+  ])('rejects an inconclusive termination check: $stderr', async ({ exitCode, stderr }) => {
+    const host = new MockHostAdapter('host-1');
+    host.customRules.push({ pattern: 'tmux has-session', response: { stdout: '', stderr, exitCode } });
+    await expect(new TmuxManager().killSession(host, 'uncertain')).rejects.toThrow('Failed to verify termination');
+  });
+
   it('creates a persistent tmux session and sends the harness command (FG-2.2.6, FG-2.2.7)', async () => {
     const host = new MockHostAdapter('host-1');
     const tmux = new TmuxManager();
