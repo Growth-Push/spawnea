@@ -9,6 +9,7 @@ export interface ExecResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  truncated?: boolean;
 }
 
 export interface PtyOptions {
