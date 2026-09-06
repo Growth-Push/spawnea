@@ -1597,7 +1597,7 @@ up 1 day, 5 hours
       const creation = sessionManager.createChildSession({ parentSessionId: parent.id, task: 'Deferred child', workspace: 'same-project' });
       const creationResult = creation.catch((err: Error) => err);
       await vi.waitFor(() => expect(core).toHaveBeenCalled());
-      expect((sessionManager as any).childCreationsInProgress.get(parent.id)).toBe(1);
+      expect((sessionManager as any).childCreationsInProgress.get(parent.id)?.count).toBe(1);
       let settled = false;
       const finalization = (operation === 'delete' ? sessionManager.deleteSession(parent.id)
         : sessionManager.finishSession(parent.id, 'close')).catch((err: Error) => err).finally(() => { settled = true; });
@@ -1623,6 +1623,67 @@ up 1 day, 5 hours
       }
       expect((sessionManager as any).childCreationsInProgress.size).toBe(0);
       expect((sessionManager as any).finalizingParents.size).toBe(0);
+    });
+
+    it.each(['close', 'delete'] as const)('bounds stalled child creation before %s without releasing protection early', async (operation) => {
+      const parent = await parentSession();
+      let failFirst!: (error: Error) => void;
+      let failLast!: (error: Error) => void;
+      const core = vi.spyOn(sessionManager as any, 'createSessionCore')
+        .mockImplementationOnce(() => new Promise((_resolve, reject) => { failFirst = reject; }))
+        .mockImplementationOnce(() => new Promise((_resolve, reject) => { failLast = reject; }));
+      const childInput = { parentSessionId: parent.id, task: 'Stalled child', workspace: 'same-project' as const };
+      const first = sessionManager.createChildSession(childInput).catch((err: Error) => err);
+      const last = sessionManager.createChildSession(childInput).catch((err: Error) => err);
+      await vi.waitFor(() => expect(core).toHaveBeenCalledTimes(2));
+      vi.useFakeTimers();
+      try {
+        let settled = false;
+        const removal = (operation === 'delete' ? sessionManager.deleteSession(parent.id)
+          : sessionManager.finishSession(parent.id, 'close')).catch((err: Error) => err).finally(() => { settled = true; });
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect((await removal as Error).message).toContain('Timed out after 30 seconds');
+        expect(vi.getTimerCount()).toBe(0);
+        expect(destructiveCalls()).toEqual([]);
+        expect(mockHost.sessions.has(parent.tmuxSessionName)).toBe(true);
+        expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+        expect(await contextStore.load(parent.id)).not.toBeNull();
+        await expect(sessionManager.finishSession(parent.id, 'close')).rejects.toThrow('already being finalized');
+        await expect(sessionManager.createChildSession(childInput)).rejects.toThrow('being finalized');
+        failFirst(new Error('first child rolled back'));
+        await first;
+        expect((sessionManager as any).finalizingParents.has(parent.id)).toBe(true);
+        failLast(new Error('last child rolled back'));
+        await last;
+        expect((sessionManager as any).finalizingParents.has(parent.id)).toBe(false);
+        expect((sessionManager as any).childCreationsInProgress.size).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+      await expect(sessionManager.finishSession(parent.id, 'close')).resolves.toEqual({ action: 'close', removed: true });
+    });
+
+    it('cancels the creation drain on shutdown and keeps the parent until rollback completes', async () => {
+      const parent = await parentSession();
+      let fail!: (error: Error) => void;
+      const core = vi.spyOn(sessionManager as any, 'createSessionCore')
+        .mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+      const creation = sessionManager.createChildSession({ parentSessionId: parent.id, task: 'Pending child', workspace: 'same-project' })
+        .catch((err: Error) => err);
+      await vi.waitFor(() => expect(core).toHaveBeenCalledOnce());
+      const removal = sessionManager.finishSession(parent.id, 'close').catch((err: Error) => err);
+      await vi.waitFor(() => expect((sessionManager as any).finalizingParents.has(parent.id)).toBe(true));
+      await sessionManager.dispose();
+      expect((await removal as Error).message).toContain('cancelled during shutdown');
+      expect(destructiveCalls()).toEqual([]);
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+      expect(await contextStore.load(parent.id)).not.toBeNull();
+      expect((sessionManager as any).finalizingParents.has(parent.id)).toBe(true);
+      fail(new Error('child rolled back'));
+      await creation;
+      expect((sessionManager as any).finalizingParents.has(parent.id)).toBe(false);
     });
 
     it.each(['snapshot', 'host', 'repository', 'worktree'] as const)('releases early guards and acquired path leases after %s failure', async (stage) => {

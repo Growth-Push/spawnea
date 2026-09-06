@@ -107,7 +107,12 @@ export class SessionManager {
   private readonly startingSessions: Map<string, Promise<void>> = new Map();
   private readonly creatingSessionIds = new Set<string>();
   private readonly finalizingParents: Set<string> = new Set();
-  private readonly childCreationsInProgress: Map<string, number> = new Map();
+  private readonly childCreationsInProgress = new Map<string, {
+    count: number;
+    completion: Promise<void>;
+    complete: () => void;
+  }>();
+  private readonly removalWaitCancellation = new AbortController();
   // In-memory host system telemetry cache
   private readonly hostSystemInfoCache: Map<string, HostSystemInfo> = new Map();
   // Active attached terminal sessions tracking for automatic transparent re-attachment
@@ -950,6 +955,9 @@ export class SessionManager {
     input: CreateChildSessionInput,
     creationSource: SessionCreationSource = 'ui'
   ): Promise<Session> {
+    if (this.removalWaitCancellation.signal.aborted) {
+      throw new Error('Session manager is shutting down');
+    }
     if (!input.task || input.task.trim() === '') {
       throw new Error('Task description is required to create a child session');
     }
@@ -964,7 +972,14 @@ export class SessionManager {
     if (this.finalizingParents.has(parent.id)) {
       throw new Error(`Parent session '${parent.id}' is being finalized and cannot accept new children`);
     }
-    this.childCreationsInProgress.set(parent.id, (this.childCreationsInProgress.get(parent.id) || 0) + 1);
+    let creations = this.childCreationsInProgress.get(parent.id);
+    if (!creations) {
+      let complete!: () => void;
+      const completion = new Promise<void>((resolve) => { complete = resolve; });
+      creations = { count: 0, completion, complete };
+      this.childCreationsInProgress.set(parent.id, creations);
+    }
+    creations.count += 1;
 
     try {
       const childServerId = input.serverId ?? parent.serverId;
@@ -1032,9 +1047,11 @@ export class SessionManager {
         model: input.model,
       });
     } finally {
-      const remaining = (this.childCreationsInProgress.get(parent.id) || 1) - 1;
-      if (remaining > 0) this.childCreationsInProgress.set(parent.id, remaining);
-      else this.childCreationsInProgress.delete(parent.id);
+      creations.count -= 1;
+      if (creations.count === 0) {
+        this.childCreationsInProgress.delete(parent.id);
+        creations.complete();
+      }
     }
   }
 
@@ -1301,19 +1318,47 @@ export class SessionManager {
     }
   }
 
-  /** Hold the lifecycle guard until creation has committed or rolled back. */
+  /**
+   * Acquire removal ownership and wait up to 30 seconds for child creation.
+   * A failed wait leaves the parent protected until every active creation settles.
+   * @returns A release callback for the successful removal attempt.
+   */
   private async beginSessionRemoval(sessionId: string): Promise<() => void> {
+    const signal = this.removalWaitCancellation.signal;
+    if (signal.aborted) throw new Error('Session manager is shutting down');
     if (this.finalizingParents.has(sessionId)) {
       throw new Error(`Session '${sessionId}' is already being finalized`);
     }
     this.finalizingParents.add(sessionId);
+    const creations = this.childCreationsInProgress.get(sessionId);
     try {
-      while ((this.childCreationsInProgress.get(sessionId) || 0) > 0) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+      if (creations) {
+        await new Promise<void>((resolve, reject) => {
+          const finish = (error?: Error): void => {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', onAbort);
+            if (error) reject(error);
+            else resolve();
+          };
+          const onAbort = (): void => {
+            finish(new Error(`Removal of session '${sessionId}' was cancelled during shutdown; active child creation remains protected`));
+          };
+          const timer = setTimeout(() => {
+            finish(new Error(`Timed out after 30 seconds waiting for child creation for session '${sessionId}'. No cleanup was started. Retry after child creation completes or rolls back; the parent remains protected until then.`));
+          }, 30_000);
+          signal.addEventListener('abort', onAbort, { once: true });
+          if (signal.aborted) onAbort();
+          void creations.completion.then(() => finish());
+        });
       }
       return () => { this.finalizingParents.delete(sessionId); };
     } catch (err) {
-      this.finalizingParents.delete(sessionId);
+      if (creations && creations.count > 0) {
+        // A timeout/cancellation must not let another removal overtake creation.
+        void creations.completion.then(() => { this.finalizingParents.delete(sessionId); });
+      } else {
+        this.finalizingParents.delete(sessionId);
+      }
       throw err;
     }
   }
@@ -2108,6 +2153,7 @@ export class SessionManager {
    */
   async dispose(): Promise<void> {
     this.logger.info('Disposing SessionManager: closing PTY streams, stopping health monitoring, and disconnecting host adapters');
+    this.removalWaitCancellation.abort();
     this.stopHostHealthMonitoring();
     this.ptyBroker.closeAll();
     for (const [serverId, host] of this.hostPool.entries()) {

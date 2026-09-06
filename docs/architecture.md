@@ -475,9 +475,12 @@ ownership. Independent-worktree children are promoted without stopping them.
 
 A per-session removal guard prevents overlapping removal and new child creation.
 Child creation holds its counter until startup succeeds or rollback finishes;
-removal waits for that counter before inspecting workspace users. Failure paths
-release the guard and every acquired path lease. Verified tmux termination is
-required before destructive Git operations; command/connection errors cannot be
+removal waits on a per-parent completion signal before inspecting workspace users.
+The wait fails after 30 seconds or is cancelled on shutdown. No cleanup begins on
+that failure, and the guard remains until all active creations complete or roll
+back. Other failure paths release the guard and every acquired path lease.
+Verified tmux termination is required before destructive Git operations;
+command/connection errors cannot be
 treated as evidence that a process is absent. Partial-finalization retries repeat
 ownership and termination checks and skip only persisted completed cleanup steps.
 

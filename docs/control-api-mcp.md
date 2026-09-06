@@ -197,8 +197,11 @@ are promoted to roots after successful finalization. Ordinary session deletion
 with `leave-children` preserves a shared worktree and transfers managed ownership
 to a surviving session.
 
-Removal waits for in-progress child creation to finish or roll back and rejects
-new children and concurrent removal attempts while it holds the lifecycle guard.
+Removal waits up to 30 seconds for in-progress child creation to finish or roll
+back; shutdown cancels this wait. Timeout or cancellation returns an error without
+starting cleanup. The lifecycle guard remains until every active creation settles,
+rejecting new children and concurrent removal attempts. Retry after creation
+completes or rolls back.
 A failed or inconclusive tmux termination check fails the operation before merge,
 stash, discard, or worktree removal. An explicitly verified absent tmux session is
 safe to finalize. Retries recheck workspace use and termination, skip only cleanup
