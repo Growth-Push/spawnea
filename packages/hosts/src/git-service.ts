@@ -723,7 +723,7 @@ export class GitService {
         if (baseCommit && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(baseCommit)) {
           throw new Error('Git diff baseCommit must be a full hexadecimal commit ID');
         }
-        cmd = `git diff ${baseCommit || 'HEAD'}`;
+        cmd = `git diff ${baseCommit ? escapeShellPath(baseCommit) : 'HEAD'}`;
       }
 
       if (options?.filePath) {

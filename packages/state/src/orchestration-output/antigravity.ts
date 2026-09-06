@@ -6,7 +6,11 @@ export class AntigravityHarnessOutputAdapter extends GenericHarnessOutputAdapter
 
   protected override classify(line: string): Omit<OmittedOutputBlock, 'adapter' | 'lineCount'> | undefined {
     const value = line.trim();
-    if (/^(?:Reading|Searching|Running)\s+.+\.{3}$/i.test(value)) return { rule: 'tool-progress', category: 'tool_activity' };
+    const progressPrefixes = ['reading ', 'searching ', 'running '];
+    const lowerValue = value.toLowerCase();
+    if (progressPrefixes.some((prefix) => lowerValue.startsWith(prefix)) && value.endsWith('...')) {
+      return { rule: 'tool-progress', category: 'tool_activity' };
+    }
     return undefined;
   }
 }
