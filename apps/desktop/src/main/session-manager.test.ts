@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
-import { MockHostAdapter, OnePasswordResolver } from '@spawnea/hosts';
+import { LocalHostAdapter, MockHostAdapter, OnePasswordResolver } from '@spawnea/hosts';
 import {
   createCatalogProjectPathLocator,
   createCatalogWorktreePathLocator,
@@ -120,7 +121,7 @@ hosts:
     mockHost.customRules.push({
       pattern: 'git worktree remove',
       response: (command) => {
-        const parts = command.match(/git worktree remove '([^']+)'/);
+        const parts = command.match(/git worktree remove (?:-- )?'([^']+)'/);
         if (parts) {
           trackedWorktrees.delete(parts[1]);
         }
@@ -1521,6 +1522,206 @@ up 1 day, 5 hours
     });
   });
 
+  describe('finalization safety', () => {
+    async function parentSession() {
+      await enableManagedWorktrees();
+      return sessionManager.createSession({
+        serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude', task: 'Safety parent',
+      });
+    }
+
+    function destructiveCalls() {
+      return mockHost.executedCommands.filter(({ command }) =>
+        /git (merge --no-ff|stash push|reset --hard|clean |worktree remove|branch -d)/.test(command)
+      );
+    }
+
+    it.each(['close', 'integrate'] as const)('blocks %s while a surviving child uses the worktree, including retries', async (action) => {
+      const parent = await parentSession();
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id, task: 'Shared child', workspace: 'same-project',
+      });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(sessionManager.finishSession(parent.id, action)).rejects.toThrow('worktree is still in use');
+      }
+      expect(destructiveCalls()).toEqual([]);
+      expect(mockHost.sessions.has(parent.tmuxSessionName)).toBe(true);
+      expect(mockHost.sessions.has(child.tmuxSessionName)).toBe(true);
+      expect((await repos.sessions.findById(child.id))?.parentSessionId).toBe(parent.id);
+      expect(await contextStore.load(parent.id)).not.toBeNull();
+    });
+
+    it.each(['close', 'integrate'] as const)('preserves and promotes an independent child after %s', async (action) => {
+      const parent = await parentSession();
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id, task: 'Independent child', workspace: 'new-worktree',
+      });
+      await expect(sessionManager.finishSession(parent.id, action)).resolves.toEqual({ action, removed: true });
+      expect((await repos.sessions.findById(child.id))?.parentSessionId).toBeUndefined();
+      expect((await contextStore.load(child.id))?.parentSessionId).toBeUndefined();
+      expect(mockHost.sessions.has(child.tmuxSessionName)).toBe(true);
+      expect(destructiveCalls().some(({ command }) => command.includes(child.worktreePath))).toBe(false);
+    });
+
+    it.each(['integrate', 'discard', 'stash', 'delete'] as const)('prevents destructive operations when stopping fails during %s', async (operation) => {
+      const parent = await parentSession();
+      mockHost.customRules.push({ pattern: 'tmux kill-session', response: { stdout: '', stderr: 'permission denied', exitCode: 1 } });
+      const result = operation === 'delete' ? sessionManager.deleteSession(parent.id)
+        : sessionManager.finishSession(parent.id, operation === 'integrate' ? 'integrate' : 'close', { stashChanges: operation === 'stash' });
+      await expect(result).rejects.toThrow('Failed to verify termination');
+      expect(destructiveCalls()).toEqual([]);
+      expect(mockHost.sessions.has(parent.tmuxSessionName)).toBe(true);
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+      expect(await contextStore.load(parent.id)).not.toBeNull();
+      expect((sessionManager as any).finalizingParents.size).toBe(0);
+    });
+
+    it('accepts an explicitly verified absent tmux session', async () => {
+      const parent = await parentSession();
+      mockHost.sessions.delete(parent.tmuxSessionName);
+      await expect(sessionManager.finishSession(parent.id, 'close')).resolves.toEqual({ action: 'close', removed: true });
+      expect(mockHost.executedCommands.some(({ command }) => command === `LC_ALL=C tmux has-session -t '${parent.tmuxSessionName}'`)).toBe(true);
+    });
+
+    it.each(['close', 'delete', 'creation-failure'] as const)('waits for deferred child creation and releases guards: %s', async (operation) => {
+      const parent = await parentSession();
+      const original = (sessionManager as any).createSessionCore.bind(sessionManager);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const core = vi.spyOn(sessionManager as any, 'createSessionCore').mockImplementationOnce(async (input) => {
+        await gate;
+        if (operation === 'creation-failure') throw new Error('creation rolled back');
+        return original(input);
+      });
+      const creation = sessionManager.createChildSession({ parentSessionId: parent.id, task: 'Deferred child', workspace: 'same-project' });
+      const creationResult = creation.catch((err: Error) => err);
+      await vi.waitFor(() => expect(core).toHaveBeenCalled());
+      expect((sessionManager as any).childCreationsInProgress.get(parent.id)).toBe(1);
+      let settled = false;
+      const finalization = (operation === 'delete' ? sessionManager.deleteSession(parent.id)
+        : sessionManager.finishSession(parent.id, 'close')).catch((err: Error) => err).finally(() => { settled = true; });
+      await vi.waitFor(() => expect((sessionManager as any).finalizingParents.has(parent.id)).toBe(true));
+      expect(settled).toBe(false);
+      expect(destructiveCalls()).toEqual([]);
+      await expect(sessionManager.finishSession(parent.id, 'close')).rejects.toThrow('already being finalized');
+      await expect(sessionManager.createChildSession({ parentSessionId: parent.id, task: 'Late child', workspace: 'same-project' })).rejects.toThrow('being finalized');
+      release();
+      const child = await creationResult;
+      const result = await finalization;
+      if (operation === 'close') {
+        expect(result).toBeInstanceOf(Error);
+        expect((result as Error).message).toContain('worktree is still in use');
+      } else if (operation === 'delete') {
+        expect(result).toBe(true);
+        expect(child).not.toBeInstanceOf(Error);
+        expect((await repos.sessions.findById((child as any).id))?.managedWorktree).toBe(true);
+        expect(destructiveCalls()).toEqual([]);
+      } else {
+        expect(child).toBeInstanceOf(Error);
+        expect(result).toEqual({ action: 'close', removed: true });
+      }
+      expect((sessionManager as any).childCreationsInProgress.size).toBe(0);
+      expect((sessionManager as any).finalizingParents.size).toBe(0);
+    });
+
+    it.each(['snapshot', 'host', 'repository', 'worktree'] as const)('releases early guards and acquired path leases after %s failure', async (stage) => {
+      const parent = await parentSession();
+      const release = vi.fn();
+      if (stage === 'snapshot') vi.spyOn(repos.sessions, 'findAll').mockRejectedValueOnce(new Error('early failure'));
+      if (stage === 'host') vi.spyOn(sessionManager as any, 'getHostAdapter').mockRejectedValueOnce(new Error('early failure'));
+      if (stage === 'repository') vi.spyOn(sessionManager as any, 'resolveProjectRepositoryPath').mockRejectedValueOnce(new Error('early failure'));
+      if (stage === 'worktree') {
+        vi.spyOn(sessionManager as any, 'resolveProjectRepositoryPath').mockResolvedValueOnce({ value: '/workspace/spawnea', release });
+        vi.spyOn(sessionManager as any, 'resolveSessionWorktreePath').mockRejectedValueOnce(new Error('early failure'));
+      }
+      await expect(sessionManager.finishSession(parent.id, 'close')).rejects.toThrow('early failure');
+      expect((sessionManager as any).finalizingParents.size).toBe(0);
+      if (stage === 'worktree') expect(release).toHaveBeenCalledOnce();
+      expect(destructiveCalls()).toEqual([]);
+      await expect(sessionManager.finishSession(parent.id, 'close')).resolves.toEqual({ action: 'close', removed: true });
+    });
+
+    it.each(['close', 'integrate'] as const)('retries partial %s cleanup without repeating confirmed worktree removal', async (action) => {
+      const parent = await parentSession();
+      const remove = vi.spyOn((sessionManager as any).gitService, 'removeManagedWorktree');
+      const merge = vi.spyOn((sessionManager as any).gitService, 'mergeManagedBranch');
+      const contextDelete = vi.spyOn(contextStore, 'delete').mockResolvedValueOnce(false);
+      await expect(sessionManager.finishSession(parent.id, action)).rejects.toThrow('Failed to delete context');
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+      expect((await contextStore.load(parent.id))?.finalization?.worktreeRemoved).toBe(true);
+      await expect(sessionManager.finishSession(parent.id, action)).resolves.toEqual({ action, removed: true });
+      expect(remove).toHaveBeenCalledOnce();
+      expect(merge).toHaveBeenCalledTimes(action === 'integrate' ? 1 : 0);
+      contextDelete.mockRestore();
+    });
+
+    it('preserves retry state when branch cleanup fails and rechecks a restarted process', async () => {
+      const parent = await parentSession();
+      const branchDelete = vi.spyOn((sessionManager as any).gitService, 'deleteIntegratedBranch')
+        .mockRejectedValueOnce(new Error('branch cleanup failed'));
+      const remove = vi.spyOn((sessionManager as any).gitService, 'removeManagedWorktree');
+      await expect(sessionManager.finishSession(parent.id, 'integrate')).rejects.toThrow('branch cleanup failed');
+      expect((await contextStore.load(parent.id))?.finalization).toMatchObject({ worktreeRemoved: true, branchRemoved: false });
+      mockHost.sessions.add(parent.tmuxSessionName);
+      mockHost.customRules.push({ pattern: 'tmux kill-session', response: { stdout: '', stderr: 'permission denied', exitCode: 1 } });
+      await expect(sessionManager.finishSession(parent.id, 'integrate')).rejects.toThrow('Failed to verify termination');
+      expect(branchDelete).toHaveBeenCalledOnce();
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+      mockHost.sessions.delete(parent.tmuxSessionName);
+      await expect(sessionManager.finishSession(parent.id, 'integrate')).resolves.toEqual({ action: 'integrate', removed: true });
+      expect(branchDelete).toHaveBeenCalledTimes(2);
+      expect(remove).toHaveBeenCalledOnce();
+    });
+
+    it('keeps records and retries when worktree removal was not confirmed', async () => {
+      const parent = await parentSession();
+      const remove = vi.spyOn((sessionManager as any).gitService, 'removeManagedWorktree').mockResolvedValueOnce(false);
+      await expect(sessionManager.finishSession(parent.id, 'close')).rejects.toThrow('Failed to remove managed worktree');
+      expect((await contextStore.load(parent.id))?.finalization?.worktreeRemoved).toBe(false);
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+      await expect(sessionManager.finishSession(parent.id, 'close')).resolves.toEqual({ action: 'close', removed: true });
+      expect(remove).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['close', 'integrate'] as const)('preserves a real Git worktree and child file when %s is refused', async (action) => {
+      const parent = await parentSession();
+      const child = await sessionManager.createChildSession({ parentSessionId: parent.id, task: 'Real shared child', workspace: 'same-project' });
+      const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+      const repo = join(tempDir, 'repository');
+      const worktree = join(tempDir, 'shared-worktree');
+      git(tempDir, 'init', '-b', 'main', repo);
+      git(repo, 'config', 'user.name', 'Spawnea Test');
+      git(repo, 'config', 'user.email', 'spawnea@example.test');
+      git(repo, 'commit', '--allow-empty', '-m', 'initial');
+      git(repo, 'worktree', 'add', '-b', parent.branch!, worktree);
+      writeFileSync(join(worktree, 'child-work.txt'), 'preserve child work');
+      await repos.projects.save({
+        id: parent.projectId, serverId: parent.serverId, name: 'Disposable repository', rootPath: repo,
+      });
+      await repos.sessions.update(parent.id, { worktreePath: worktree, baseCommit: git(repo, 'rev-parse', 'HEAD') });
+      await repos.sessions.update(child.id, { worktreePath: worktree + '/' });
+      // Use real Git and filesystem operations; only the tmux boundary stays simulated.
+      const localHost = new LocalHostAdapter();
+      const tmux = (sessionManager as any).tmuxManager;
+      const kill = tmux.killSession.bind(tmux);
+      vi.spyOn(tmux, 'killSession').mockImplementation((_host, name) => kill(mockHost, name));
+      vi.spyOn(sessionManager as any, 'getHostAdapter').mockResolvedValue(localHost);
+      const stop = vi.spyOn(sessionManager, 'stopSession');
+      const remove = vi.spyOn((sessionManager as any).gitService, 'removeManagedWorktree');
+      const before = git(repo, 'worktree', 'list', '--porcelain');
+      await expect(sessionManager.finishSession(parent.id, action)).rejects.toThrow('worktree is still in use');
+      expect(existsSync(join(worktree, 'child-work.txt'))).toBe(true);
+      expect(git(worktree, 'status', '--porcelain')).toContain('child-work.txt');
+      expect(git(repo, 'worktree', 'list', '--porcelain')).toBe(before);
+      expect(stop).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+      await localHost.disconnect();
+      expect(destructiveCalls()).toEqual([]);
+      expect(mockHost.sessions.has(child.tmuxSessionName)).toBe(true);
+    });
+  });
+
   describe('Session Hierarchy and Child Sessions', () => {
     it('creates a child session inheriting parent server, project, and agent with alias child-1', async () => {
       await enableManagedWorktrees();
@@ -1650,7 +1851,7 @@ up 1 day, 5 hours
       expect(await repos.sessions.findById(child.id)).toBeNull();
     });
 
-    it('keeps same-project children when integrate preflight fails', async () => {
+    it('keeps independent children when integrate preflight fails', async () => {
       await enableManagedWorktrees();
       const parent = await sessionManager.createSession({
         serverId: 'dev-workstation',
@@ -1661,7 +1862,7 @@ up 1 day, 5 hours
       const child = await sessionManager.createChildSession({
         parentSessionId: parent.id,
         task: 'Child preserved on failure',
-        workspace: 'same-project',
+        workspace: 'new-worktree',
       });
       const verify = vi.spyOn((sessionManager as any).gitService, 'verifyManagedWorktreeForFinalization')
         .mockRejectedValueOnce(new Error('worktree is dirty'));
@@ -1671,7 +1872,7 @@ up 1 day, 5 hours
       verify.mockRestore();
     });
 
-    it('keeps same-project children when integration fails after preflight', async () => {
+    it('keeps independent children when integration fails after preflight', async () => {
       await enableManagedWorktrees();
       const parent = await sessionManager.createSession({
         serverId: 'dev-workstation',
@@ -1682,7 +1883,7 @@ up 1 day, 5 hours
       const child = await sessionManager.createChildSession({
         parentSessionId: parent.id,
         task: 'Child preserved after merge failure',
-        workspace: 'same-project',
+        workspace: 'new-worktree',
       });
       const merge = vi.spyOn((sessionManager as any).gitService, 'mergeManagedBranch')
         .mockRejectedValueOnce(new Error('merge failed'));

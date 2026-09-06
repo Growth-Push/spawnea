@@ -465,6 +465,22 @@ sequenceDiagram
 
 ---
 
+### Session removal safety
+
+`SessionManager` uses a shared host/path ownership check for managed-worktree
+finalization and deletion. Close and integration refuse to mutate a workspace
+referenced by another session, including an unmanaged same-project child.
+Deletion with surviving children preserves that directory and transfers managed
+ownership. Independent-worktree children are promoted without stopping them.
+
+A per-session removal guard prevents overlapping removal and new child creation.
+Child creation holds its counter until startup succeeds or rollback finishes;
+removal waits for that counter before inspecting workspace users. Failure paths
+release the guard and every acquired path lease. Verified tmux termination is
+required before destructive Git operations; command/connection errors cannot be
+treated as evidence that a process is absent. Partial-finalization retries repeat
+ownership and termination checks and skip only persisted completed cleanup steps.
+
 ## 7. SQLite Schema & Migration Architecture
 
 Spawnea uses `better-sqlite3` and `drizzle-orm` in the Electron Main process. Migrations run automatically on application startup.

@@ -1019,7 +1019,7 @@ export class SessionManager {
       }
       const displayName = input.name?.trim() || input.task;
 
-      return this.createSessionCore({
+      return await this.createSessionCore({
         serverId: childServerId,
         projectId: childProjectId,
         agentId: input.agentId || parent.agentId,
@@ -1301,6 +1301,32 @@ export class SessionManager {
     }
   }
 
+  /** Hold the lifecycle guard until creation has committed or rolled back. */
+  private async beginSessionRemoval(sessionId: string): Promise<() => void> {
+    if (this.finalizingParents.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is already being finalized`);
+    }
+    this.finalizingParents.add(sessionId);
+    try {
+      while ((this.childCreationsInProgress.get(sessionId) || 0) > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      return () => { this.finalizingParents.delete(sessionId); };
+    } catch (err) {
+      this.finalizingParents.delete(sessionId);
+      throw err;
+    }
+  }
+
+  /** Hierarchy and managed ownership do not change which directory a session uses. */
+  private async findWorktreeUsers(session: Session): Promise<Session[]> {
+    const path = normalizeWorktreePathForComparison(session.worktreePath);
+    return (await this.repos.sessions.findAll()).filter((other) =>
+      other.id !== session.id && other.serverId === session.serverId &&
+      normalizeWorktreePathForComparison(other.worktreePath) === path
+    );
+  }
+
   /**
    * Deletes a session completely (FG-2.6.5, FG-2.7.4):
    * 1. Closes any open PTY channel.
@@ -1313,121 +1339,120 @@ export class SessionManager {
     childAction: ParentCloseAction = 'leave-children'
   ): Promise<boolean> {
     this.logger.info('Deleting session', { sessionId, childAction });
-    this.attachedSessions.delete(sessionId);
-    const ptyChannelId = `pty-${sessionId}`;
-    this.ptyBroker.close(ptyChannelId);
-
-    // Resolve child relationships before parent deletion
-    await this.reconcileChildrenForParentRemoval(sessionId, childAction);
-
+    const releaseRemoval = await this.beginSessionRemoval(sessionId);
     try {
-      const session = await this.repos.sessions.findById(sessionId);
-      if (session) {
-        try {
-          const host = await this.getHostAdapter(session.serverId);
-          const exists = await this.tmuxManager.hasSession(host, session.tmuxSessionName);
-          if (exists) {
-            await this.tmuxManager.killSession(host, session.tmuxSessionName);
-          }
-          if (session.managedWorktree) {
-            // Check if any other session (e.g. surviving child sessions in leave-children mode) shares this worktreePath
-            const allSessions = await this.repos.sessions.findAll();
-            const normalizedPath = normalizeWorktreePathForComparison(session.worktreePath);
-            const sharingSessions = allSessions.filter(
-              (s) => s.id !== sessionId && normalizeWorktreePathForComparison(s.worktreePath) === normalizedPath
-            );
-            if (sharingSessions.length > 0) {
-              // Preserve the worktree on disk and transfer managedWorktree responsibility to the first surviving session
-              const successor = sharingSessions[0];
-              if (!successor.managedWorktree) {
-                await this.repos.sessions.update(successor.id, {
-                  managedWorktree: true,
-                  baseBranch: session.baseBranch,
-                  baseCommit: session.baseCommit,
-                });
-                try {
-                  const successorCtx = await this.contextStore.load(successor.id);
-                  if (successorCtx) {
-                    await this.contextStore.save({
-                      ...successorCtx,
-                      worktree: {
-                        managed: true,
-                        path: successorCtx.project.path || session.worktreePath || '',
-                        branch: session.branch,
-                        baseBranch: session.baseBranch || 'main',
-                        baseCommit: session.baseCommit,
-                      },
+      this.attachedSessions.delete(sessionId);
+      const ptyChannelId = `pty-${sessionId}`;
+      this.ptyBroker.close(ptyChannelId);
+
+      const current = await this.repos.sessions.findById(sessionId);
+      if (current) await this.stopSession(sessionId);
+
+      // Resolve child relationships before parent deletion
+      await this.reconcileChildrenForParentRemoval(sessionId, childAction);
+
+      try {
+        const session = await this.repos.sessions.findById(sessionId);
+        if (session) {
+          try {
+            const host = await this.getHostAdapter(session.serverId);
+            if (session.managedWorktree) {
+              const sharingSessions = await this.findWorktreeUsers(session);
+              if (sharingSessions.length > 0) {
+                // Preserve the worktree on disk and transfer managedWorktree responsibility to the first surviving session
+                const successor = sharingSessions[0];
+                if (!successor.managedWorktree) {
+                  await this.repos.sessions.update(successor.id, {
+                    managedWorktree: true,
+                    baseBranch: session.baseBranch,
+                    baseCommit: session.baseCommit,
+                  });
+                  try {
+                    const successorCtx = await this.contextStore.load(successor.id);
+                    if (successorCtx) {
+                      await this.contextStore.save({
+                        ...successorCtx,
+                        worktree: {
+                          managed: true,
+                          path: successorCtx.project.path || session.worktreePath || '',
+                          branch: session.branch,
+                          baseBranch: session.baseBranch || 'main',
+                          baseCommit: session.baseCommit,
+                        },
+                      });
+                    }
+                  } catch (ctxErr) {
+                    this.logger.warn('Failed to update context file for worktree successor', {
+                      successorId: successor.id,
+                      error: ctxErr,
                     });
                   }
-                } catch (ctxErr) {
-                  this.logger.warn('Failed to update context file for worktree successor', {
-                    successorId: successor.id,
-                    error: ctxErr,
-                  });
                 }
-              }
-              this.logger.info('Preserving shared managed worktree for surviving session', {
-                sessionId,
-                successorId: successor.id,
-                worktreePath: session.worktreePath,
-              });
-            } else {
-              let releaseRepo: () => void = () => undefined;
-              let releaseWorktree: () => void = () => undefined;
-              try {
-                let rawProjId = session.projectId;
-                if (rawProjId.includes(':')) {
-                  rawProjId = rawProjId.split(':')[1];
-                }
-                const catalog = this.catalogManager.getState().catalog;
-                const catalogHost = catalog?.hosts[session.serverId];
-                const catProject = catalogHost?.projects[rawProjId];
-                const project = await this.repos.projects.findById(session.projectId);
-                const configuredRootPath = project?.rootPath || catProject?.path;
+                this.logger.info('Preserving shared managed worktree for surviving session', {
+                  sessionId,
+                  successorId: successor.id,
+                  worktreePath: session.worktreePath,
+                });
+              } else {
+                let releaseRepo: () => void = () => undefined;
+                let releaseWorktree: () => void = () => undefined;
+                try {
+                  let rawProjId = session.projectId;
+                  if (rawProjId.includes(':')) {
+                    rawProjId = rawProjId.split(':')[1];
+                  }
+                  const catalog = this.catalogManager.getState().catalog;
+                  const catalogHost = catalog?.hosts[session.serverId];
+                  const catProject = catalogHost?.projects[rawProjId];
+                  const project = await this.repos.projects.findById(session.projectId);
+                  const configuredRootPath = project?.rootPath || catProject?.path;
 
-                if (configuredRootPath) {
-                  const repositoryPath = await this.resolveProjectRepositoryPath(session.projectId, configuredRootPath);
-                  releaseRepo = repositoryPath.release;
-                  const worktreePath = await this.resolveSessionWorktreePath(session);
-                  releaseWorktree = worktreePath.release;
-                  await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value).catch(() => false);
-                } else {
-                  this.logger.warn('Managed worktree preserved: project path could not be resolved', { sessionId });
+                  if (configuredRootPath) {
+                    const repositoryPath = await this.resolveProjectRepositoryPath(session.projectId, configuredRootPath);
+                    releaseRepo = repositoryPath.release;
+                    const worktreePath = await this.resolveSessionWorktreePath(session);
+                    releaseWorktree = worktreePath.release;
+                    await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value).catch(() => false);
+                  } else {
+                    this.logger.warn('Managed worktree preserved: project path could not be resolved', { sessionId });
+                  }
+                } catch (err) {
+                  this.logger.warn('Failed to clean up managed worktree during session deletion', { sessionId, error: err });
+                } finally {
+                  releaseRepo();
+                  releaseWorktree();
                 }
-              } catch (err) {
-                this.logger.warn('Failed to clean up managed worktree during session deletion', { sessionId, error: err });
-              } finally {
-                releaseRepo();
-                releaseWorktree();
               }
             }
+          } catch (err) {
+            this.logger.warn('Failed to clean up remote session resources during deletion (host may be unreachable)', { error: err });
           }
-        } catch (err) {
-          this.logger.warn('Failed to clean up remote session resources during deletion (host may be unreachable)', { error: err });
         }
+      } catch (err) {
+        this.logger.warn('Error querying session for tmux cleanup during deletion', { error: err });
       }
-    } catch (err) {
-      this.logger.warn('Error querying session for tmux cleanup during deletion', { error: err });
-    }
 
-    const contextDeleted = await this.contextStore.delete(sessionId);
-    if (!contextDeleted) {
-      throw new Error(`Failed to delete context file for session '${sessionId}'`);
-    }
+      const contextDeleted = await this.contextStore.delete(sessionId);
+      if (!contextDeleted) {
+        throw new Error(`Failed to delete context file for session '${sessionId}'`);
+      }
 
-    try {
-      await this.repos.sessions.delete(sessionId);
-    } catch (err) {
-      this.logger.warn('Failed to delete session from database during deletion', { error: err });
-    }
+      try {
+        await this.repos.sessions.delete(sessionId);
+      } catch (err) {
+        this.logger.warn('Failed to delete session from database during deletion', { error: err });
+      }
 
-    const wc = this.getWebContents();
-    if (wc && (typeof wc.isDestroyed !== 'function' || !wc.isDestroyed())) {
-      wc.send('control:dataChanged');
-    }
+      const wc = this.getWebContents();
+      if (wc && (typeof wc.isDestroyed !== 'function' || !wc.isDestroyed())) {
+        wc.send('control:dataChanged');
+      }
 
-    this.logger.info('Session deletion completed', { sessionId });
-    return true;
+      this.logger.info('Session deletion completed', { sessionId });
+      return true;
+    } finally {
+      releaseRemoval();
+    }
   }
 
   /**
@@ -1461,42 +1486,25 @@ export class SessionManager {
       throw new Error(`Session '${sessionId}' does not have an associated task branch`);
     }
 
-    // Freeze child creation before taking the snapshot so no child can appear
-    // after the parent worktree cleanup has begun.
-    this.finalizingParents.add(sessionId);
-    while ((this.childCreationsInProgress.get(sessionId) || 0) > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-    const children = await this.repos.sessions.findByParentId(sessionId);
-    const sameWorktreeChildIds = new Set(
-      children
-        .filter((child) => !child.managedWorktree && child.worktreePath === session.worktreePath)
-        .map((child) => child.id)
-    );
-
-    // Check if any other session is currently using this worktree
-    const allSessions = await this.repos.sessions.findAll();
-    const normalizedSessionPath = normalizeWorktreePathForComparison(session.worktreePath);
-    const sharingSessions = allSessions.filter(
-      (s) => s.id !== sessionId && !sameWorktreeChildIds.has(s.id) && normalizeWorktreePathForComparison(s.worktreePath) === normalizedSessionPath
-    );
-    if (sharingSessions.length > 0) {
-      this.finalizingParents.delete(sessionId);
-      throw new Error(
-        `Cannot finalize session '${sessionId}': worktree is still in use by ${sharingSessions.length} other session(s) (${sharingSessions.map((s) => s.id).join(', ')}). Close or reparent those sessions first.`
-      );
-    }
-
-    const project = await this.repos.projects.findById(session.projectId);
-    if (!project) {
-      this.finalizingParents.delete(sessionId);
-      throw new Error(`Project '${session.projectId}' associated with session '${sessionId}' not found`);
-    }
-
-    const host = await this.getHostAdapter(session.serverId);
-    const repositoryPath = await this.resolveProjectRepositoryPath(session.projectId, project.rootPath);
-    const worktreePath = await this.resolveSessionWorktreePath(session);
+    const releaseRemoval = await this.beginSessionRemoval(sessionId);
+    let releaseRepository: () => void = () => undefined;
+    let releaseWorktree: () => void = () => undefined;
     try {
+      const sharingSessions = await this.findWorktreeUsers(session);
+      if (sharingSessions.length > 0) {
+        throw new Error(
+          `Cannot finalize session '${sessionId}': worktree is still in use by ${sharingSessions.length} other session(s) (${sharingSessions.map((s) => s.id).join(', ')}). Close those sessions first. Reparenting does not move their workspace.`
+        );
+      }
+      const project = await this.repos.projects.findById(session.projectId);
+      if (!project) {
+        throw new Error(`Project '${session.projectId}' associated with session '${sessionId}' not found`);
+      }
+      const host = await this.getHostAdapter(session.serverId);
+      const repositoryPath = await this.resolveProjectRepositoryPath(session.projectId, project.rootPath);
+      releaseRepository = repositoryPath.release;
+      const worktreePath = await this.resolveSessionWorktreePath(session);
+      releaseWorktree = worktreePath.release;
       const existingContext = await this.contextStore.load(sessionId);
       const worktreeAlreadyRemoved = existingContext?.finalization?.action === action && existingContext.finalization.worktreeRemoved;
       const branchAlreadyRemoved =
@@ -1515,14 +1523,8 @@ export class SessionManager {
           await this.gitService.verifyManagedWorktreeForFinalization(host, identity, true);
         }
 
-        // 2. Stop persistent session and detach PTY
-        if (!worktreeAlreadyRemoved) {
-          try {
-            await this.stopSession(sessionId);
-          } catch (err) {
-            this.logger.warn('Failed to stop tmux session during integration (may already be stopped)', { error: err });
-          }
-        }
+        // Verify termination on every attempt, including partial-cleanup retries.
+        await this.stopSession(sessionId);
 
         // 3. Merge task branch into base branch
         if (!worktreeAlreadyRemoved) {
@@ -1589,12 +1591,8 @@ export class SessionManager {
             inspection.state === 'integrated'
           );
 
-          // 2. Stop persistent session and detach PTY
-          try {
-            await this.stopSession(sessionId);
-          } catch (err) {
-            this.logger.warn('Failed to stop tmux session during close (may already be stopped)', { error: err });
-          }
+          // 2. Verify termination before changing any files.
+          await this.stopSession(sessionId);
 
           // 3. Preserve or discard local changes before removing the worktree.
           if (options.stashChanges) {
@@ -1603,6 +1601,8 @@ export class SessionManager {
             await this.gitService.discardManagedWorktreeChanges(host, identity);
           }
         }
+
+        if (worktreeAlreadyRemoved) await this.stopSession(sessionId);
 
         // Reconcile children before removing the worktree so failed promotion
         // leaves the managed worktree available for recovery.
@@ -1644,9 +1644,15 @@ export class SessionManager {
 
       throw new Error(`Unsupported finalization action: ${action}`);
     } finally {
-      this.finalizingParents.delete(sessionId);
-      worktreePath.release();
-      repositoryPath.release();
+      try {
+        releaseWorktree();
+      } finally {
+        try {
+          releaseRepository();
+        } finally {
+          releaseRemoval();
+        }
+      }
     }
   }
 

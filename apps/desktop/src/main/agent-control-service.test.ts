@@ -236,8 +236,12 @@ describe('AgentControlService', () => {
     expect(notifyDataChanged).toHaveBeenCalledOnce();
   });
 
-  it('keeps MCP validation failures truthful and does not hide finalization guards', async () => {
-    const guardError = new Error('Managed worktree is not checked out on recorded branch');
+  it.each([
+    'Managed worktree is not checked out on recorded branch',
+    'Cannot finalize session: worktree is still in use by another session. Close that session first.',
+    'Failed to verify termination of persistent session. Execution may still be active.',
+  ])('keeps MCP validation failures truthful: %s', async (message) => {
+    const guardError = new Error(message);
     sessionManager.finishSession.mockRejectedValueOnce(guardError);
     service = new AgentControlService({
       repositories,
