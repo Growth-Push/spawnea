@@ -399,7 +399,10 @@ export class SSHHostAdapter implements HostAdapter {
         let truncated = false;
 
         stream.on('data', (data: Buffer) => {
-          if (stdoutBytes >= maxOutputBytes) return;
+          if (stdoutBytes >= maxOutputBytes) {
+            truncated = true;
+            return;
+          }
           const remaining = maxOutputBytes - stdoutBytes;
           const chunk = data.subarray(0, remaining);
           truncated ||= data.byteLength > remaining;
@@ -408,7 +411,10 @@ export class SSHHostAdapter implements HostAdapter {
         });
 
         stream.stderr.on('data', (data: Buffer) => {
-          if (stderrBytes >= maxOutputBytes) return;
+          if (stderrBytes >= maxOutputBytes) {
+            truncated = true;
+            return;
+          }
           const remaining = maxOutputBytes - stderrBytes;
           const chunk = data.subarray(0, remaining);
           truncated ||= data.byteLength > remaining;
