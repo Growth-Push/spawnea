@@ -1913,26 +1913,31 @@ export class SessionManager {
    */
   async unadoptSession(sessionId: string): Promise<boolean> {
     this.logger.info('Releasing / un-adopting session (non-destructive)', { sessionId });
-    this.attachedSessions.delete(sessionId);
-    const ptyChannelId = `pty-${sessionId}`;
-    this.ptyBroker.close(ptyChannelId);
-
-    await this.reconcileChildrenForParentRemoval(sessionId, 'leave-children');
-
+    const releaseRemoval = await this.beginSessionRemoval(sessionId);
     try {
-      await this.contextStore.delete(sessionId);
-    } catch (err) {
-      this.logger.warn('Failed to delete context file during unadopt', { error: err });
-    }
+      this.attachedSessions.delete(sessionId);
+      const ptyChannelId = `pty-${sessionId}`;
+      this.ptyBroker.close(ptyChannelId);
 
-    try {
-      await this.repos.sessions.delete(sessionId);
-    } catch (err) {
-      this.logger.warn('Failed to delete session from database during unadopt', { error: err });
-    }
+      await this.reconcileChildrenForParentRemoval(sessionId, 'leave-children');
 
-    this.logger.info('Session release (unadopt) completed - tmux process left alive', { sessionId });
-    return true;
+      try {
+        await this.contextStore.delete(sessionId);
+      } catch (err) {
+        this.logger.warn('Failed to delete context file during unadopt', { error: err });
+      }
+
+      try {
+        await this.repos.sessions.delete(sessionId);
+      } catch (err) {
+        this.logger.warn('Failed to delete session from database during unadopt', { error: err });
+      }
+
+      this.logger.info('Session release (unadopt) completed - tmux process left alive', { sessionId });
+      return true;
+    } finally {
+      releaseRemoval();
+    }
   }
 
   /**

@@ -473,7 +473,7 @@ referenced by another session, including an unmanaged same-project child.
 Deletion with surviving children preserves that directory and transfers managed
 ownership. Independent-worktree children are promoted without stopping them.
 
-A per-session removal guard prevents overlapping removal and new child creation.
+A per-session removal guard prevents overlapping removal, unadoption, and new child creation.
 Child creation holds its counter until startup succeeds or rollback finishes;
 removal waits on a per-parent completion signal before inspecting workspace users.
 The wait fails after 30 seconds or is cancelled on shutdown. No cleanup begins on

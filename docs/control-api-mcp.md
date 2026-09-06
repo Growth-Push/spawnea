@@ -197,7 +197,7 @@ are promoted to roots after successful finalization. Ordinary session deletion
 with `leave-children` preserves a shared worktree and transfers managed ownership
 to a surviving session.
 
-Removal waits up to 30 seconds for in-progress child creation to finish or roll
+Removal and unadoption wait up to 30 seconds for in-progress child creation to finish or roll
 back; shutdown cancels this wait. Timeout or cancellation returns an error without
 starting cleanup. The lifecycle guard remains until every active creation settles,
 rejecting new children and concurrent removal attempts. Retry after creation

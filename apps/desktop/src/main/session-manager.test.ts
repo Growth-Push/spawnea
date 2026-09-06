@@ -1341,6 +1341,46 @@ up 1 day, 5 hours
     expect(killCommands.length).toBe(0);
   });
 
+  it('serializes unadopt with a concurrent managed child creation', async () => {
+    mockHost.customRules.push({
+      pattern: "tmux has-session -t 'external-parent-session'",
+      response: { stdout: '', stderr: '', exitCode: 0 },
+    });
+    const adopted = await sessionManager.adoptSession({
+      serverId: 'dev-workstation',
+      tmuxSessionName: 'external-parent-session',
+      sessionName: 'External Parent',
+      task: 'Parent task',
+    });
+    let rejectCreation!: (error: Error) => void;
+    const createCore = vi.spyOn(sessionManager as any, 'createSessionCore').mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { rejectCreation = reject; })
+    );
+    const creation = sessionManager.createChildSession({
+      parentSessionId: adopted.id,
+      task: 'Managed child',
+      workspace: 'new-worktree',
+    }).catch((error: Error) => error);
+    await vi.waitFor(() => expect(createCore).toHaveBeenCalledOnce());
+
+    let unadoptSettled = false;
+    const unadopt = sessionManager.unadoptSession(adopted.id).finally(() => { unadoptSettled = true; });
+    await vi.waitFor(() => expect((sessionManager as any).finalizingParents.has(adopted.id)).toBe(true));
+    expect(unadoptSettled).toBe(false);
+    expect(await repos.sessions.findById(adopted.id)).not.toBeNull();
+    await expect(sessionManager.createChildSession({
+      parentSessionId: adopted.id,
+      task: 'Late child',
+      workspace: 'same-project',
+    })).rejects.toThrow('being finalized');
+
+    rejectCreation(new Error('child creation rolled back'));
+    await expect(creation).resolves.toBeInstanceOf(Error);
+    await expect(unadopt).resolves.toBe(true);
+    expect(await repos.sessions.findById(adopted.id)).toBeNull();
+    expect((sessionManager as any).finalizingParents.has(adopted.id)).toBe(false);
+  });
+
   it('tracks host connection state and triggers retryHostConnection on demand (FG-P5.2)', async () => {
     const initialState = await sessionManager.getHostConnectionState('dev-workstation');
     expect(initialState.status).toBe('connected');
