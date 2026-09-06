@@ -7,25 +7,33 @@ interface AgentContextViewProps {
 
 export function AgentContextView({ sessionId }: AgentContextViewProps): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<ControlAgentContextSnapshot | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ControlAgentContextCall | null>(null);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
-      const next = await window.spawneaApi.getAgentContext(sessionId);
-      if (!active) return;
-      setSnapshot(next);
-      setSelected((current) => next.calls.find((call) => call.id === current?.id) ?? next.calls.at(-1) ?? null);
+      try {
+        const next = await window.spawneaApi.getAgentContext(sessionId);
+        if (!active) return;
+        setLoadError(null);
+        setSnapshot(next);
+        setSelected((current) => next.calls.find((call) => call.id === current?.id) ?? next.calls.at(-1) ?? null);
+      } catch (error) {
+        if (active) setLoadError(error instanceof Error ? error.message : String(error));
+      }
     };
     void load();
-    const interval = window.setInterval(() => void load(), 1_500);
+    let timer: number | undefined;
+    const schedule = () => { timer = window.setTimeout(async () => { await load(); if (active) schedule(); }, 1_500); };
+    schedule();
     return () => {
       active = false;
-      window.clearInterval(interval);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [sessionId]);
 
-  if (!snapshot) return <div className="text-xs text-zinc-500">Loading volatile agent context…</div>;
+  if (!snapshot) return <div data-testid="agent-context-unavailable" className="text-xs text-amber-300">{loadError ?? 'Loading volatile agent context…'}</div>;
 
   return (
     <div data-testid="agent-context-view" className="h-full grid grid-cols-[minmax(220px,30%)_1fr] overflow-hidden rounded-lg border border-[#30363d] bg-[#161b22]">

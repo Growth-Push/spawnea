@@ -7,7 +7,7 @@ export class HermesHarnessOutputAdapter extends GenericHarnessOutputAdapter {
   protected override classify(line: string): Omit<OmittedOutputBlock, 'adapter' | 'lineCount'> | undefined {
     const value = line.trim();
     if (/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*/u.test(value)) return { rule: 'spinner', category: 'progress' };
-    if (/^(?:Tokens|Context|Elapsed):\s+/i.test(value)) return { rule: 'metrics', category: 'chrome' };
+    if (/^(?:Tokens|Context|Elapsed):\s+\d+(?:\.\d+)?(?:k|ms|s)?$/i.test(value)) return { rule: 'metrics', category: 'chrome' };
     return undefined;
   }
 }

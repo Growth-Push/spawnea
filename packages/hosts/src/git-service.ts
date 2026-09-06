@@ -730,7 +730,7 @@ export class GitService {
         cmd += ` -- ${escapeShellPath(options.filePath)}`;
       }
 
-      const result = await host.execute(cmd, { cwd });
+      const result = await host.execute(cmd, { cwd, maxOutputBytes: 4 * 1024 * 1024 });
       let rawDiff = result.stdout;
 
       // If diff is empty and options.filePath is specified, check if it's an untracked file

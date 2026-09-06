@@ -199,6 +199,8 @@ export class ControlMcpGateway {
         }
       }
 
+      if (socket.destroyed) return fail();
+
       clearTimeout(timeout);
       const remainder = buffered.subarray(newline + 1);
       if (remainder.length > 0) socket.unshift(remainder);

@@ -142,6 +142,7 @@ export class AgentControlService {
   private readonly turns = new Map<string, TrackedTurn>();
   private readonly promptRequestIds = new Map<string, string>();
   private readonly openTurnBySession = new Map<string, string>();
+  private readonly promptLocks = new Map<string, Promise<void>>();
   private readonly contextCalls = new Map<string, ControlAgentContextCall[]>();
   private uiState: ControlUiState = { activeSessionId: null, activeTab: 'terminal' };
 
@@ -644,6 +645,22 @@ export class AgentControlService {
   }
 
   async sendPrompt(request: ControlSendPromptRequest): Promise<ControlSendPromptResult> {
+    const lockKey = `${request.parentSession ?? ''}:${request.target}`;
+    const previous = this.promptLocks.get(lockKey) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    const queued = previous.then(() => current);
+    this.promptLocks.set(lockKey, queued);
+    await previous;
+    try {
+      return await this.sendPromptUnlocked(request);
+    } finally {
+      release();
+      if (this.promptLocks.get(lockKey) === queued) this.promptLocks.delete(lockKey);
+    }
+  }
+
+  private async sendPromptUnlocked(request: ControlSendPromptRequest): Promise<ControlSendPromptResult> {
     try {
       let targetSession = await this.repos.sessions.findById(request.target);
       if (!targetSession) {
@@ -669,8 +686,6 @@ export class AgentControlService {
         throw new Error(`Session '${request.target}' not found`);
       }
 
-      targetSession = await this.waitForPromptReady(targetSession.id);
-
       const requestId = request.clientRequestId ?? randomUUID();
       const fingerprint = JSON.stringify({ sessionId: targetSession.id, prompt: request.prompt });
       const promptCacheKey = `${targetSession.id}:${requestId}`;
@@ -683,6 +698,7 @@ export class AgentControlService {
           return { ...replay.result, replayed: true };
         }
       }
+      targetSession = await this.waitForPromptReady(targetSession.id);
       const existingTurnId = this.openTurnBySession.get(targetSession.id);
       let turn = existingTurnId ? this.turns.get(existingTurnId) : undefined;
       let createdTurn = false;

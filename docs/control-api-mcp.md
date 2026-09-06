@@ -152,7 +152,7 @@ A repeated correlation ID with a different payload is rejected. An exact retry r
 
 ### `spawnea_activate`
 
-Input: `{ "sessionId": "session-id", "tab": "terminal|files|diff|artifacts|details" }`. Selects a known session/tab in the live renderer. It does not run host or Git commands. The result says whether delivery to a live renderer occurred.
+Input: `{ "sessionId": "session-id", "tab": "terminal|files|diff|artifacts|details|agent-context" }`. Selects a known session/tab in the live renderer. It does not run host or Git commands. The result says whether delivery to a live renderer occurred.
 
 ### `spawnea_request_finalization`
 
@@ -201,6 +201,9 @@ Input:
   "clientRequestId": "review-child-1",
   "parentSession": "parent-session-id",
   "name": "Investigate unit test regression",
+  "serverId": "local",
+  "projectId": "spawnea",
+  "model": "gpt-5",
   "task": "Investigate regression in test suite",
   "workspace": "same-project",
   "agentId": "agent-id",
@@ -208,7 +211,7 @@ Input:
 }
 ```
 
-Creates a direct child session under an existing root parent session. Server, project, and default agent harness are inherited from the parent session. `workspace` must be either `"same-project"` (runs directly in parent's working directory) or `"new-worktree"` (creates an isolated managed git worktree). Enforces a strict 2-level cap: child sessions cannot spawn grandchildren. An optional `clientRequestId` makes exact retries idempotent. When `initialPrompt` is present, Spawnea waits for the session to leave `starting` for a bounded period and reports `promptStatus`, `turnId`, and any prompt error separately from successful session creation.
+Creates a direct child session under an existing root parent session. Optional `serverId`, `projectId`, and `model` default to the parent server, project, and harness configuration. `model` must use the supported model identifier format. A different-host child requires both `serverId` and `projectId` plus `workspace: "new-worktree"`; invalid combinations are rejected. `workspace` must be either `"same-project"` (runs directly in parent's working directory) or `"new-worktree"` (creates an isolated managed git worktree). Enforces a strict 2-level cap: child sessions cannot spawn grandchildren. An optional `clientRequestId` makes exact retries idempotent. When `initialPrompt` is present, Spawnea waits for the session to leave `starting` for a bounded period and reports `promptStatus`, `turnId`, and any prompt error separately from successful session creation.
 
 ### `spawnea_list_sessions`
 

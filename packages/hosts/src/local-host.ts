@@ -96,7 +96,7 @@ export class LocalHostAdapter implements HostAdapter {
       const { stdout, stderr } = await execAsync(command, {
         cwd: options?.cwd,
         env: options?.env ? { ...process.env, ...options.env } : process.env,
-        maxBuffer: 10 * 1024 * 1024,
+        maxBuffer: options?.maxOutputBytes ?? 10 * 1024 * 1024,
       });
       return { stdout, stderr, exitCode: 0 };
     } catch (err: any) {

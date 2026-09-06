@@ -2,6 +2,7 @@ export interface ExecOptions {
   cwd?: string;
   env?: Record<string, string>;
   timeoutMs?: number;
+  maxOutputBytes?: number;
 }
 
 export interface ExecResult {

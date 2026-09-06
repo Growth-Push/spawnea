@@ -13,7 +13,9 @@ export class HarnessLaunchRegistry {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/.test(model)) {
       throw new Error('Model must contain only safe model identifier characters and cannot start with a dash');
     }
-    const commandName = command.split('/').at(-1)?.toLowerCase() ?? command.toLowerCase();
+    const commandName = (command.split(/[\\/]/).at(-1) ?? command)
+      .replace(/\.(?:exe|cmd|bat)$/i, '')
+      .toLowerCase();
     const identity = harness?.toLowerCase() || commandName;
     const flag = MODEL_FLAGS[identity] ?? MODEL_FLAGS[commandName];
     if (!flag) throw new Error(`Harness '${identity}' does not support explicit model selection`);

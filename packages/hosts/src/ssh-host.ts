@@ -393,9 +393,15 @@ export class SSHHostAdapter implements HostAdapter {
 
         let stdout = '';
         let stderr = '';
+        const maxOutputBytes = options?.maxOutputBytes ?? 10 * 1024 * 1024;
+        let stdoutBytes = 0;
 
         stream.on('data', (data: Buffer) => {
-          stdout += data.toString('utf8');
+          if (stdoutBytes >= maxOutputBytes) return;
+          const remaining = maxOutputBytes - stdoutBytes;
+          const chunk = data.subarray(0, remaining);
+          stdout += chunk.toString('utf8');
+          stdoutBytes += chunk.byteLength;
         });
 
         stream.stderr.on('data', (data: Buffer) => {
