@@ -1,8 +1,33 @@
 import { describe, it, expect } from 'vitest';
 import { MockHostAdapter } from '../src/mock-host.js';
 import { TmuxManager } from '../src/tmux-session.js';
+import { fileURLToPath } from 'node:url';
 
 describe('TmuxManager', () => {
+  it('submits text once to a real paste-aware terminal without an extra caller Enter', async () => {
+    const { LocalHostAdapter } = await import('../src/local-host.js');
+    const host = new LocalHostAdapter({ serverId: 'prompt-runtime-test' });
+    const tmux = new TmuxManager();
+    const name = `spawnea-prompt-test-${Date.now().toString(36)}`;
+    const fixture = fileURLToPath(new URL('./fixtures/paste-aware-prompt.mjs', import.meta.url));
+    try {
+      expect((await tmux.createPersistentSession({ host, sessionName: name, cwd: process.cwd(), command: process.execPath, args: [fixture] })).success).toBe(true);
+      await expect.poll(async () => (await tmux.capturePaneTail(host, name, 100)).join('\n')).toContain('PROMPT_READY');
+      // Reproduce the original combined text/Enter behavior in the real PTY.
+      await host.execute(`tmux send-keys -t '${name}' -l -- 'original'`);
+      await host.execute(`tmux send-keys -t '${name}' Enter`);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect((await tmux.capturePaneTail(host, name, 100)).join('\n')).not.toContain('SUBMITTED:');
+      // Reset only the disposable fixture's input by completing that probe.
+      await host.execute(`tmux send-keys -t '${name}' Enter`);
+      for (const prompt of ['Run tests', 'First line\nSecond line']) {
+        expect(await tmux.sendInput(host, name, `\x1b[200~${prompt}\x1b[201~`)).toBe(true);
+        await expect.poll(async () => (await tmux.capturePaneTail(host, name, 100)).join('\n')).toContain(`SUBMITTED:${JSON.stringify(prompt)}`);
+      }
+    } finally {
+      await tmux.killSession(host, name);
+    }
+  });
   it.each([
     { diagnostic: 'No such file or directory', absent: true },
     { diagnostic: 'Permission denied', absent: false },

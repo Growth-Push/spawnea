@@ -3,6 +3,7 @@ import { createDatabase, createRepositories, type Repositories } from '@spawnea/
 import { createLogger, type Session } from '@spawnea/domain';
 import { AgentControlService } from './agent-control-service.js';
 import type { SessionManager } from './session-manager.js';
+import { PromptSubmissionError } from '@spawnea/hosts';
 
 describe('AgentControlService', () => {
   let database: ReturnType<typeof createDatabase>;
@@ -95,6 +96,77 @@ describe('AgentControlService', () => {
   });
 
   afterEach(() => database.close());
+
+  it('retains partial delivery and prevents both retry duplication and a new overlapping prompt', async () => {
+    sessionManager.sendPrompt.mockRejectedValueOnce(new PromptSubmissionError('pty'));
+    const input = { target: 'existing', clientRequestId: 'partial', prompt: 'Review' };
+    const first = await service.sendPrompt(input);
+    expect(first).toMatchObject({ delivered: false, status: 'unknown' });
+    expect(first.message).toContain('do not resend');
+    await expect(service.sendPrompt(input)).resolves.toMatchObject({ turnId: first.turnId, replayed: true, delivered: false });
+    await repositories.sessions.updateStatus('existing', 'working');
+    await expect(service.sendPrompt({ ...input, clientRequestId: 'new' })).rejects.toThrow('open turn');
+    expect(sessionManager.sendPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows confirmed terminal evidence to resolve an uncertain submission', async () => {
+    sessionManager.sendPrompt.mockRejectedValueOnce(new PromptSubmissionError('pty'));
+    const sent = await service.sendPrompt({ target: 'existing', clientRequestId: 'uncertain-response', prompt: 'Review' });
+    terminalOutput += '\n<<<SPAWNEA_RESPONSE_BEGIN>>>Done<<<SPAWNEA_RESPONSE_END>>>';
+    await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'completed', extraction: 'delimited' });
+  });
+
+  it('reads Agent Context without refreshing live turn state', async () => {
+    const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review' });
+    terminalOutput += '\nCaptured result';
+    const captured = await service.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+    sessionManager.captureSessionTerminal.mockClear();
+    terminalOutput += '\nNot captured yet';
+    const viewed = await service.getAgentContextTurn('existing', sent.turnId, 'raw');
+    expect(viewed.output).toBe(captured.output);
+    expect(viewed.version).toBe(captured.version);
+    expect(sessionManager.captureSessionTerminal).not.toHaveBeenCalled();
+  });
+
+  it('resolves a child alias within the authenticated root and rejects self-prompting', async () => {
+    await repositories.servers.save({ id: 'host-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+    await repositories.sessions.save(session('child', { parentSessionId: 'existing', childAlias: 'child-1' }));
+    const scoped = await service.createScopedControl('existing');
+    await expect(scoped.sendPrompt({ target: 'child-1', prompt: 'Review', clientRequestId: 'alias' })).resolves.toMatchObject({ sessionId: 'child' });
+    await expect(scoped.sendPrompt({ target: 'existing', prompt: 'Review' })).rejects.toThrow('outside');
+    await expect(scoped.sendPrompt({ target: 'child', parentSession: 'other', prompt: 'Review' })).rejects.toThrow('outside');
+    await expect(service.createScopedControl('child')).rejects.toThrow('not an active local root');
+  });
+
+  it('revokes an existing MCP connection when its root is no longer active', async () => {
+    await repositories.servers.save({ id: 'host-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+    const scoped = await service.createScopedControl('existing');
+    await repositories.sessions.save(session('existing', { status: 'done' }));
+    await expect(scoped.getState()).rejects.toThrow('not an active local root');
+    await expect(scoped.listSessions()).rejects.toThrow('not an active local root');
+    await expect(scoped.inspectWorktree('existing')).rejects.toThrow('not an active local root');
+  });
+
+  it('keeps a successful close queryable after the child is removed', async () => {
+    await repositories.servers.save({ id: 'host-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+    await repositories.sessions.save(session('child', { parentSessionId: 'existing', status: 'idle' }));
+    sessionManager.finishSession.mockImplementationOnce(async () => {
+      await repositories.sessions.delete('child');
+      return { action: 'close', removed: true };
+    });
+    const scoped = await service.createScopedControl('existing');
+    const result = await scoped.requestFinalization({ clientRequestId: 'close', sessionId: 'child', action: 'close', dirtyChanges: 'stash', confirmation: 'llm-validated' });
+    await expect(scoped.getFinalizationRequest(result.id)).resolves.toMatchObject({ status: 'completed', result: { removed: true } });
+  });
+
+  it('requires human approval for scoped discard even with LLM validation', async () => {
+    await repositories.servers.save({ id: 'host-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+    await repositories.sessions.save(session('child', { parentSessionId: 'existing', status: 'idle' }));
+    const scoped = await service.createScopedControl('existing');
+    await expect(scoped.requestFinalization({ clientRequestId: 'discard', sessionId: 'child', action: 'close', dirtyChanges: 'discard', confirmation: 'llm-validated' }))
+      .resolves.toMatchObject({ mode: 'ui-confirmation', status: 'pending' });
+    expect(sessionManager.finishSession).not.toHaveBeenCalled();
+  });
 
   it('lists versioned state without exposing host connection targets or credentials', async () => {
     service.setUiState({ activeSessionId: 'existing', activeTab: 'diff' });
@@ -434,6 +506,41 @@ describe('AgentControlService', () => {
       });
       expect(result.cursorExpired).toBe(true);
       expect(result.output.length).toBeLessThanOrEqual(131_072);
+      const next = await service.getTurn({ turnId: sent.turnId, cursor: result.cursor, outputMode: 'raw' });
+      expect(next.cursorExpired).toBe(false);
+      expect(next.version).toBe(result.version);
+    });
+
+    it('freezes a completed turn before later terminal activity', async () => {
+      const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review' });
+      terminalOutput += '\n<<<SPAWNEA_RESPONSE_BEGIN>>>Done<<<SPAWNEA_RESPONSE_END>>>';
+      const first = await service.getTurn({ turnId: sent.turnId });
+      terminalOutput += '\nLater unrelated activity';
+      const later = await service.getTurn({ turnId: sent.turnId });
+      expect(first.status).toBe('completed');
+      expect(later).toEqual(first);
+    });
+
+    it('does not infer completion from an idle prompt echo', async () => {
+      await repositories.sessions.updateStatus('existing', 'idle');
+      const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review' });
+      terminalOutput += '\nReview';
+      await service.getTurn({ turnId: sent.turnId });
+      await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'unknown' });
+    });
+
+    it('completes an idle turn when the first refresh contains response output', async () => {
+      await repositories.sessions.updateStatus('existing', 'idle');
+      const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review' });
+      terminalOutput += '\nReview\nCompleted response';
+
+      await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({
+        status: 'completed',
+        output: '\nReview\nCompleted response',
+      });
+      await expect(service.sendPrompt({ target: 'existing', prompt: 'Follow-up' })).resolves.toMatchObject({
+        status: 'working',
+      });
     });
 
     it('does not mistake response markers echoed from the prompt for child completion', async () => {

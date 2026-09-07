@@ -20,15 +20,32 @@ describe('Spawnea MCP v1 contract', () => {
     await Promise.allSettled(connected.splice(0).flatMap(({ client, server }) => [client.close(), server.close()]));
   });
 
+  it('exposes bounded integration preflight results', async () => {
+    const preflightIntegration = vi.fn().mockResolvedValue({ apiVersion: 'v1', sessionId: 'child', conflictingFiles: ['shared.txt'], parentCommits: [], truncated: false });
+    const client = await connect({ preflightIntegration });
+    const result = await client.callTool({ name: 'spawnea_preflight_integration', arguments: { sessionId: 'child' } });
+    expect(result.structuredContent).toMatchObject({ conflictingFiles: ['shared.txt'] });
+    expect(preflightIntegration).toHaveBeenCalledWith('child');
+  });
+
+  it('exposes the shared-child close without a workspace deletion policy', async () => {
+    const closeSharedChildSession = vi.fn().mockResolvedValue({ apiVersion: 'v1', sessionId: 'child', removed: true, workspacePreserved: true });
+    const client = await connect({ closeSharedChildSession });
+    const result = await client.callTool({ name: 'spawnea_close_shared_child', arguments: { sessionId: 'child', force: true } });
+    expect(result.structuredContent).toMatchObject({ workspacePreserved: true });
+    expect(closeSharedChildSession).toHaveBeenCalledWith('child', true);
+  });
+
   it('publishes exactly the documented canonical tools without legacy aliases', async () => {
     const client = await connect({});
     const result = await client.listTools();
     const toolNames = result.tools.map((tool) => tool.name);
     expect(toolNames).toEqual([
+      'spawnea_close_shared_child',
+      'spawnea_preflight_integration',
       'spawnea_get_state',
       'spawnea_inspect_worktree',
       'spawnea_rename_session',
-      'spawnea_create_sessions',
       'spawnea_activate',
       'spawnea_request_finalization',
       'spawnea_get_finalization_request',
@@ -117,18 +134,14 @@ describe('Spawnea MCP v1 contract', () => {
     });
   });
 
-  it('rejects malformed batch input before any session can be created', async () => {
+  it('does not expose unsupported batch creation', async () => {
     const createSessions = vi.fn();
     const client = await connect({ createSessions } as Partial<AgentControlService>);
 
-    const result = await client.callTool({
+    await expect(client.callTool({
       name: 'spawnea_create_sessions',
       arguments: { correlationId: 'batch', sessions: [] },
-    });
-    expect(result.isError).toBe(true);
-    expect(result.content).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'text', text: expect.stringContaining('sessions') }),
-    ]));
+    })).rejects.toThrow();
     expect(createSessions).not.toHaveBeenCalled();
   });
 

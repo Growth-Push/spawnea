@@ -278,6 +278,7 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       volatileNotice: 'Prior volatile MCP context is unavailable.',
       calls: [],
     }),
+    getAgentContextTurn: vi.fn().mockResolvedValue({ output: '', outputMode: 'compact' }),
     resolveControlFinalizationRequest: vi.fn(),
     onControlNavigate: vi.fn().mockReturnValue(() => {}),
     onControlFinalizationRequested: vi.fn().mockReturnValue(() => {}),

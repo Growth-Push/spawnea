@@ -39,6 +39,7 @@ import {
 } from '@spawnea/domain';
 import type { SessionManager } from './session-manager.js';
 import { resolveHarnessOutputAdapter } from '@spawnea/state';
+import { PromptSubmissionError } from '@spawnea/hosts';
 
 interface CachedBatchResult {
   fingerprint: string;
@@ -63,6 +64,7 @@ interface TrackedTurn {
   id: string;
   sessionId: string;
   harness: string;
+  prompt: string;
   requestIds: Map<string, { fingerprint: string; result: ControlSendPromptResult }>;
   initialSnapshot: string;
   lastSnapshot: string;
@@ -75,6 +77,7 @@ interface TrackedTurn {
   observedWorking: boolean;
   outputChanges: number;
   promptDelimiterPairs: number;
+  submissionUncertain?: boolean;
 }
 
 const MAX_RETAINED_TURN_BYTES = 262_144;
@@ -92,6 +95,8 @@ export interface AgentControlServiceOptions {
 }
 
 export interface ScopedAgentControlService {
+  closeSharedChildSession(sessionId: string, force?: boolean): ReturnType<SessionManager['closeSharedChildSession']>;
+  preflightIntegration(sessionId: string): ReturnType<SessionManager['preflightIntegration']>;
   getState(): Promise<ControlStateSnapshot>;
   createSessions(request: ControlCreateSessionsRequest): Promise<ControlCreateSessionsResult>;
   inspectWorktree(sessionId: string): Promise<ControlWorktreeInspectionResult>;
@@ -144,6 +149,7 @@ export class AgentControlService {
   private readonly openTurnBySession = new Map<string, string>();
   private readonly promptLocks = new Map<string, Promise<void>>();
   private readonly contextCalls = new Map<string, ControlAgentContextCall[]>();
+  private readonly finalizationOwners = new Map<string, string>();
   private uiState: ControlUiState = { activeSessionId: null, activeTab: 'terminal' };
 
   constructor(options: AgentControlServiceOptions) {
@@ -159,10 +165,27 @@ export class AgentControlService {
     this.uiState = { ...state };
   }
 
+  preflightIntegration(sessionId: string) {
+    return this.sessionManager.preflightIntegration(sessionId);
+  }
+
+  closeSharedChildSession(sessionId: string, force?: boolean) {
+    return this.sessionManager.closeSharedChildSession(sessionId, force);
+  }
+
   async createScopedControl(rootSessionId: string): Promise<ScopedAgentControlService> {
-    const resolveInScope = async (sessionId: string, allowRoot = false): Promise<Session> => {
+    const validateRoot = async () => {
       const root = await this.repos.sessions.findById(rootSessionId);
-      if (!root || root.parentSessionId) throw new Error('MCP session identity is not an active local root');
+      const server = root ? await this.repos.servers.findById(root.serverId) : null;
+      if (!root || root.parentSessionId || !server?.enabled ||
+          !['localhost', '127.0.0.1', '::1'].includes(server.host) ||
+          ['done', 'error', 'disconnected'].includes(root.status)) {
+        throw new Error('MCP session identity is not an active local root');
+      }
+      return root;
+    };
+    const resolveInScope = async (sessionId: string, allowRoot = false): Promise<Session> => {
+      const root = await validateRoot();
       const session = await this.repos.sessions.findById(sessionId);
       if (!session || (session.id !== root.id && session.parentSessionId !== root.id) || (!allowRoot && session.id === root.id)) {
         throw new Error('Session is outside the authenticated MCP scope');
@@ -179,6 +202,14 @@ export class AgentControlService {
     }
 
     const scoped: ScopedAgentControlService = {
+      closeSharedChildSession: async (sessionId, force) => {
+        await resolveInScope(sessionId);
+        return this.closeSharedChildSession(sessionId, force);
+      },
+      preflightIntegration: async (sessionId) => {
+        await resolveInScope(sessionId);
+        return this.sessionManager.preflightIntegration(sessionId);
+      },
       getState: async () => {
         const state = await this.getState();
         const sessions = state.sessions.filter((item) => item.id === rootSessionId || item.parentSessionId === rootSessionId);
@@ -216,9 +247,10 @@ export class AgentControlService {
       },
       sendPrompt: async (request) => {
         let target = await this.repos.sessions.findById(request.target);
-        if (!target && request.parentSession) target = await this.repos.sessions.findByParentAndAlias(request.parentSession, request.target);
+        if (request.parentSession && request.parentSession !== rootSessionId) throw new Error('Session is outside the authenticated MCP scope');
+        if (!target) target = await this.repos.sessions.findByParentAndAlias(rootSessionId, request.target);
         if (!target) throw new Error('Session is outside the authenticated MCP scope');
-        await resolveInScope(target.id, true);
+        await resolveInScope(target.id);
         return this.sendPrompt({ ...request, target: target.id });
       },
       getTurn: async (request) => {
@@ -256,15 +288,21 @@ export class AgentControlService {
       },
       requestFinalization: async (input) => {
         await resolveInScope(input.sessionId);
-        return this.requestFinalization(input);
+        // Discard is always a human decision in the scoped orchestration contract.
+        const request = await this.requestFinalization(input.dirtyChanges === 'discard'
+          ? { ...input, confirmation: undefined } : input, rootSessionId);
+        this.finalizationOwners.set(request.id, rootSessionId);
+        return request;
       },
       getFinalizationRequest: async (requestId) => {
         const request = this.getFinalizationRequest(requestId);
-        await resolveInScope(request.sessionId);
+        // Successful close removes the session. Keep its result queryable by
+        // the requesting root without relying on a now-deleted relationship.
+        if (this.finalizationOwners.get(requestId) !== rootSessionId) await resolveInScope(request.sessionId);
         return request;
       },
     };
-    return this.withCallRecording(rootSessionId, scoped);
+    return this.withCallRecording(rootSessionId, scoped, validateRoot);
   }
 
   private boundedContextValue(value: unknown): unknown {
@@ -288,7 +326,7 @@ export class AgentControlService {
     return redact(value, 0);
   }
 
-  private withCallRecording(rootSessionId: string, control: ScopedAgentControlService): ScopedAgentControlService {
+  private withCallRecording(rootSessionId: string, control: ScopedAgentControlService, validateRoot: () => Promise<Session>): ScopedAgentControlService {
     return new Proxy(control, {
       get: (target, property, receiver) => {
         const original = Reflect.get(target, property, receiver);
@@ -296,6 +334,7 @@ export class AgentControlService {
         return async (...args: unknown[]) => {
           const startedAt = new Date().toISOString();
           try {
+            await validateRoot();
             const response = await original(...args);
             this.recordContextCall(rootSessionId, String(property), args, response, startedAt);
             return response;
@@ -312,7 +351,8 @@ export class AgentControlService {
     const calls = this.contextCalls.get(rootSessionId) ?? [];
     const unchanged = operation === 'getTurn' && (response as { status?: string } | undefined)?.status === 'unchanged';
     const prior = calls.at(-1);
-    if (unchanged && prior?.operation === operation && prior.status === 'unchanged') {
+    if (unchanged && prior?.operation === operation && prior.status === 'unchanged' &&
+        (prior.response as { turnId?: string } | undefined)?.turnId === (response as { turnId?: string } | undefined)?.turnId) {
       prior.repeatCount += 1;
       prior.completedAt = new Date().toISOString();
       prior.response = this.boundedContextValue(response);
@@ -348,6 +388,16 @@ export class AgentControlService {
         : 'Prior volatile MCP context is unavailable. Spawnea does not persist orchestration transcripts.',
       calls: calls?.map((call) => ({ ...call })) ?? [],
     };
+  }
+
+  async getAgentContextTurn(sessionId: string, turnId: string, outputMode: 'compact' | 'raw'): Promise<ControlGetTurnResult> {
+    const session = await this.repos.sessions.findById(sessionId);
+    const turn = this.turns.get(turnId);
+    const child = turn ? await this.repos.sessions.findById(turn.sessionId) : null;
+    const rootId = session?.parentSessionId ?? session?.id;
+    if (!rootId || !turn || !child || (child.id !== rootId && child.parentSessionId !== rootId)) throw new Error('Turn context is unavailable for this session');
+    if (outputMode !== 'compact' && outputMode !== 'raw') throw new Error('Invalid output mode');
+    return this.boundedContextValue(this.readTurn(turn, { turnId, outputMode, maxBytes: DEFAULT_TURN_READ_BYTES })) as ControlGetTurnResult;
   }
 
   private rememberError(operation: string, error: unknown): void {
@@ -720,6 +770,7 @@ export class AgentControlService {
           id: randomUUID(),
           sessionId: targetSession.id,
           harness: agent?.harness ?? agent?.command ?? 'generic',
+          prompt: request.prompt,
           requestIds: new Map(),
           initialSnapshot: await this.sessionManager.captureSessionTerminal(targetSession.id),
           lastSnapshot: '',
@@ -745,18 +796,23 @@ export class AgentControlService {
       try {
         result = await this.sessionManager.sendPrompt(targetSession.id, request.prompt);
       } catch (error) {
-        if (createdTurn) {
-          this.turns.delete(turn.id);
-          this.openTurnBySession.delete(targetSession.id);
+        if (error instanceof PromptSubmissionError) {
+          result = { delivered: false, deliveryMethod: error.deliveryMethod };
+          turn.submissionUncertain = true;
+        } else {
+          if (createdTurn) {
+            this.turns.delete(turn.id);
+            this.openTurnBySession.delete(targetSession.id);
+          }
+          throw error;
         }
-        throw error;
       }
-      if (!result.delivered && createdTurn) {
+      if (!result.delivered && createdTurn && !turn.submissionUncertain) {
         this.turns.delete(turn.id);
         this.openTurnBySession.delete(targetSession.id);
         throw new Error(`Prompt was not delivered to session '${targetSession.id}'`);
       }
-      turn.status = 'working';
+      turn.status = turn.submissionUncertain ? 'unknown' : 'working';
       turn.version += 1;
       turn.changedAt = new Date().toISOString();
       const response: ControlSendPromptResult = {
@@ -769,7 +825,9 @@ export class AgentControlService {
         version: turn.version,
         status: turn.status,
         replayed: false,
-        message: 'Prompt submitted. Use spawnea_get_turn to read or wait for the response.',
+        message: turn.submissionUncertain
+          ? 'Prompt text was delivered but Enter could not be confirmed. Inspect the terminal; do not resend the prompt. The request is retained to prevent duplicate text.'
+          : 'Prompt submitted. Use spawnea_get_turn to read or wait for the response.',
       };
       turn.requestIds.set(requestId, { fingerprint, result: response });
       this.promptRequestIds.set(promptCacheKey, turn.id);
@@ -816,7 +874,15 @@ export class AgentControlService {
     return current.slice(prefix);
   }
 
+  private hasResponseOutput(turn: TrackedTurn, output: string): boolean {
+    const trimmedOutput = output.trim();
+    const trimmedPrompt = turn.prompt.trim();
+    return Boolean(trimmedOutput) && trimmedOutput !== trimmedPrompt;
+  }
+
   private async refreshTurn(turn: TrackedTurn): Promise<void> {
+    // A finished turn must not absorb a later prompt or another turn's output.
+    if (turn.status === 'completed' || turn.status === 'failed') return;
     const [snapshot, session] = await Promise.all([
       this.sessionManager.captureSessionTerminal(turn.sessionId),
       this.repos.sessions.findById(turn.sessionId),
@@ -826,16 +892,20 @@ export class AgentControlService {
     if (session.status === 'working' || session.status === 'starting') turn.observedWorking = true;
     const delimiterPairs = (nextOutput.match(/<<<SPAWNEA_RESPONSE_BEGIN>>>[\s\S]*?<<<SPAWNEA_RESPONSE_END>>>/g) ?? []).length;
     const hasResponseDelimiter = delimiterPairs > turn.promptDelimiterPairs;
-    const nextStatus: Exclude<ControlTurnStatus, 'unchanged'> = session.status === 'needs_input'
-      ? 'needs_input'
-      : session.status === 'done' || ((session.status === 'idle') && (turn.observedWorking || turn.outputChanges > 0 || hasResponseDelimiter))
-        ? 'completed'
-        : session.status === 'error' || session.status === 'disconnected'
-          ? 'failed'
+    const nextStatus: Exclude<ControlTurnStatus, 'unchanged'> = hasResponseDelimiter
+      ? 'completed'
+      : session.status === 'error' || session.status === 'disconnected'
+        ? 'failed'
+        : session.status === 'needs_input'
+          ? 'needs_input'
+          : this.hasResponseOutput(turn, nextOutput) && (session.status === 'done' || session.status === 'idle')
+            ? 'completed'
+            : turn.submissionUncertain
+              ? 'unknown'
           : session.status === 'starting' || session.status === 'working'
             ? 'working'
             : 'unknown';
-    const outputChanged = nextOutput !== turn.output;
+    const outputChanged = snapshot !== turn.lastSnapshot;
     if (outputChanged || nextStatus !== turn.status) {
       if (outputChanged) {
         const oldOutput = turn.output;
@@ -870,7 +940,7 @@ export class AgentControlService {
     if (turnId !== turn.id || !Number.isSafeInteger(offset) || offset < turn.baseOffset) {
       return { offset: turn.baseOffset, expired: true };
     }
-    return { offset, expired: turn.cursorExpired };
+    return { offset, expired: false };
   }
 
   async getTurn(request: ControlGetTurnRequest): Promise<ControlGetTurnResult> {
@@ -885,7 +955,11 @@ export class AgentControlService {
       await new Promise((resolve) => setTimeout(resolve, Math.min(750, deadline - Date.now())));
     } while (Date.now() <= deadline);
 
-      const cursor = this.cursorOffset(turn, request.cursor);
+    return this.readTurn(turn, request);
+  }
+
+  private readTurn(turn: TrackedTurn, request: ControlGetTurnRequest): ControlGetTurnResult {
+    const cursor = this.cursorOffset(turn, request.cursor);
     const retainedEnd = turn.baseOffset + Buffer.byteLength(turn.output, 'utf8');
     if (cursor.offset > retainedEnd) {
       cursor.offset = retainedEnd;
@@ -1016,7 +1090,7 @@ export class AgentControlService {
     }
   }
 
-  async requestFinalization(input: FinalizationInput): Promise<ControlFinalizationRequest> {
+  async requestFinalization(input: FinalizationInput, rootSessionId?: string): Promise<ControlFinalizationRequest> {
     if (input.action === 'close' && !input.dirtyChanges) {
       throw new Error("Close requests must explicitly choose dirtyChanges 'stash' or 'discard'");
     }
@@ -1038,7 +1112,8 @@ export class AgentControlService {
       confirmation: input.confirmation,
       force: input.force,
     });
-    const existing = this.finalizationRequestIds.get(input.clientRequestId);
+    const requestKey = JSON.stringify([rootSessionId ?? null, input.clientRequestId]);
+    const existing = this.finalizationRequestIds.get(requestKey);
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
         throw new Error(`Client request ID '${input.clientRequestId}' was already used with a different finalization request`);
@@ -1078,7 +1153,7 @@ export class AgentControlService {
       createdAt: new Date().toISOString(),
     };
     this.finalizationRequests.set(request.id, request);
-    this.finalizationRequestIds.set(input.clientRequestId, { fingerprint, requestId: request.id });
+    this.finalizationRequestIds.set(requestKey, { fingerprint, requestId: request.id });
     if (mode === 'mcp-validated') {
       await this.executeFinalizationRequest(request, 'mcp-validated');
     } else {

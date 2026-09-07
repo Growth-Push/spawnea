@@ -2,14 +2,55 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 import { GitService } from '../src/git-service.js';
 import { MockHostAdapter } from '../src/mock-host.js';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 describe('GitService', () => {
+  it('predicts real conflicts without changing HEAD, the index, or either checkout', async () => {
+    const { LocalHostAdapter } = await import('../src/local-host.js');
+    const path = await mkdtemp(join(tmpdir(), 'spawnea-preflight-'));
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: path, encoding: 'utf8' }).trim();
+    try {
+      git('init', '-b', 'main');
+      git('config', 'user.name', 'Fixture');
+      git('config', 'user.email', 'fixture@example.test');
+      await writeFile(join(path, 'shared.txt'), 'base\n');
+      git('add', '.'); git('commit', '-m', 'base');
+      const baseCommit = git('rev-parse', 'HEAD');
+      git('checkout', '-b', 'child');
+      await writeFile(join(path, 'shared.txt'), 'child\n');
+      git('commit', '-am', 'child');
+      git('checkout', 'main');
+      await writeFile(join(path, 'shared.txt'), 'parent\n');
+      git('commit', '-am', 'parent');
+      const head = git('rev-parse', 'HEAD');
+      const result = await new GitService().preflightManagedMerge(new LocalHostAdapter(), {
+        repositoryPath: path, worktreePath: path, branch: 'child', baseBranch: 'main', baseCommit,
+      });
+      expect(result).toEqual({ hasConflicts: true, conflictingFiles: ['shared.txt'], parentCommits: [head], truncated: false });
+      expect(git('rev-parse', 'HEAD')).toBe(head);
+      expect(git('status', '--porcelain')).toBe('');
+      expect(() => git('rev-parse', '--verify', 'MERGE_HEAD')).toThrow();
+    } finally {
+      await rm(path, { recursive: true, force: true });
+    }
+  });
   let gitService: GitService;
   let mockHost: MockHostAdapter;
 
   beforeEach(() => {
     gitService = new GitService();
     mockHost = new MockHostAdapter('mock-git-server');
+  });
+
+  it('preserves a conflict result even when Git reports no individual conflict paths', async () => {
+    mockHost.customRules.push({ pattern: 'git merge-tree', response: {
+      stdout: `${'a'.repeat(40)}\0\0`, stderr: '', exitCode: 1,
+    } });
+    await expect(gitService.preflightManagedMerge(mockHost, { repositoryPath: '/repo', worktreePath: '/repo/child', baseBranch: 'main', branch: 'child' }))
+      .resolves.toMatchObject({ hasConflicts: true, conflictingFiles: [] });
   });
 
   it('discovers local branches and prioritizes the current branch in suggestions', async () => {
