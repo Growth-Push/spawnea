@@ -123,6 +123,7 @@ erDiagram
     SERVER ||--o{ SESSION : executes
     PROJECT ||--o{ SESSION : contains
     AGENT ||--o{ SESSION : launches
+    SESSION ||--o{ SESSION : contains
     SESSION ||--o{ ARTIFACT : owns
 
     SERVER {
@@ -158,12 +159,17 @@ erDiagram
     SESSION {
         string id PK
         string name
+        string parent_session_id FK
+        string child_alias
         string server_id FK
         string project_id FK
         string agent_id FK
         string task
         string worktree_path
         string branch
+        string base_branch
+        string base_commit
+        boolean managed_worktree
         string tmux_session_name
         string tmux_window_name
         string status

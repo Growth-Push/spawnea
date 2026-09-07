@@ -51,7 +51,7 @@ The v1 bridge exposes only the canonical `spawnea_*` tools documented below. The
 
 The desktop workspace includes a read-only **Agent Context** tab (`Alt+6`). It shows bounded calls made through the scoped MCP connection, groups consecutive unchanged turn polls, and exposes request/response and cursor metadata in a detail pane. This volatile context is never written as a transcript and is reported unavailable after restart.
 
-Child close requests accept a `sessionId` and optional `force`; `force: true` is required for a `working` or `starting` child. They preserve shared workspace files. Integration is accepted only for a local managed worktree child whose parent is local; remote children remain inspectable but cannot be integrated automatically.
+Child close requests accept a `sessionId` and optional `force`; `force: true` is required for a `working` or `starting` child. The shared-child close operation preserves shared workspace files. Managed-worktree finalization follows its guarded integration or close policy. Integration is accepted only for a local managed worktree child whose parent is local; remote children remain inspectable but cannot be integrated automatically.
 
 ## Transport and authorization boundary
 
