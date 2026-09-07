@@ -231,12 +231,17 @@ export interface Agent {
 export interface Session {
   id: string;
   name: string;
+  parentSessionId?: string;
+  childAlias?: string;
   serverId: string;
   projectId: string;
   agentId: string;
   task: string;
   worktreePath: string;
   branch: string;
+  baseBranch?: string;
+  baseCommit?: string;
+  managedWorktree?: boolean;
   tmuxSessionName: string;
   tmuxWindowName?: string;
   status: SessionStatus;

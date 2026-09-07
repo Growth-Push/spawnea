@@ -51,7 +51,7 @@ The v1 bridge exposes only the canonical `spawnea_*` tools documented below. The
 
 The desktop workspace includes a read-only **Agent Context** tab (`Alt+6`). It shows bounded calls made through the scoped MCP connection, groups consecutive unchanged turn polls, and exposes request/response and cursor metadata in a detail pane. This volatile context is never written as a transcript and is reported unavailable after restart.
 
-Child close requests for a `working` or `starting` child must include `force: true` in addition to an explicit `dirtyChanges` policy. Integration is accepted only for a local managed worktree child whose parent is local; remote children remain inspectable but cannot be integrated automatically.
+Child close requests accept a `sessionId` and optional `force`; `force: true` is required for a `working` or `starting` child. They preserve shared workspace files. Integration is accepted only for a local managed worktree child whose parent is local; remote children remain inspectable but cannot be integrated automatically.
 
 ## Transport and authorization boundary
 
@@ -143,7 +143,7 @@ Input: `{ "sessionId": "session-id", "tab": "terminal|files|diff|artifacts|detai
 
 ### `spawnea_request_finalization`
 
-Requests guarded worktree finalization. Integrate always creates a pending request and waits for trusted renderer approval. Close requires `dirtyChanges` to be `stash` or `discard`.
+Requests guarded worktree finalization. Integrate always creates a pending request and waits for trusted renderer approval. Close requests must include `dirtyChanges` set to `stash` or `discard`.
 
 When the MCP caller's LLM has explicitly approved the close, it must also send:
 
@@ -261,7 +261,7 @@ Input:
 }
 ```
 
-Reads output produced after the prompt's initial cursor or after the supplied cursor. `waitMs` is bounded to 30 seconds and wakes when the turn changes or reaches `needs_input`, `completed`, or `failed`. The result always includes a replacement cursor, version, `truncated`, and `cursorExpired`. `compact` is the default and conservatively removes only harness output recognized by stable adapter rules; every omission is reported. `raw` returns the bounded captured terminal output without filtering. Turn state and cursors are volatile and disappear when Spawnea restarts.
+Reads output produced after the prompt's initial cursor or after the supplied cursor. `waitMs` is bounded to 30 seconds and wakes when the turn changes or reaches `needs_input`, `completed`, or `failed`. The result always includes a replacement cursor, version, `truncated`, and `cursorExpired`. `compact` is the default and applies the selected harness adapter's bounded output extraction, returning any reported omissions in the `omitted` result field. `raw` returns the bounded captured terminal output without filtering. Turn state and cursors are volatile and disappear when Spawnea restarts.
 
 ## Threat-model decisions
 
