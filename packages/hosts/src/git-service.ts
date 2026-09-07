@@ -475,6 +475,28 @@ export class GitService {
     }
   }
 
+  /** Predict conflicts without modifying either checkout, its index, or branch refs. */
+  async preflightManagedMerge(host: HostAdapter, identity: ManagedWorktreeIdentity): Promise<{ hasConflicts: boolean; conflictingFiles: string[]; parentCommits: string[]; truncated: boolean }> {
+    const result = await host.execute(
+      `git merge-tree --write-tree --name-only -z ${escapeShellPath(identity.baseBranch)} ${escapeShellPath(identity.branch)}`,
+      { cwd: identity.repositoryPath },
+    );
+    if (result.exitCode !== 0 && result.exitCode !== 1) {
+      throw new Error('Could not run integration preflight; Git with merge-tree --write-tree support is required');
+    }
+    const fields = result.stdout.split('\0');
+    if (!/^[0-9a-f]{40,64}$/.test(fields[0])) throw new Error('Invalid integration preflight result');
+    const end = fields.indexOf('', 1);
+    const conflictingFiles = result.exitCode === 1 ? fields.slice(1, end < 0 ? undefined : end) : [];
+    const commits = identity.baseCommit ? await host.execute(
+      `git rev-list --max-count=201 ${escapeShellPath(`${identity.baseCommit}..${identity.baseBranch}`)}`,
+      { cwd: identity.repositoryPath },
+    ) : undefined;
+    if (commits && commits.exitCode !== 0) throw new Error('Could not inspect parent commits for integration preflight');
+    const parentCommits = commits?.stdout.trim().split('\n').filter(Boolean) ?? [];
+    return { hasConflicts: result.exitCode === 1, conflictingFiles: conflictingFiles.slice(0, 200), parentCommits: parentCommits.slice(0, 200), truncated: conflictingFiles.length > 200 || parentCommits.length > 200 };
+  }
+
   /** Merges a verified task branch and aborts any failed merge before returning an error. */
   async mergeManagedBranch(host: HostAdapter, identity: ManagedWorktreeIdentity): Promise<void> {
     const merge = await host.execute(`git merge --no-edit ${escapeShellPath(identity.branch)}`, {

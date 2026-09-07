@@ -440,6 +440,9 @@ function registerIpcHandlers(
   ipcMain.handle('control:getAgentContext', async (_event, sessionId: string) =>
     controlService.getAgentContext(sessionId)
   );
+  ipcMain.handle('control:getAgentContextTurn', async (_event, sessionId: string, turnId: string, mode: 'compact' | 'raw') =>
+    controlService.getAgentContextTurn(sessionId, turnId, mode)
+  );
   ipcMain.handle('control:resolveFinalizationRequest', async (
     _event,
     requestId: string,

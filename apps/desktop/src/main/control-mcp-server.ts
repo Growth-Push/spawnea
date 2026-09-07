@@ -4,15 +4,6 @@ import { SPAWNEA_CONTROL_API_VERSION } from '@spawnea/domain';
 import type { ScopedAgentControlService } from './agent-control-service.js';
 
 const workspaceTabSchema = z.enum(['terminal', 'files', 'diff', 'artifacts', 'details', 'agent-context']);
-const sessionInputSchema = z.object({
-  clientRequestId: z.string().min(1).max(120),
-  serverId: z.string().min(1).max(200),
-  projectId: z.string().min(1).max(240),
-  agentId: z.string().min(1).max(240),
-  task: z.string().trim().min(1).max(4_000),
-  baseBranch: z.string().trim().min(1).max(240).optional(),
-  useWorktree: z.boolean().optional(),
-});
 
 function toolResult(value: unknown) {
   return {
@@ -32,7 +23,7 @@ function toolError(error: unknown) {
       ? 'conflict'
       : normalized.includes('did not become ready') || normalized.includes('not available for prompt delivery')
         ? 'needs_human'
-    : normalized.includes('cannot be empty') || normalized.includes('must be 120 characters or fewer')
+    : normalized.includes('cannot be empty') || normalized.includes('must be 120 characters or fewer') || normalized.includes('does not support explicit model selection')
       ? 'invalid_request'
       : 'operation_failed';
   return {
@@ -60,6 +51,28 @@ export function createSpawneaMcpServer(control: ScopedAgentControlService): McpS
     name: 'spawnea-control',
     version: '1.0.0',
   });
+
+  server.registerTool(
+    'spawnea_close_shared_child',
+    {
+      title: 'Close a same-project child',
+      description: 'Stop and remove a direct same-project child while preserving shared files. Working or starting children require force=true. Managed worktrees use spawnea_request_finalization instead.',
+      inputSchema: z.object({ sessionId: z.string().min(1).max(200), force: z.boolean().optional() }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+    },
+    async ({ sessionId, force }) => safeTool(() => control.closeSharedChildSession(sessionId, force))()
+  );
+
+  server.registerTool(
+    'spawnea_preflight_integration',
+    {
+      title: 'Preflight child integration',
+      description: 'Check an eligible local managed child worktree before requesting human-approved integration. Returns parent commits and predicted conflicting files without merging either checkout.',
+      inputSchema: z.object({ sessionId: z.string().min(1).max(200) }),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ sessionId }) => safeTool(() => control.preflightIntegration(sessionId))()
+  );
 
   server.registerTool(
     'spawnea_get_state',
@@ -98,32 +111,6 @@ export function createSpawneaMcpServer(control: ScopedAgentControlService): McpS
   );
 
   server.registerTool(
-    'spawnea_create_sessions',
-    {
-      title: 'Create Spawnea sessions',
-      description: 'Create one or more sessions. correlationId makes an exact retry idempotent; every item receives an unambiguous success or error result.',
-      inputSchema: z.object({
-        correlationId: z.string().min(1).max(120),
-        sessions: z.array(sessionInputSchema).min(1).max(20).superRefine((items, context) => {
-          const seen = new Set<string>();
-          items.forEach((item, index) => {
-            if (seen.has(item.clientRequestId)) {
-              context.addIssue({
-                code: 'custom',
-                path: [index, 'clientRequestId'],
-                message: 'clientRequestId values must be unique within a batch',
-              });
-            }
-            seen.add(item.clientRequestId);
-          });
-        }),
-      }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-    },
-    async (input) => safeTool(() => control.createSessions(input))()
-  );
-
-  server.registerTool(
     'spawnea_activate',
     {
       title: 'Activate an Spawnea session or tab',
@@ -141,7 +128,7 @@ export function createSpawneaMcpServer(control: ScopedAgentControlService): McpS
     'spawnea_request_finalization',
     {
       title: 'Request guarded worktree finalization',
-      description: "Request guarded worktree finalization. Integrate always waits for trusted renderer confirmation. Close requires dirtyChanges='stash' or 'discard'; add confirmation='llm-validated' only when the MCP caller's LLM has explicitly approved the close, which executes through the existing finalization guards without opening a UI confirmation dialog. Without that signal, Close remains a pending renderer-confirmation request.",
+      description: "Request guarded child worktree finalization. Integration and dirtyChanges='discard' always require human approval. Close with dirtyChanges='stash' may include confirmation='llm-validated' to execute through existing finalization guards. Working children require force=true. Query the returned request ID for its actual result.",
       inputSchema: z.object({
         clientRequestId: z.string().min(1).max(120),
         sessionId: z.string().min(1).max(200),
@@ -192,7 +179,7 @@ export function createSpawneaMcpServer(control: ScopedAgentControlService): McpS
     'spawnea_list_sessions',
     {
       title: 'List Spawnea sessions',
-      description: 'Canonical listing of all root sessions and their direct children with relationship metadata (parentSessionId and childAlias).',
+      description: 'List the authenticated root and its direct children with relationship metadata (parentSessionId and childAlias).',
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
@@ -203,12 +190,12 @@ export function createSpawneaMcpServer(control: ScopedAgentControlService): McpS
     'spawnea_send_prompt',
     {
       title: 'Send prompt to session',
-      description: 'Writes prompt text directly to the target session PTY/tmux stream and returns immediately. Truthfully reports delivery without waiting for harness completion.',
+      description: 'Submit one prompt to a direct child. Spawnea sends the text and a separate Enter automatically; do not send an Enter key or a second prompt to submit it. Reuse clientRequestId for an exact retry. Read the response with spawnea_get_turn.',
       inputSchema: z.object({
         target: z.string().min(1).max(200),
         parentSession: z.string().min(1).max(200).optional(),
         clientRequestId: z.string().min(1).max(120).optional(),
-        prompt: z.string().min(1),
+        prompt: z.string().min(1).max(32_000),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },

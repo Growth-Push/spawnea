@@ -27,6 +27,7 @@ describe('SessionManager', () => {
   let mockHost: MockHostAdapter;
 
   async function enableManagedWorktrees(): Promise<void> {
+    mockHost.customRules.push({ pattern: 'git merge-tree --write-tree', response: { stdout: '0123456789abcdef0123456789abcdef01234567\0', stderr: '', exitCode: 0 } });
     const catalogPath = join(tempDir, 'spawnea.yaml');
     writeFileSync(catalogPath, `
 version: 1
@@ -226,7 +227,30 @@ hosts:
         delivered: true,
         deliveryMethod: 'pty',
       });
-      expect(write).toHaveBeenCalledWith('pty-sess-prompt', 'Run tests\r');
+      expect(write.mock.calls).toEqual([
+        ['pty-sess-prompt', '\x1b[200~Run tests\x1b[201~'],
+        ['pty-sess-prompt', '\r'],
+      ]);
+    });
+
+    it('closes a same-project child without removing shared files and injects its own identity', async () => {
+      await createPromptSession();
+      const child = await sessionManager.createChildSession({ parentSessionId: 'sess-prompt', task: 'Shared child', workspace: 'same-project' }, 'mcp');
+      const launch = mockHost.executedCommands.find(({ command }) => command.includes('SPAWNEA_SESSION_ID=') && command.includes(child.id));
+      expect(launch).toBeDefined();
+      await expect(sessionManager.closeSharedChildSession(child.id)).rejects.toThrow('force=true');
+      mockHost.executedCommands.length = 0;
+      await expect(sessionManager.closeSharedChildSession(child.id, true)).resolves.toMatchObject({ removed: true, workspacePreserved: true });
+      expect(await repos.sessions.findById('sess-prompt')).not.toBeNull();
+      expect(mockHost.executedCommands.some(({ command }) => /worktree remove|git clean|git reset/.test(command))).toBe(false);
+    });
+
+    it('reports a failed Enter without replaying already delivered text', async () => {
+      await createPromptSession();
+      vi.spyOn(ptyBroker, 'getMetrics').mockReturnValue({ recentOutputBytes: 0 });
+      vi.spyOn(ptyBroker, 'write').mockReturnValueOnce(true).mockReturnValueOnce(false);
+      await expect(sessionManager.sendPrompt('sess-prompt', 'Run tests')).rejects.toThrow('Enter could not be confirmed');
+      expect(mockHost.executedCommands.some(({ command }) => command.includes('tmux send-keys'))).toBe(false);
     });
 
     it('falls back to tmux when the PTY closes after its metrics are read', async () => {

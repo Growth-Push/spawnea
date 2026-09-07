@@ -123,6 +123,7 @@ erDiagram
     SERVER ||--o{ SESSION : executes
     PROJECT ||--o{ SESSION : contains
     AGENT ||--o{ SESSION : launches
+    SESSION ||--o{ SESSION : contains
     SESSION ||--o{ ARTIFACT : owns
 
     SERVER {
@@ -158,12 +159,17 @@ erDiagram
     SESSION {
         string id PK
         string name
+        string parent_session_id FK
+        string child_alias
         string server_id FK
         string project_id FK
         string agent_id FK
         string task
         string worktree_path
         string branch
+        string base_branch
+        string base_commit
+        boolean managed_worktree
         string tmux_session_name
         string tmux_window_name
         string status
@@ -231,12 +237,17 @@ export interface Agent {
 export interface Session {
   id: string;
   name: string;
+  parentSessionId?: string;
+  childAlias?: string;
   serverId: string;
   projectId: string;
   agentId: string;
   task: string;
   worktreePath: string;
   branch: string;
+  baseBranch?: string;
+  baseCommit?: string;
+  managedWorktree?: boolean;
   tmuxSessionName: string;
   tmuxWindowName?: string;
   status: SessionStatus;
@@ -263,11 +274,11 @@ The configurable MCP integration remains a main-process adapter, not a renderer 
 
 `SessionApplicationService` also retains a bounded, in-memory record of scoped MCP calls for the read-only Agent Context tab. Requests and responses are recursively bounded and secret-shaped fields are redacted. This context is deliberately lost on restart; the UI reports that loss instead of reconstructing a transcript.
 
-Child prompt orchestration is tracked as bounded, volatile turns in Main. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. Bounded long polling wakes on output or state changes. Raw output is opt-in; compact output uses harness-specific conservative filters and reports every omitted category. Turns and captured output are not persisted across application restarts.
+Child prompt orchestration is tracked as bounded, volatile turns in Main. Known interactive editors receive bracketed paste followed by a separate delayed Enter through PTY or tmux; the MCP caller never needs a second submission key. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. Completed turns stop capturing later terminal activity. Bounded long polling wakes on output or state changes. Raw output is opt-in in MCP and Agent Context. Turns and captured output are not persisted across application restarts.
 
 Spawnea persists a root session's scoped identity before launching its harness, so the injected `SPAWNEA_SESSION_ID` is resolvable when the MCP client starts. If tmux startup fails, session and context persistence are rolled back. The gateway also performs bounded rechecks within the existing authentication timeout and still requires the identity to resolve to an enabled, active local root before exposing MCP tools.
 
-Destructive operations use an explicit finalization mode. Integrate and ordinary MCP requests create a pending request that only the trusted renderer preload may approve or reject over IPC. A close request may instead carry the authenticated MCP protocol signal `confirmation: "llm-validated"`; Main records `mode: "mcp-validated"`, skips the confirmation event, and delegates directly to the existing `SessionManager.finishSession` path. That origin is accepted only for close, and the same identity, worktree, branch, dirty-state, authorization, host, and Git guards remain authoritative. The complete versioned contract and threat model are documented in [`control-api-mcp.md`](control-api-mcp.md).
+Destructive operations use an explicit finalization mode. Integration and scoped discard require trusted renderer approval. A preserving close may carry `confirmation: "llm-validated"`; Main delegates to `SessionManager.finishSession` with its existing lifecycle guards. Same-project children have a separate close operation that preserves shared files. Integration preflight uses Git merge-tree to report conflicts before stopping a child or merging its branch. The contract and threat model are documented in [`control-api-mcp.md`](control-api-mcp.md).
 
 ---
 

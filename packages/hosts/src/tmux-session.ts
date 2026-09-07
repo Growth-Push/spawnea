@@ -26,6 +26,14 @@ export interface PaneInspectionResult {
   paneDead: boolean;
 }
 
+/** Text reached the terminal, but submission was not acknowledged. Do not replay it. */
+export class PromptSubmissionError extends Error {
+  constructor(readonly deliveryMethod: 'pty' | 'tmux') {
+    super('Prompt text was delivered but Enter could not be confirmed. Inspect the terminal before continuing; do not resend the prompt.');
+    this.name = 'PromptSubmissionError';
+  }
+}
+
 function escapeShellArg(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
@@ -136,16 +144,24 @@ export class TmuxManager {
     }
     this.logger.info('Sending input to tmux session', { serverId: host.serverId, sessionName });
     // Using -l sends the literal characters without duplicate newline before Enter
-    const sanitizedText = text.replace(/\r?\n$/, '');
+    const sanitizedText = text.replace(/\r?\n$/, '').replace(/\r$/, '');
     const sendCmd = `tmux send-keys -t ${escapeShellArg(sessionName)} -l -- ${escapeShellArg(sanitizedText)}`;
     const sendResult = await host.execute(sendCmd);
     if (sendResult.exitCode !== 0) return false;
-    const enterResult = await host.execute(`tmux send-keys -t ${escapeShellArg(sessionName)} Enter`);
-    if (enterResult.exitCode !== 0) return false;
+    // TUI editors may classify an Enter arriving with the text burst as paste
+    // content. Submit after the burst has settled, including single-line input.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    let enterResult;
+    try {
+      enterResult = await host.execute(`tmux send-keys -t ${escapeShellArg(sessionName)} Enter`);
+    } catch {
+      throw new PromptSubmissionError('tmux');
+    }
+    if (enterResult.exitCode !== 0) throw new PromptSubmissionError('tmux');
     for (let index = 1; index < submitCount; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 150));
       const confirmation = await host.execute(`tmux send-keys -t ${escapeShellArg(sessionName)} Enter`);
-      if (confirmation.exitCode !== 0) return false;
+      if (confirmation.exitCode !== 0) throw new PromptSubmissionError('tmux');
     }
     return true;
   }

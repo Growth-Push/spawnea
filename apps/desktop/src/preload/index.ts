@@ -38,6 +38,7 @@ import type {
   ControlNavigateEvent,
   ControlFinalizationRequest,
   ControlAgentContextSnapshot,
+  ControlGetTurnResult,
 } from '@spawnea/domain';
 
 export const api = {
@@ -119,6 +120,8 @@ export const api = {
     ipcRenderer.invoke('control:listFinalizationRequests', includeResolved),
   getAgentContext: (sessionId: string): Promise<ControlAgentContextSnapshot> =>
     ipcRenderer.invoke('control:getAgentContext', sessionId),
+  getAgentContextTurn: (sessionId: string, turnId: string, mode: 'compact' | 'raw'): Promise<ControlGetTurnResult> =>
+    ipcRenderer.invoke('control:getAgentContextTurn', sessionId, turnId, mode),
   resolveControlFinalizationRequest: (
     requestId: string,
     decision: 'approve' | 'reject'

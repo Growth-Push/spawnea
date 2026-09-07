@@ -48,6 +48,7 @@ import {
   MockHostAdapter,
   prepareProjectFolder,
   TmuxManager,
+  PromptSubmissionError,
   fetchHostSystemInfo,
   GitService,
   HostHealthChecker,
@@ -674,7 +675,9 @@ export class SessionManager {
       const projectName = catProject?.name || dbProject?.name || 'Project';
       const gitUrl = catProject?.git_url || dbProject?.repoUrl || undefined;
       const configuredBaseBranch = catProject?.base_branch?.trim() || dbProject?.baseBranch?.trim() || undefined;
-      const effectiveBaseBranch = configuredBaseBranch || options.baseBranch?.trim() || undefined;
+      const effectiveBaseBranch = options.parentSessionId && options.creationSource === 'mcp'
+        ? options.baseBranch?.trim() || configuredBaseBranch || undefined
+        : configuredBaseBranch || options.baseBranch?.trim() || undefined;
 
       const harnessCommand = catHarness?.command || dbAgent?.command || 'bash';
       const harnessArgs = this.harnessLaunchRegistry.withModel(
@@ -861,7 +864,7 @@ export class SessionManager {
           cwd: runtimePath,
           command: harnessCommand,
           args: harnessArgs,
-          env: { SPAWNEA_SESSION_ID: options.parentSessionId ?? sessionId },
+          env: { SPAWNEA_SESSION_ID: sessionId },
           tmuxOptions: catProject?.tmux?.options,
           tmuxCommands: catProject?.tmux?.commands,
           logger: this.logger.child('tmux'),
@@ -984,6 +987,9 @@ export class SessionManager {
     try {
       const childServerId = input.serverId ?? parent.serverId;
       const childProjectId = input.projectId ?? parent.projectId;
+      if (childProjectId !== parent.projectId && input.workspace === 'same-project') {
+        throw new Error('Different-project child creation requires new-worktree workspace');
+      }
       if (input.projectId) {
         if (input.projectId.includes(':')) {
           const [projectHost] = input.projectId.split(':', 2);
@@ -1045,6 +1051,8 @@ export class SessionManager {
         initialStatus: 'starting',
         creationSource,
         model: input.model,
+        baseBranch: creationSource === 'mcp' && childServerId === parent.serverId && childProjectId === parent.projectId
+          ? parent.branch : undefined,
       });
     } finally {
       creations.count -= 1;
@@ -1068,30 +1076,25 @@ export class SessionManager {
     }
     const ptyChannelId = `pty-${session.id}`;
     const metrics = this.ptyBroker.getMetrics(ptyChannelId);
-    const ptyPrompt = prompt.endsWith('\r') ? prompt : `${prompt.replace(/\r?\n$/, '')}\r`;
     const agent = await this.repos.agents.findById(session.agentId);
     const context = agent ? undefined : await this.contextStore.load(session.id);
-    const commandSource = agent?.command ?? context?.harness.command;
-    const command = commandSource?.trim().split(/\s+/)[0]?.split('/').pop()?.toLowerCase();
-    const submitCount = command === 'codex' && prompt.includes('\n') ? 2 : 1;
+    const ptyPrompt = this.harnessLaunchRegistry.promptInput(agent?.command ?? context?.harness.command, agent?.harness, prompt);
 
     if (metrics !== undefined) {
       // The channel can disappear after getMetrics() during reconnect or
       // shutdown. PtyBroker reports the authoritative write result so callers
       // do not receive a false delivery confirmation.
       if (this.ptyBroker.write(ptyChannelId, ptyPrompt)) {
-        if (submitCount === 2) {
-          await new Promise((resolve) => setTimeout(resolve, 150));
-          if (!this.ptyBroker.write(ptyChannelId, '\r')) return { delivered: false, deliveryMethod: 'pty' };
-        }
+        // Let paste/burst detection settle before sending a separate Enter.
+        // Never retry the text through tmux after a successful text write.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        if (!this.ptyBroker.write(ptyChannelId, '\r')) throw new PromptSubmissionError('pty');
         return { delivered: true, deliveryMethod: 'pty' };
       }
     }
 
     const host = await this.getHostAdapter(session.serverId);
-    // Codex treats a multiline literal tmux write as a paste. TmuxManager
-    // submits a second delayed Enter for this exact case.
-    const sent = await this.tmuxManager.sendInput(host, session.tmuxSessionName, prompt, submitCount);
+    const sent = await this.tmuxManager.sendInput(host, session.tmuxSessionName, ptyPrompt);
     if (!sent) {
       throw new Error(`Failed to deliver prompt to tmux session '${session.tmuxSessionName}'`);
     }
@@ -1379,6 +1382,15 @@ export class SessionManager {
    * 3. Deletes session context file from disk.
    * 4. Deletes session from SQLite repository.
    */
+  async closeSharedChildSession(sessionId: string, force = false): Promise<{ apiVersion: 'v1'; sessionId: string; removed: boolean; workspacePreserved: true }> {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session?.parentSessionId || session.managedWorktree) throw new Error('This close operation requires a same-project child; use guarded finalization for managed worktrees');
+    if (['working', 'starting'].includes(session.status) && !force) throw new Error('Closing a working child requires force=true');
+    await this.deleteSession(sessionId);
+    if (await this.repos.sessions.findById(sessionId)) throw new Error('Child runtime stopped but session metadata could not be removed');
+    return { apiVersion: 'v1', sessionId, removed: true, workspacePreserved: true };
+  }
+
   async deleteSession(
     sessionId: string,
     childAction: ParentCloseAction = 'leave-children'
@@ -1531,6 +1543,13 @@ export class SessionManager {
       throw new Error(`Session '${sessionId}' does not have an associated task branch`);
     }
 
+    if (action === 'integrate' && session.parentSessionId) {
+      const parent = await this.repos.sessions.findById(session.parentSessionId);
+      if (!parent || parent.serverId !== session.serverId || parent.branch !== session.baseBranch) {
+        throw new Error('Parent branch or host changed since child creation; integration is blocked');
+      }
+    }
+
     const releaseRemoval = await this.beginSessionRemoval(sessionId);
     let releaseRepository: () => void = () => undefined;
     let releaseWorktree: () => void = () => undefined;
@@ -1566,6 +1585,10 @@ export class SessionManager {
         // 1. Safety check: Verify worktree is clean and base branch is clean and ready.
         if (!worktreeAlreadyRemoved) {
           await this.gitService.verifyManagedWorktreeForFinalization(host, identity, true);
+          const preflight = await this.gitService.preflightManagedMerge(host, identity);
+          if (preflight.hasConflicts) {
+            throw new Error(`Integration conflicts: ${preflight.conflictingFiles.join(', ') || 'Git reported a conflict without individual file paths'}`);
+          }
         }
 
         // Verify termination on every attempt, including partial-cleanup retries.
@@ -1698,6 +1721,28 @@ export class SessionManager {
           releaseRemoval();
         }
       }
+    }
+  }
+
+  async preflightIntegration(sessionId: string) {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session?.managedWorktree || !session.branch || !session.parentSessionId) throw new Error('Integration requires a managed child worktree');
+    const parent = await this.repos.sessions.findById(session.parentSessionId);
+    const server = await this.repos.servers.findById(session.serverId);
+    if (!parent || parent.serverId !== session.serverId || !server || !['localhost', '127.0.0.1', '::1'].includes(server.host)) throw new Error('Remote child integration is unsupported');
+    const project = await this.repos.projects.findById(session.projectId);
+    if (!project) throw new Error('Integration project not found');
+    const host = await this.getHostAdapter(session.serverId);
+    const repository = await this.resolveProjectRepositoryPath(session.projectId, project.rootPath);
+    const worktree = await this.resolveSessionWorktreePath(session);
+    try {
+      const identity = { repositoryPath: repository.value, worktreePath: worktree.value, branch: session.branch, baseBranch: parent.branch, baseCommit: session.baseCommit };
+      if (!parent.branch || parent.branch !== session.baseBranch) throw new Error('Parent branch changed since child creation');
+      await this.gitService.verifyManagedWorktreeForFinalization(host, identity, true);
+      return { apiVersion: 'v1' as const, sessionId, parentSessionId: parent.id, baseCommit: session.baseCommit, parentBranch: parent.branch, ...await this.gitService.preflightManagedMerge(host, identity) };
+    } finally {
+      worktree.release();
+      repository.release();
     }
   }
 
