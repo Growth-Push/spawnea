@@ -956,6 +956,7 @@ app.whenReady().then(async () => {
       repositories,
       sessionManager,
       logger: logger.child('control'),
+      getActiveCatalog: () => catalogManager?.getActiveCatalog() ?? null,
       notifyNavigate: (state) => {
         if (!mainWindowRef || mainWindowRef.isDestroyed()) return false;
         mainWindowRef.webContents.send('control:navigate', state);

@@ -1,7 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { SPAWNEA_CONTROL_API_VERSION } from '@spawnea/domain';
-import type { ScopedAgentControlService } from './agent-control-service.js';
+import type {
+  BootstrapAgentControlService,
+  ScopedAgentControlService,
+} from './agent-control-service.js';
 
 const workspaceTabSchema = z.enum(['terminal', 'files', 'diff', 'artifacts', 'details', 'agent-context']);
 
@@ -19,7 +22,7 @@ function toolError(error: unknown) {
     ? 'not_found'
     : normalized.includes('outside the authenticated mcp scope') || normalized.includes('identity is not an active local root')
       ? 'unauthorized'
-    : normalized.includes('already has an open turn') || normalized.includes('already used with a different')
+    : normalized.includes('already has an open turn') || normalized.includes('already used with a different') || normalized.includes('already bound')
       ? 'conflict'
       : normalized.includes('did not become ready') || normalized.includes('not available for prompt delivery')
         ? 'needs_human'
@@ -46,12 +49,12 @@ function safeTool<T>(operation: () => Promise<T> | T) {
   };
 }
 
-export function createSpawneaMcpServer(control: ScopedAgentControlService): McpServer {
-  const server = new McpServer({
-    name: 'spawnea-control',
-    version: '1.0.0',
-  });
-
+function registerScopedTools(
+  server: McpServer,
+  control: ScopedAgentControlService,
+  includeGetState: boolean,
+  includeRootPromptTarget = false,
+): void {
   server.registerTool(
     'spawnea_close_shared_child',
     {
@@ -74,16 +77,18 @@ export function createSpawneaMcpServer(control: ScopedAgentControlService): McpS
     async ({ sessionId }) => safeTool(() => control.preflightIntegration(sessionId))()
   );
 
-  server.registerTool(
-    'spawnea_get_state',
-    {
-      title: 'Get Spawnea state',
-      description: 'List current sessions, hosts, projects, harnesses, worktrees, statuses, active session/tab, and recent control errors.',
-      inputSchema: z.object({}),
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-    },
-    safeTool(() => control.getState())
-  );
+  if (includeGetState) {
+    server.registerTool(
+      'spawnea_get_state',
+      {
+        title: 'Get Spawnea state',
+        description: 'List current sessions, hosts, projects, harnesses, worktrees, statuses, active session/tab, and recent control errors.',
+        inputSchema: z.object({}),
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+      },
+      safeTool(() => control.getState())
+    );
+  }
 
   server.registerTool(
     'spawnea_inspect_worktree',
@@ -190,7 +195,7 @@ export function createSpawneaMcpServer(control: ScopedAgentControlService): McpS
     'spawnea_send_prompt',
     {
       title: 'Send prompt to session',
-      description: 'Submit one prompt to a direct child. Spawnea sends the text and a separate Enter automatically; do not send an Enter key or a second prompt to submit it. Reuse clientRequestId for an exact retry. Read the response with spawnea_get_turn.',
+      description: `Submit one prompt to ${includeRootPromptTarget ? 'the bootstrap-bound root or ' : ''}a direct child. Spawnea sends the text and a separate Enter automatically; do not send an Enter key or a second prompt to submit it. Reuse clientRequestId for an exact retry. Read the response with spawnea_get_turn.`,
       inputSchema: z.object({
         target: z.string().min(1).max(200),
         parentSession: z.string().min(1).max(200).optional(),
@@ -281,6 +286,98 @@ export function createSpawneaMcpServer(control: ScopedAgentControlService): McpS
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     async ({ sessionId }) => safeTool(() => control.listChildArtifacts(sessionId))()
+  );
+}
+
+export function createSpawneaMcpServer(control: ScopedAgentControlService): McpServer {
+  const server = new McpServer({
+    name: 'spawnea-control',
+    version: '1.0.0',
+  });
+  registerScopedTools(server, control, true);
+  return server;
+}
+
+export function createBootstrapSpawneaMcpServer(
+  bootstrap: BootstrapAgentControlService,
+  bindRoot: (rootSessionId: string) => Promise<ScopedAgentControlService>,
+): McpServer {
+  const server = new McpServer({
+    name: 'spawnea-control',
+    version: '1.0.0',
+  });
+  let scoped: ScopedAgentControlService | undefined;
+  let binding: {
+    requestId: string;
+    fingerprint: string;
+    result?: Awaited<ReturnType<BootstrapAgentControlService['createSession']>>;
+    promise?: Promise<Awaited<ReturnType<BootstrapAgentControlService['createSession']>>>;
+  } | undefined;
+  const completeBinding = (
+    current: NonNullable<typeof binding>,
+    request: Parameters<BootstrapAgentControlService['createSession']>[0],
+  ) => {
+    if (scoped && current.result) return Promise.resolve(current.result);
+    current.promise ??= (async () => {
+      const result = current.result ?? await bootstrap.createSession(request);
+      current.result = result;
+      const bound = await bindRoot(result.rootSessionId);
+      registerScopedTools(server, bound, false, true);
+      scoped = bound;
+      return result;
+    })().finally(() => {
+      current.promise = undefined;
+    });
+    return current.promise;
+  };
+
+  server.registerTool(
+    'spawnea_get_state',
+    {
+      title: 'Get Spawnea state',
+      description: 'During bootstrap, list only enabled local hosts and their session-creation choices. After creation, list only the bound root and its direct children.',
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    safeTool<unknown>(() => scoped ? scoped.getState() : bootstrap.getState())
+  );
+
+  server.registerTool(
+    'spawnea_create_session',
+    {
+      title: 'Create and bind a root Spawnea session',
+      description: 'Create one independent local root session, then bind this MCP connection to that root. Exact clientRequestId retries are safe; this connection cannot create a different root.',
+      inputSchema: z.object({
+        clientRequestId: z.string().min(1).max(120),
+        serverId: z.string().min(1).max(200),
+        projectId: z.string().min(1).max(200),
+        agentId: z.string().min(1).max(200),
+        task: z.string().trim().min(1).max(10_000),
+        baseBranch: z.string().trim().min(1).max(240).optional(),
+        useWorktree: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async (request) => safeTool(async () => {
+      const fingerprint = JSON.stringify(request);
+      const replayed = Boolean(binding);
+      let currentBinding = binding;
+      if (currentBinding) {
+        if (currentBinding.requestId !== request.clientRequestId || currentBinding.fingerprint !== fingerprint) {
+          throw new Error('This MCP connection is already bound to a different root session');
+        }
+      } else {
+        currentBinding = { requestId: request.clientRequestId, fingerprint };
+        binding = currentBinding;
+      }
+      try {
+        const result = await completeBinding(currentBinding, request);
+        return { ...result, replayed: replayed || result.replayed };
+      } catch (error) {
+        if (binding === currentBinding && !currentBinding.result) binding = undefined;
+        throw error;
+      }
+    })()
   );
 
   return server;

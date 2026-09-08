@@ -11,7 +11,7 @@ import {
   type Logger,
 } from '@spawnea/domain';
 import type { AgentControlService } from './agent-control-service.js';
-import { createSpawneaMcpServer } from './control-mcp-server.js';
+import { createBootstrapSpawneaMcpServer, createSpawneaMcpServer } from './control-mcp-server.js';
 import { resolveControlRuntimeFile, resolveControlSocketPath } from './control-runtime.js';
 
 const AUTH_TIMEOUT_MS = 3_000;
@@ -183,20 +183,31 @@ export class ControlMcpGateway {
       } catch {
         return fail();
       }
-      if (auth.type !== 'spawnea-auth' || !sameToken(auth.token, this.token) || typeof auth.sessionId !== 'string') return fail();
+      if (auth.type !== 'spawnea-auth' || !sameToken(auth.token, this.token) ||
+          (auth.sessionId !== undefined && (typeof auth.sessionId !== 'string' || auth.sessionId.length === 0))) return fail();
       authenticating = true;
       socket.pause();
       socket.removeListener('data', onData);
-      let scopedControl: Awaited<ReturnType<AgentControlService['createScopedControl']>>;
-      const deadline = Date.now() + AUTH_TIMEOUT_MS;
-      while (true) {
-        try {
-          scopedControl = await this.control.createScopedControl(auth.sessionId);
-          break;
-        } catch {
-          if (socket.destroyed || Date.now() >= deadline) return fail();
-          await new Promise((resolve) => setTimeout(resolve, AUTH_SCOPE_RETRY_INTERVAL_MS));
+      let createServer: () => ReturnType<typeof createSpawneaMcpServer>;
+      if (typeof auth.sessionId === 'string') {
+        let scopedControl: Awaited<ReturnType<AgentControlService['createScopedControl']>>;
+        const deadline = Date.now() + AUTH_TIMEOUT_MS;
+        while (true) {
+          try {
+            scopedControl = await this.control.createScopedControl(auth.sessionId);
+            break;
+          } catch {
+            if (socket.destroyed || Date.now() >= deadline) return fail();
+            await new Promise((resolve) => setTimeout(resolve, AUTH_SCOPE_RETRY_INTERVAL_MS));
+          }
         }
+        createServer = () => createSpawneaMcpServer(scopedControl);
+      } else {
+        const bootstrapControl = this.control.createBootstrapControl();
+        createServer = () => createBootstrapSpawneaMcpServer(
+          bootstrapControl,
+          (rootSessionId) => this.control.createScopedControl(rootSessionId, { allowRootPrompts: true }),
+        );
       }
 
       if (socket.destroyed) return fail();
@@ -205,7 +216,7 @@ export class ControlMcpGateway {
       const remainder = buffered.subarray(newline + 1);
       if (remainder.length > 0) socket.unshift(remainder);
       const transport = new StdioServerTransport(socket, socket, { maxBufferSize: 2 * 1024 * 1024 });
-      const handle = serveStdio(() => createSpawneaMcpServer(scopedControl), {
+      const handle = serveStdio(createServer, {
         transport,
         onerror: (error) => this.logger.warn('Spawnea MCP transport error', { error: error.message }),
       });

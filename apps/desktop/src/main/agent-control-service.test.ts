@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
-import { createLogger, type Session } from '@spawnea/domain';
+import { createLogger, type OperationalCatalog, type Session } from '@spawnea/domain';
 import { AgentControlService } from './agent-control-service.js';
 import type { SessionManager } from './session-manager.js';
 import { PromptSubmissionError } from '@spawnea/hosts';
@@ -38,6 +38,33 @@ describe('AgentControlService', () => {
     createdAt: new Date('2026-08-27T10:00:00.000Z'),
     lastActivityAt: new Date('2026-08-27T10:01:00.000Z'),
     ...overrides,
+  });
+
+  const localCatalog = (): OperationalCatalog => ({
+    version: 1,
+    hosts: {
+      'local-1': {
+        id: 'local-1',
+        name: 'Local',
+        enabled: true,
+        projects: {
+          project: {
+            id: 'project', name: 'Local project', path: '/repo', enabled: true,
+          },
+          disabled: {
+            id: 'disabled', name: 'Disabled project', path: '/disabled', enabled: false,
+          },
+        },
+        harnesses: {
+          codex: {
+            id: 'codex', name: 'Local Codex', command: 'codex', args: [], enabled: true,
+          },
+          disabled: {
+            id: 'disabled', name: 'Disabled harness', command: 'disabled', args: [], enabled: false,
+          },
+        },
+      },
+    },
   });
 
   beforeEach(async () => {
@@ -128,13 +155,25 @@ describe('AgentControlService', () => {
     expect(sessionManager.captureSessionTerminal).not.toHaveBeenCalled();
   });
 
-  it('resolves a child alias within the authenticated root and rejects self-prompting', async () => {
+  it('delivers prompts to the authenticated root or a child alias and rejects unrelated sessions', async () => {
     await repositories.servers.save({ id: 'host-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
     await repositories.sessions.save(session('child', { parentSessionId: 'existing', childAlias: 'child-1' }));
-    const scoped = await service.createScopedControl('existing');
-    await expect(scoped.sendPrompt({ target: 'child-1', prompt: 'Review', clientRequestId: 'alias' })).resolves.toMatchObject({ sessionId: 'child' });
-    await expect(scoped.sendPrompt({ target: 'existing', prompt: 'Review' })).rejects.toThrow('outside');
-    await expect(scoped.sendPrompt({ target: 'child', parentSession: 'other', prompt: 'Review' })).rejects.toThrow('outside');
+    await repositories.sessions.save(session('unrelated'));
+    const injectedIdentity = await service.createScopedControl('existing');
+    const childTurn = await injectedIdentity.sendPrompt({ target: 'child-1', prompt: 'Review', clientRequestId: 'alias' });
+    await expect(injectedIdentity.getTurn({ turnId: childTurn.turnId })).resolves.toMatchObject({ sessionId: 'child' });
+    await expect(injectedIdentity.sendPrompt({ target: 'existing', prompt: 'Continue', clientRequestId: 'root' }))
+      .rejects.toThrow('outside');
+    await expect(injectedIdentity.sendPrompt({ target: 'unrelated', prompt: 'Review' })).rejects.toThrow('outside');
+    await expect(injectedIdentity.sendPrompt({ target: 'child', parentSession: 'other', prompt: 'Review' })).rejects.toThrow('outside');
+
+    const bootstrapBound = await service.createScopedControl('existing', { allowRootPrompts: true });
+    const rootTurn = await bootstrapBound.sendPrompt({ target: 'existing', prompt: 'Continue', clientRequestId: 'root' });
+    await expect(bootstrapBound.getTurn({ turnId: rootTurn.turnId })).resolves.toMatchObject({ sessionId: 'existing' });
+    await expect(injectedIdentity.getTurn({ turnId: rootTurn.turnId })).rejects.toThrow('outside');
+
+    const unrelatedTurn = await service.sendPrompt({ target: 'unrelated', prompt: 'Private work' });
+    await expect(injectedIdentity.getTurn({ turnId: unrelatedTurn.turnId })).rejects.toThrow('outside');
     await expect(service.createScopedControl('child')).rejects.toThrow('not an active local root');
   });
 
@@ -183,6 +222,182 @@ describe('AgentControlService', () => {
     });
     expect(JSON.stringify(state)).not.toContain('example.test');
     expect(JSON.stringify(state)).not.toContain('secret');
+  });
+
+  it('exposes only local creation choices during bootstrap', async () => {
+    await repositories.servers.save({ id: 'local-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+    await repositories.servers.save({
+      id: 'ssh-loopback', name: 'SSH loopback', host: 'localhost', sshPort: 22,
+      sshConfigAlias: 'local-through-ssh', enabled: true,
+    });
+    await repositories.projects.save({
+      id: 'local-1:project', serverId: 'local-1', name: 'Local project', rootPath: '/private/local/path', baseBranch: 'main',
+    });
+    await repositories.projects.save({
+      id: 'ssh-project', serverId: 'ssh-loopback', name: 'SSH project', rootPath: '/private/ssh/path', baseBranch: 'main',
+    });
+    await repositories.projects.save({
+      id: 'local-1:disabled', serverId: 'local-1', name: 'Disabled project', rootPath: '/private/disabled', baseBranch: 'main',
+    });
+    await repositories.agents.save({
+      id: 'local-1:codex', name: 'Local Codex', harness: 'codex', command: '/private/bin/codex',
+    });
+    await repositories.agents.save({
+      id: 'local-1:disabled', name: 'Disabled harness', harness: 'disabled', command: '/private/bin/disabled',
+    });
+    service = new AgentControlService({
+      repositories,
+      sessionManager: sessionManager as unknown as SessionManager,
+      logger: createLogger('AgentControlServiceTest'),
+      getActiveCatalog: localCatalog,
+    });
+    const bootstrap = service.createBootstrapControl();
+
+    const state = await bootstrap.getState();
+
+    expect(state).toEqual({
+      apiVersion: 'v1',
+      mode: 'bootstrap',
+      hosts: [{ id: 'local-1', name: 'Local' }],
+      projects: [{ id: 'local-1:project', name: 'Local project', hostId: 'local-1', baseBranch: 'main' }],
+      harnesses: [
+        { id: 'agent-1', name: 'Codex' },
+        { id: 'local-1:codex', name: 'Local Codex' },
+      ],
+    });
+    expect(JSON.stringify(state)).not.toContain('/private/');
+    expect(JSON.stringify(state)).not.toContain('existing');
+    expect(JSON.stringify(state)).not.toContain('example.test');
+    expect(JSON.stringify(state)).not.toContain('ssh-loopback');
+    expect(JSON.stringify(state)).not.toContain('SSH project');
+    expect(JSON.stringify(state)).not.toContain('Disabled harness');
+    expect(JSON.stringify(state)).not.toContain('Disabled project');
+  });
+
+  it('rejects root creation with a disabled catalog project without starting a session', async () => {
+    await repositories.servers.save({ id: 'local-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+    await repositories.projects.save({
+      id: 'local-1:disabled', serverId: 'local-1', name: 'Disabled project', rootPath: '/repo', baseBranch: 'main',
+    });
+    service = new AgentControlService({
+      repositories,
+      sessionManager: sessionManager as unknown as SessionManager,
+      logger: createLogger('AgentControlServiceTest'),
+      getActiveCatalog: localCatalog,
+    });
+
+    await expect(service.createBootstrapControl().createSession({
+      clientRequestId: 'disabled-project-root',
+      serverId: 'local-1',
+      projectId: 'local-1:disabled',
+      agentId: 'agent-1',
+      task: 'Must not start',
+    })).rejects.toThrow("Project 'local-1:disabled' is not available on bootstrap host 'local-1'");
+    expect(sessionManager.createSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects root creation with a disabled catalog harness', async () => {
+    await repositories.servers.save({ id: 'local-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+    await repositories.projects.save({
+      id: 'local-project', serverId: 'local-1', name: 'Local project', rootPath: '/repo', baseBranch: 'main',
+    });
+    await repositories.agents.save({
+      id: 'local-1:disabled', name: 'Disabled harness', harness: 'disabled', command: 'disabled',
+    });
+    service = new AgentControlService({
+      repositories,
+      sessionManager: sessionManager as unknown as SessionManager,
+      logger: createLogger('AgentControlServiceTest'),
+      getActiveCatalog: localCatalog,
+    });
+
+    await expect(service.createBootstrapControl().createSession({
+      clientRequestId: 'disabled-root',
+      serverId: 'local-1',
+      projectId: 'local-project',
+      agentId: 'local-1:disabled',
+      task: 'Must not start',
+    })).rejects.toThrow("Harness 'local-1:disabled' is not available on bootstrap host 'local-1'");
+    expect(sessionManager.createSession).not.toHaveBeenCalled();
+  });
+
+  it('creates one local root idempotently and rejects remote bootstrap targets', async () => {
+    await repositories.servers.save({ id: 'local-1', name: 'Local', host: '127.0.0.1', sshPort: 22, enabled: true });
+    await repositories.projects.save({
+      id: 'local-project', serverId: 'local-1', name: 'Local project', rootPath: '/repo', baseBranch: 'main',
+    });
+    const bootstrap = service.createBootstrapControl();
+    const request = {
+      clientRequestId: 'root-1',
+      serverId: 'local-1',
+      projectId: 'local-project',
+      agentId: 'agent-1',
+      task: 'Independent task',
+      useWorktree: true,
+    };
+
+    const [first, concurrentReplay] = await Promise.all([
+      bootstrap.createSession(request),
+      bootstrap.createSession(request),
+    ]);
+    const replay = await bootstrap.createSession(request);
+
+    expect(first).toMatchObject({ sessionCreated: true, rootSessionId: 'created-1', sessionId: 'created-1', replayed: false });
+    expect(concurrentReplay).toMatchObject({ rootSessionId: 'created-1', replayed: true });
+    expect(replay).toMatchObject({ rootSessionId: 'created-1', replayed: true });
+    expect(sessionManager.createSession).toHaveBeenCalledOnce();
+    expect(sessionManager.createSession).toHaveBeenCalledWith({
+      serverId: 'local-1', projectId: 'local-project', agentId: 'agent-1', task: 'Independent task',
+      baseBranch: undefined, useWorktree: true,
+    }, 'mcp');
+    await expect(bootstrap.createSession({ ...request, task: 'Different task' })).rejects.toThrow('different root request');
+    const independentBootstrap = service.createBootstrapControl();
+    await expect(independentBootstrap.createSession(request)).resolves.toMatchObject({
+      rootSessionId: 'created-1', replayed: true,
+    });
+    expect(sessionManager.createSession).toHaveBeenCalledOnce();
+    await expect(bootstrap.createSession({
+      ...request, clientRequestId: 'remote-root', serverId: 'host-1', projectId: 'project-1',
+    })).rejects.toThrow('enabled local host');
+    await repositories.servers.save({
+      id: 'ssh-loopback', name: 'SSH loopback', host: '[::1]', sshPort: 22,
+      sshUser: 'operator', enabled: true,
+    });
+    await repositories.projects.save({
+      id: 'ssh-project', serverId: 'ssh-loopback', name: 'SSH project', rootPath: '/repo', baseBranch: 'main',
+    });
+    await expect(independentBootstrap.createSession({
+      ...request, clientRequestId: 'ssh-root', serverId: 'ssh-loopback', projectId: 'ssh-project',
+    })).rejects.toThrow('enabled local host');
+  });
+
+  it('preserves root creation idempotency after more than 200 successful requests', async () => {
+    await repositories.servers.save({ id: 'local-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+    await repositories.projects.save({
+      id: 'local-project', serverId: 'local-1', name: 'Local project', rootPath: '/repo', baseBranch: 'main',
+    });
+    const bootstrap = service.createBootstrapControl();
+    const firstRequest = {
+      clientRequestId: 'root-0',
+      serverId: 'local-1',
+      projectId: 'local-project',
+      agentId: 'agent-1',
+      task: 'Root 0',
+    };
+
+    const first = await bootstrap.createSession(firstRequest);
+    for (let index = 1; index <= 200; index += 1) {
+      await bootstrap.createSession({
+        ...firstRequest,
+        clientRequestId: `root-${index}`,
+        task: `Root ${index}`,
+      });
+    }
+    const replay = await bootstrap.createSession(firstRequest);
+
+    expect(first).toMatchObject({ rootSessionId: 'created-1', replayed: false });
+    expect(replay).toMatchObject({ rootSessionId: 'created-1', replayed: true });
+    expect(sessionManager.createSession).toHaveBeenCalledTimes(201);
   });
 
   it('returns per-item partial results and makes exact correlation retries idempotent', async () => {

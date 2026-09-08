@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
-import { createSpawneaMcpServer } from './control-mcp-server.js';
-import type { AgentControlService } from './agent-control-service.js';
+import { createBootstrapSpawneaMcpServer, createSpawneaMcpServer } from './control-mcp-server.js';
+import type {
+  AgentControlService,
+  BootstrapAgentControlService,
+  ScopedAgentControlService,
+} from './agent-control-service.js';
 import type { ControlListSessionsResult, ControlSendPromptResult } from '@spawnea/domain';
 
 describe('Spawnea MCP v1 contract', () => {
@@ -10,6 +14,18 @@ describe('Spawnea MCP v1 contract', () => {
   async function connect(control: Partial<AgentControlService>) {
     const server = createSpawneaMcpServer(control as AgentControlService);
     const client = new Client({ name: 'spawnea-test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    connected.push({ client, server });
+    return client;
+  }
+
+  async function connectBootstrap(
+    bootstrap: BootstrapAgentControlService,
+    bindRoot: (rootSessionId: string) => Promise<ScopedAgentControlService>,
+  ) {
+    const server = createBootstrapSpawneaMcpServer(bootstrap, bindRoot);
+    const client = new Client({ name: 'spawnea-bootstrap-test-client', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     connected.push({ client, server });
@@ -61,6 +77,141 @@ describe('Spawnea MCP v1 contract', () => {
     ]);
     expect(new Set(toolNames).size).toBe(toolNames.length);
     expect(toolNames.every((name) => name.startsWith('spawnea_'))).toBe(true);
+  });
+
+  it('exposes a minimal bootstrap surface, creates one root, and binds the connection', async () => {
+    const bootstrapState = {
+      apiVersion: 'v1' as const,
+      mode: 'bootstrap' as const,
+      hosts: [{ id: 'local', name: 'Local' }],
+      projects: [{ id: 'project', name: 'Project', hostId: 'local' }],
+      harnesses: [{ id: 'codex', name: 'Codex' }],
+    };
+    const scopedState = { apiVersion: 'v1' as const, sessions: [{ id: 'root-1' }] };
+    const request = {
+      clientRequestId: 'create-root-1',
+      serverId: 'local',
+      projectId: 'project',
+      agentId: 'codex',
+      task: 'Root task',
+    };
+    const createSession = vi.fn().mockResolvedValue({
+      apiVersion: 'v1', sessionCreated: true, rootSessionId: 'root-1', sessionId: 'root-1',
+      session: { id: 'root-1' }, replayed: false,
+    });
+    const bootstrap = { getState: vi.fn().mockResolvedValue(bootstrapState), createSession } as BootstrapAgentControlService;
+    const scoped = { getState: vi.fn().mockResolvedValue(scopedState) } as unknown as ScopedAgentControlService;
+    const bindRoot = vi.fn().mockResolvedValue(scoped);
+    const client = await connectBootstrap(bootstrap, bindRoot);
+
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
+      'spawnea_get_state', 'spawnea_create_session',
+    ]);
+    await expect(client.callTool({ name: 'spawnea_get_state', arguments: {} }))
+      .resolves.toMatchObject({ structuredContent: bootstrapState });
+
+    const created = await client.callTool({ name: 'spawnea_create_session', arguments: request });
+    expect(created.structuredContent).toMatchObject({ rootSessionId: 'root-1', replayed: false });
+    expect(bindRoot).toHaveBeenCalledWith('root-1');
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain('spawnea_send_prompt');
+    await expect(client.callTool({ name: 'spawnea_get_state', arguments: {} }))
+      .resolves.toMatchObject({ structuredContent: scopedState });
+
+    const replay = await client.callTool({ name: 'spawnea_create_session', arguments: request });
+    expect(replay.structuredContent).toMatchObject({ rootSessionId: 'root-1', replayed: true });
+    expect(createSession).toHaveBeenCalledOnce();
+    const rejected = await client.callTool({
+      name: 'spawnea_create_session', arguments: { ...request, clientRequestId: 'create-root-2', task: 'Other root' },
+    });
+    expect(rejected).toMatchObject({ isError: true, structuredContent: { error: { code: 'conflict' } } });
+    expect(createSession).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a created root locked to the connection when the first bind attempt fails', async () => {
+    const request = {
+      clientRequestId: 'create-root-1', serverId: 'local', projectId: 'project', agentId: 'codex', task: 'Root task',
+    };
+    const result = {
+      apiVersion: 'v1' as const, sessionCreated: true as const, rootSessionId: 'root-1', sessionId: 'root-1',
+      session: { id: 'root-1' }, replayed: false,
+    };
+    const createSession = vi.fn().mockResolvedValue(result);
+    const bootstrap = {
+      getState: vi.fn().mockResolvedValue({ apiVersion: 'v1', mode: 'bootstrap', hosts: [], projects: [], harnesses: [] }),
+      createSession,
+    } as unknown as BootstrapAgentControlService;
+    const scoped = { getState: vi.fn() } as unknown as ScopedAgentControlService;
+    const bindRoot = vi.fn()
+      .mockRejectedValueOnce(new Error('Root scope was not ready'))
+      .mockResolvedValue(scoped);
+    const client = await connectBootstrap(bootstrap, bindRoot);
+
+    await expect(client.callTool({ name: 'spawnea_create_session', arguments: request }))
+      .resolves.toMatchObject({ isError: true });
+    const unrelated = await client.callTool({
+      name: 'spawnea_create_session', arguments: { ...request, clientRequestId: 'create-root-2', task: 'Other root' },
+    });
+    expect(unrelated).toMatchObject({ isError: true, structuredContent: { error: { code: 'conflict' } } });
+
+    const replay = await client.callTool({ name: 'spawnea_create_session', arguments: request });
+    expect(replay.structuredContent).toMatchObject({ rootSessionId: 'root-1', replayed: true });
+    expect(createSession).toHaveBeenCalledOnce();
+    expect(bindRoot).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves a service-level replay marker on a replacement bootstrap connection', async () => {
+    const request = {
+      clientRequestId: 'create-root-1', serverId: 'local', projectId: 'project', agentId: 'codex', task: 'Root task',
+    };
+    const createSession = vi.fn().mockResolvedValue({
+      apiVersion: 'v1', sessionCreated: true, rootSessionId: 'root-1', sessionId: 'root-1',
+      session: { id: 'root-1' }, replayed: true,
+    });
+    const bootstrap = {
+      getState: vi.fn(), createSession,
+    } as unknown as BootstrapAgentControlService;
+    const scoped = { getState: vi.fn() } as unknown as ScopedAgentControlService;
+    const client = await connectBootstrap(bootstrap, vi.fn().mockResolvedValue(scoped));
+
+    const replay = await client.callTool({ name: 'spawnea_create_session', arguments: request });
+    expect(replay.structuredContent).toMatchObject({ rootSessionId: 'root-1', replayed: true });
+  });
+
+  it('preserves the creation error for concurrent exact retries and allows a later retry', async () => {
+    const request = {
+      clientRequestId: 'create-root-1', serverId: 'local', projectId: 'project', agentId: 'codex', task: 'Root task',
+    };
+    const result = {
+      apiVersion: 'v1' as const, sessionCreated: true as const, rootSessionId: 'root-1', sessionId: 'root-1',
+      session: { id: 'root-1' }, replayed: false,
+    };
+    let rejectCreation!: (error: Error) => void;
+    const createSession = vi.fn()
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectCreation = reject; }))
+      .mockResolvedValueOnce(result);
+    const bootstrap = {
+      getState: vi.fn().mockResolvedValue({ apiVersion: 'v1', mode: 'bootstrap', hosts: [], projects: [], harnesses: [] }),
+      createSession,
+    } as unknown as BootstrapAgentControlService;
+    const scoped = { getState: vi.fn() } as unknown as ScopedAgentControlService;
+    const bindRoot = vi.fn().mockResolvedValue(scoped);
+    const client = await connectBootstrap(bootstrap, bindRoot);
+
+    const first = client.callTool({ name: 'spawnea_create_session', arguments: request });
+    const concurrentRetry = client.callTool({ name: 'spawnea_create_session', arguments: request });
+    await vi.waitFor(() => expect(createSession).toHaveBeenCalledOnce());
+    rejectCreation(new Error('Root creation failed'));
+
+    const failures = await Promise.all([first, concurrentRetry]);
+    expect(failures).toEqual([
+      expect.objectContaining({ isError: true, structuredContent: { apiVersion: 'v1', error: { code: 'operation_failed', message: 'Root creation failed' } } }),
+      expect.objectContaining({ isError: true, structuredContent: { apiVersion: 'v1', error: { code: 'operation_failed', message: 'Root creation failed' } } }),
+    ]);
+    expect(bindRoot).not.toHaveBeenCalled();
+
+    const retry = await client.callTool({ name: 'spawnea_create_session', arguments: request });
+    expect(retry.structuredContent).toMatchObject({ rootSessionId: 'root-1', replayed: false });
+    expect(createSession).toHaveBeenCalledTimes(2);
   });
 
 

@@ -47,7 +47,11 @@ or AppImage is executable.
 
 The bridge finds the active desktop process through `${XDG_RUNTIME_DIR}/spawnea/control-runtime.json`. On Linux it also checks `/run/user/<uid>/spawnea/control-runtime.json` so harnesses launched through tmux still connect when that shell does not inherit `XDG_RUNTIME_DIR`; the private temporary-directory location remains a fallback. Set `SPAWNEA_CONTROL_RUNTIME_FILE` in both processes only when a non-default runtime file is required. Stop the desktop app to disable the integration; without an active app, the bridge exits because its owner socket closes. Set `SPAWNEA_CONTROL_ENABLED=0`, `false`, `off`, `no`, or `disabled` only when the local MCP socket should be disabled intentionally. The integration is currently disabled on Windows because named-pipe transport is not implemented yet.
 
-The v1 bridge exposes only the canonical `spawnea_*` tools documented below. The bridge sends `spawnea-auth` with the injected `SPAWNEA_SESSION_ID`. Children receive their own identity and cannot authenticate as an orchestrating root. Existing connections are revalidated on each operation.
+The v1 bridge exposes only the canonical `spawnea_*` tools documented below. When `SPAWNEA_SESSION_ID` is present, the bridge sends it with `spawnea-auth` and the connection opens directly in that active local root's scope. Children receive their own identity and cannot authenticate as an orchestrating root. Existing scoped connections are revalidated on each operation.
+
+When `SPAWNEA_SESSION_ID` is absent, the bridge authenticates with the runtime token only and opens in bootstrap mode. A defined but empty `SPAWNEA_SESSION_ID` is an invalid identity and is rejected instead of opening bootstrap. Bootstrap exposes only `spawnea_get_state` and `spawnea_create_session`. Its state contains enabled local hosts and their enabled catalog projects and harnesses; disabled catalog entries are neither offered nor accepted. Seed projects and agents that do not originate from the catalog remain available as fallbacks. Bootstrap does not expose existing sessions, SSH-backed loopback targets, or remote targets. Creating a root binds that socket permanently to the new root and adds the scoped tools to the same MCP connection. Exact concurrent retries share the creation attempt. If the socket is lost, a replacement token-only connection can repeat the same `clientRequestId` and payload to bind to the existing root instead of creating another. Successful request IDs remain idempotent for the lifetime of the desktop process. An exact retry after a creation failure may try again. After Spawnea has created a root, a binding failure retains that root identity so a retry binds to it instead of creating another. A different creation request on the same socket is rejected.
+
+The `task` supplied to `spawnea_create_session` becomes the root session's recorded task and display name and is available through its session context. It is not typed into the new harness as a terminal prompt. The bootstrap-bound connection may call `spawnea_send_prompt` with the returned `rootSessionId` as `target`. A connection authenticated with that root harness's injected `SPAWNEA_SESSION_ID` remains child-only for prompt and turn operations, preventing the harness from feeding terminal input into itself.
 
 The desktop workspace includes a read-only **Agent Context** tab (`Alt+6`). It shows bounded calls made through the scoped MCP connection, groups consecutive unchanged turn polls, and exposes request/response and cursor metadata in a detail pane. This volatile context is never written as a transcript and is reported unavailable after restart.
 
@@ -59,7 +63,7 @@ Child close requests accept a `sessionId` and optional `force`; `force: true` is
 - The bridge connects to a Unix-domain socket owned by the current OS user. The runtime directory is mode `0700`; the socket and ephemeral-token descriptor are mode `0600`.
 - A detached same-user watchdog removes the descriptor and socket after abrupt Electron termination, but only while the protected descriptor still names the exited Electron PID.
 - The gateway starts by default with the desktop app on Unix-like systems. It is disabled on Windows until named-pipe transport is implemented. Set `SPAWNEA_CONTROL_ENABLED=0` (or `false`, `off`, `no`, `disabled`) to disable it elsewhere. There is no TCP listener, public API, remote daemon, or remote host installation.
-- Every socket connection must authenticate with the random 256-bit token from the protected runtime descriptor and an active root session ID before MCP messages are accepted. The gateway rejects unknown IDs, child IDs, and roots that are not local.
+- Every socket connection must authenticate with the random 256-bit token from the protected runtime descriptor. A connection that supplies a session ID must name an active local root; the gateway rejects unknown IDs, child IDs, and non-local roots. A connection without a session ID receives only the local bootstrap surface until it creates and binds one root.
 - Spawnea persists a new root session's scoped identity before launching its harness. If tmux startup fails, that persistence is rolled back. Authentication also rechecks the same identity during the existing three-second window, then rejects it if the root never becomes active.
 - After authentication, the MCP server is scoped to the authenticated root and its direct child sessions. Requests targeting another root or an unrelated session are rejected.
 - The read model returns host IDs and display names, never SSH targets, usernames, passwords, tokens, secret references, or resolved credentials.
@@ -132,6 +136,24 @@ Unknown sessions return a `not_found` tool error. Blank or oversized titles are 
 Input: `{ "sessionId": "child-session-id" }`. Checks an eligible local managed child and returns `parentBranch`, `baseCommit`, bounded `parentCommits`, `hasConflicts`, `conflictingFiles`, and `truncated`. `hasConflicts` is authoritative: some Git conflicts have no individual file paths. Git's `merge-tree --write-tree` predicts conflicts without updating either checkout, index, or branch ref; it may write unreachable Git objects. Unsupported Git versions fail explicitly. Finalization repeats preflight before stopping the child. Current managed finalization requires the parent's branch to be checked out in the project's primary checkout.
 
 Batch creation is not exposed. Use `spawnea_create_child_session` once per child.
+
+### `spawnea_create_session` (bootstrap only)
+
+Input:
+
+```json
+{
+  "clientRequestId": "create-root-1",
+  "serverId": "local",
+  "projectId": "spawnea",
+  "agentId": "codex",
+  "task": "Review the bootstrap flow",
+  "baseBranch": "main",
+  "useWorktree": true
+}
+```
+
+Creates one independent root on an enabled local host and binds the bootstrap MCP connection to it. `baseBranch` and `useWorktree` are optional. Before creation, `spawnea_get_state` returns only bootstrap choices. After binding, it returns the new root and its direct children, and the full scoped tool set is available. `clientRequestId` plus the complete request payload defines an installation-wide idempotent retry for the running desktop process, including a replacement bootstrap connection after transport loss. A bound connection cannot create or bind a different root later. The `task` records root context but is not automatically submitted to the harness terminal.
 
 ### `spawnea_close_shared_child`
 
@@ -239,7 +261,7 @@ Input:
 }
 ```
 
-Use a direct child's session ID or alias. Aliases resolve inside the authenticated root automatically. Optional `parentSession` must match that root. Self-prompts and cross-tree prompts are rejected.
+Use a direct child's session ID or alias from any root-scoped connection. A bootstrap-bound connection may also use its root's session ID. Aliases resolve inside the scoped root automatically. Optional `parentSession` must match that root. Unrelated sessions and root prompts from connections authenticated with `SPAWNEA_SESSION_ID` are rejected. Root creation does not submit the recorded `task` automatically.
 
 Waits for a `starting` session to become usable for a bounded period, captures an initial terminal cursor, and submits at most 32,000 characters through the PTY or tmux. Known interactive editors receive bracketed paste, followed by a separate Enter after 500 ms. The caller must not send another prompt or key to submit the text. Delivery reports terminal writes, not proof that the harness has started answering. The result contains `turnId`, `version`, and delivery metadata. Exact `clientRequestId` retries do not submit twice. A second unrelated prompt is rejected while the turn is working; an answer is accepted after `needs_input`.
 
@@ -282,12 +304,13 @@ Reads output produced after the prompt's initial cursor or after the supplied cu
 
 Use a disposable Git repository and a disposable Spawnea managed-worktree session.
 
-1. Start Spawnea and connect an MCP client using the bridge above.
-2. Call `spawnea_get_state`; confirm host addresses and credentials are absent.
-3. Call `spawnea_rename_session`; confirm the context bar/sidebar update, `spawnea_get_state` returns the new title, and the task/tmux/branch/worktree fields are unchanged.
-4. Call `spawnea_create_child_session`, then retry the exact request with the same `clientRequestId`; confirm `replayed: true` and no duplicate child.
-5. Create a disposable child with `initialPrompt`; call `spawnea_get_turn` using `afterVersion` and `waitMs`, then continue from the returned cursor. Confirm questions wake with `needs_input` and an answer can be submitted on the same turn.
-6. Call `spawnea_activate` and `spawnea_inspect_worktree`; confirm the selected tab changes and the repository remains unchanged.
-7. Request `close` with `dirtyChanges: "discard"` and no confirmation; confirm no Git/tmux mutation occurs while the dialog is pending, reject it, and verify status `rejected`.
-8. Submit a fresh `close` request with `dirtyChanges: "stash"` and `confirmation: "llm-validated"`; verify no confirmation dialog opens and the returned status/result matches the disposable worktree/session state. Confirm discard still requires the dialog.
-9. Stop Spawnea and verify the bridge can no longer connect.
+1. Start Spawnea and connect an MCP client without `SPAWNEA_SESSION_ID`; confirm only `spawnea_get_state` and `spawnea_create_session` are exposed and bootstrap state omits existing sessions, remote targets, host addresses, and credentials.
+2. Call `spawnea_create_session`, retry the exact request on the same connection and on a replacement token-only connection, and confirm one root is created and both sockets bind only to it. Confirm a different root request is rejected and the task is recorded without being typed into the harness terminal.
+3. Prompt the root from the bootstrap-bound connection. Reconnect from the created root with its injected `SPAWNEA_SESSION_ID`; confirm the scoped tools are exposed, `spawnea_get_state` contains only that root and its direct children, and a root self-prompt is rejected.
+4. Call `spawnea_rename_session`; confirm the context bar/sidebar update, `spawnea_get_state` returns the new title, and the task/tmux/branch/worktree fields are unchanged.
+5. Call `spawnea_create_child_session`, then retry the exact request with the same `clientRequestId`; confirm `replayed: true` and no duplicate child.
+6. Create a disposable child with `initialPrompt`; call `spawnea_get_turn` using `afterVersion` and `waitMs`, then continue from the returned cursor. Confirm questions wake with `needs_input` and an answer can be submitted on the same turn.
+7. Call `spawnea_activate` and `spawnea_inspect_worktree`; confirm the selected tab changes and the repository remains unchanged.
+8. Request `close` with `dirtyChanges: "discard"` and no confirmation; confirm no Git/tmux mutation occurs while the dialog is pending, reject it, and verify status `rejected`.
+9. Submit a fresh `close` request with `dirtyChanges: "stash"` and `confirmation: "llm-validated"`; verify no confirmation dialog opens and the returned status/result matches the disposable worktree/session state. Confirm discard still requires the dialog.
+10. Stop Spawnea and verify the bridge can no longer connect.

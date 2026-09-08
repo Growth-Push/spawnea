@@ -27,7 +27,7 @@ class AuthenticatedSocketTransport implements Transport {
     private readonly socketPath: string,
     private readonly token: string,
     private readonly authType: 'spawnea-auth' | 'spawnea-auth' = 'spawnea-auth',
-    private readonly authSessionId = 'session-1',
+    private readonly authSessionId: string | null = 'session-1',
   ) {}
 
   async start(): Promise<void> {
@@ -43,7 +43,10 @@ class AuthenticatedSocketTransport implements Transport {
     socket.on('close', () => this.onclose?.());
     await new Promise<void>((resolve, reject) => {
       socket.once('connect', () => {
-        socket.write(`${JSON.stringify({ type: this.authType, token: this.token, sessionId: this.authSessionId })}\n`);
+        const authentication = this.authSessionId === null
+          ? { type: this.authType, token: this.token }
+          : { type: this.authType, token: this.token, sessionId: this.authSessionId };
+        socket.write(`${JSON.stringify(authentication)}\n`);
         resolve();
       });
       socket.once('error', reject);
@@ -176,6 +179,51 @@ describe('ControlMcpGateway security boundary', () => {
       expect(result.isError).not.toBe(true);
       expect(createScopedControl).toHaveBeenCalledTimes(2);
       expect(createScopedControl).toHaveBeenCalledWith('session-1');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('accepts token-only bootstrap authentication and binds the socket to its created root', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'spawnea-control-gateway-'));
+    directories.push(directory);
+    const createSession = vi.fn().mockResolvedValue({
+      apiVersion: 'v1', sessionCreated: true, rootSessionId: 'new-root', sessionId: 'new-root',
+      session: { id: 'new-root' }, replayed: false,
+    });
+    const bootstrapState = vi.fn().mockResolvedValue({
+      apiVersion: 'v1', mode: 'bootstrap', hosts: [], projects: [], harnesses: [],
+    });
+    const scopedState = vi.fn().mockResolvedValue({ apiVersion: 'v1', sessions: [{ id: 'new-root' }] });
+    const createScopedControl = vi.fn().mockResolvedValue({ getState: scopedState });
+    const createBootstrapControl = vi.fn().mockReturnValue({ getState: bootstrapState, createSession });
+    const gateway = new ControlMcpGateway({
+      control: { createBootstrapControl, createScopedControl } as unknown as AgentControlServiceType,
+      logger: createLogger('ControlMcpGatewayTest'),
+      runtimeFilePath: join(directory, 'runtime.json'),
+      socketPath: join(directory, 'control.sock'),
+    });
+    gateways.push(gateway);
+    const descriptor = await gateway.start();
+    const client = new Client({ name: 'spawnea-gateway-test', version: '1.0.0' });
+
+    try {
+      await client.connect(new AuthenticatedSocketTransport(descriptor.socketPath, descriptor.token, 'spawnea-auth', null));
+      expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
+        'spawnea_get_state', 'spawnea_create_session',
+      ]);
+      const result = await client.callTool({
+        name: 'spawnea_create_session',
+        arguments: {
+          clientRequestId: 'root-1', serverId: 'local', projectId: 'project', agentId: 'codex', task: 'Root task',
+        },
+      });
+
+      expect(result.structuredContent).toMatchObject({ rootSessionId: 'new-root' });
+      expect(createBootstrapControl).toHaveBeenCalledOnce();
+      expect(createScopedControl).toHaveBeenCalledWith('new-root', { allowRootPrompts: true });
+      await expect(client.callTool({ name: 'spawnea_get_state', arguments: {} }))
+        .resolves.toMatchObject({ structuredContent: { sessions: [{ id: 'new-root' }] } });
     } finally {
       await client.close();
     }
