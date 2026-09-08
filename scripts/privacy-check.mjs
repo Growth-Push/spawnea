@@ -9,6 +9,8 @@ const ignoredFiles = new Set(['scripts/privacy-check.mjs', '.privacy-denylist'])
 const dependencyMetadataFiles = new Set(['pnpm-lock.yaml']);
 const approvedVisualAssets = new Map([
   ['docs/assets/spawnea-logo.png', '6654abb9ba846f0042d561f9fb281e1c0e49698b9395e5471cb19f350bec7518'],
+  ['docs/assets/spawnea-presentation-v1-poster.jpg', 'a87f6a19352755c8a1acc7f148b9666ce282c1c4b22aeb73f6dcb62c4eb1503d'],
+  ['docs/assets/spawnea-presentation-v1.mp4', '3be4bf678b68db39a071a0e3f1d11da081829fe4512a9e0b2f3c9d4da8b3e61c'],
   ['docs/assets/spawnea-wizard.gif', 'a33d1c56422a194912973a5d80ef31d96116545ce26c3c88d54a43ce7e4218c3'],
 ]);
 const visualAssetExtensions = new Set([
@@ -17,6 +19,7 @@ const visualAssetExtensions = new Set([
   '.jpeg',
   '.gif',
   '.webp',
+  '.mp4',
 ]);
 const ignoredExtensions = new Set([
   '.ico',

@@ -13,6 +13,14 @@
   <img src="https://img.shields.io/badge/pnpm-10-F69220.svg" alt="pnpm 10">
 </p>
 
+<p align="center">
+  <a href="docs/assets/spawnea-presentation-v1.mp4?raw=1">
+    <img src="docs/assets/spawnea-presentation-v1-poster.jpg" alt="Watch the Spawnea presentation" width="960">
+  </a>
+  <br>
+  <sub>▶ Watch the 94-second Spawnea presentation</sub>
+</p>
+
 Spawnea brings terminals, persistent `tmux` sessions, Git worktrees, files, artifacts, and agent attention state into one desktop workspace. It is harness-agnostic: Codex, Hermes, Claude Code, Antigravity, OpenCode, shell commands, and other CLI agents can run as first-class sessions.
 
 ## Why Spawnea
