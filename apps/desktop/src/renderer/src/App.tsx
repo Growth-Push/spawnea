@@ -1024,6 +1024,8 @@ export function App(): React.JSX.Element {
   const activeServer = activeSession ? servers.find((s) => s.id === activeSession.serverId) : undefined;
   const activeProject = activeSession ? projects.find((p) => p.id === activeSession.projectId) : undefined;
   const activeAgent = activeSession ? agents.find((a) => a.id === activeSession.agentId) : undefined;
+  const effectiveLogFilePath = new URLSearchParams(window.location.search).get('spawneaLogFile')
+    ?? 'user-data/logs/spawnea.log';
 
   if (startupError || !window.spawneaApi) {
     return (
@@ -1037,7 +1039,7 @@ export function App(): React.JSX.Element {
           <pre className="overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-red-300">
             {startupError ?? 'window.spawneaApi is not available'}
           </pre>
-          <p className="mt-4 text-xs text-zinc-500">Check the Electron terminal and log.txt for the preload error.</p>
+          <p className="mt-4 text-xs text-zinc-500">Check the Electron terminal and the private application log at {effectiveLogFilePath} for the preload error.</p>
         </section>
       </main>
     );

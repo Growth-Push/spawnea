@@ -39,9 +39,9 @@ export class SqliteAgentRepository implements AgentRepository {
       id: agent.id,
       name: agent.name,
       harness: agent.harness,
-      command: agent.command,
-      argsTemplate: agent.argsTemplate,
-      envVars: agent.envVars,
+      commandLength: agent.command.length,
+      argumentCount: agent.argsTemplate?.length ?? 0,
+      environmentVariableCount: agent.envVars ? Object.keys(agent.envVars).length : 0,
     });
 
     const existing = await this.findById(agent.id);
@@ -98,7 +98,12 @@ export class SqliteAgentRepository implements AgentRepository {
     id: string,
     updates: Partial<Omit<Agent, 'id' | 'createdAt'>>,
   ): Promise<Agent> {
-    this.logger.info('Updating agent', { id, updates });
+    this.logger.info('Updating agent', {
+      id,
+      updatedFields: Object.keys(updates),
+      argumentCount: updates.argsTemplate?.length,
+      environmentVariableCount: updates.envVars ? Object.keys(updates.envVars).length : undefined,
+    });
 
     const existing = await this.findById(id);
     if (!existing) {
