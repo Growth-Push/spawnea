@@ -123,6 +123,7 @@ export interface HostAdapter {
   openPty(command: string, options: PtyOptions): Promise<PtyStream>;
   listFiles(dirPath: string): Promise<import('./index.js').FileEntry[]>;
   readFile(filePath: string, maxBytes?: number): Promise<FileContentResult>;
+  readFileRaw(filePath: string, maxBytes: number): Promise<Buffer>;
   stat(filePath: string): Promise<import('./index.js').FileStat>;
   uploadFile(localPath: string, remotePath: string): Promise<void>;
   downloadFile(remotePath: string, localPath: string): Promise<void>;

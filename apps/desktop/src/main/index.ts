@@ -718,7 +718,10 @@ function registerIpcHandlers(
         defaultPath: artifact.filename,
       });
       if (canceled || !filePath) return false;
-      const contentRes = await artManager.getArtifactContent(sessionId, artifactId);
+      const contentRes = await artManager.getArtifactContentForExport(sessionId, artifactId);
+      if (contentRes.isTruncated) {
+        throw new Error(`Artifact '${artifact.filename}' exceeds the configured file limit; the complete file is unavailable for export`);
+      }
       const fs = await import('node:fs/promises');
       if (contentRes.isBinary) {
         const raw = contentRes.content.includes('base64,')
@@ -739,15 +742,16 @@ function registerIpcHandlers(
     try {
       const artifact = await repos.artifacts.findById(artifactId);
       if (!artifact) return false;
-      if (!artifact.cachedLocalPath || !existsSync(artifact.cachedLocalPath)) {
-        await artManager.getArtifactContent(sessionId, artifactId);
+      const content = await artManager.getArtifactContentForExport(sessionId, artifactId);
+      if (content.isTruncated) {
+        throw new Error(`Artifact '${artifact.filename}' exceeds the configured file limit and cannot be opened completely`);
       }
-      const updated = await repos.artifacts.findById(artifactId);
-      if (updated?.cachedLocalPath && existsSync(updated.cachedLocalPath)) {
-        await shell.openPath(updated.cachedLocalPath);
+      if (content.cachedLocalPath && existsSync(content.cachedLocalPath)) {
+        const openError = await shell.openPath(content.cachedLocalPath);
+        if (openError) throw new Error(`Unable to open artifact '${artifact.filename}': ${openError}`);
         return true;
       }
-      return false;
+      throw new Error(`Artifact '${artifact.filename}' could not be cached locally for opening`);
     } catch (err) {
       logger.error('Failed to handle session:openArtifactInOs', err, { sessionId, artifactId });
       throw err;
