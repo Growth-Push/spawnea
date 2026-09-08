@@ -1,5 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync, existsSync, unlinkSync, statSync, mkdirSync, rmSync } from 'node:fs';
+import {
+  readFileSync,
+  existsSync,
+  unlinkSync,
+  statSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  chmodSync,
+} from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import {
   maskSensitiveString,
@@ -267,7 +276,9 @@ describe('Sensitive Data Masking', () => {
       expect(existsSync(tempPath)).toBe(true);
       expect(existsSync(`${tempPath}.1`)).toBe(true);
       expect(existsSync(`${tempPath}.2`)).toBe(true);
-      expect(statSync(tempPath).mode & 0o777).toBe(0o600);
+      if (process.platform !== 'win32') {
+        expect(statSync(tempPath).mode & 0o777).toBe(0o600);
+      }
       unlinkSync(tempPath);
       unlinkSync(`${tempPath}.1`);
       unlinkSync(`${tempPath}.2`);
@@ -325,8 +336,43 @@ describe('Sensitive Data Masking', () => {
       const fileHandler = createFileLogHandler(blockedPath);
       createLogger('directory-target', { handlers: [fileHandler] }).info('ignored');
       await fileHandler.flush?.();
-      expect(statSync(blockedPath).mode & 0o777).toBe(0o755);
+      if (process.platform !== 'win32') {
+        expect(statSync(blockedPath).mode & 0o777).toBe(0o755);
+      }
       rmSync(blockedPath, { recursive: true, force: true });
+    });
+
+    it('serializes bigint and circular diagnostic values without throwing', async () => {
+      const tempPath = `/tmp/spawnea-unserializable-log-${Date.now()}.txt`;
+      const fileHandler = createFileLogHandler(tempPath);
+      const circular: Record<string, unknown> = { count: 42n };
+      circular.self = circular;
+
+      expect(() => createLogger('safe-serialization', {
+        handlers: [fileHandler],
+        sanitize: false,
+      }).info('complex context', circular)).not.toThrow();
+      await fileHandler.flush?.();
+
+      const content = readFileSync(tempPath, 'utf8');
+      expect(content).toContain('"count": "42"');
+      expect(content).toContain('"self": "[CIRCULAR]"');
+      unlinkSync(tempPath);
+    });
+
+    it('restricts an existing log file before appending', async () => {
+      const tempPath = `/tmp/spawnea-existing-log-${Date.now()}.txt`;
+      writeFileSync(tempPath, 'existing\n', { mode: 0o644 });
+      chmodSync(tempPath, 0o644);
+      const fileHandler = createFileLogHandler(tempPath);
+      createLogger('existing-log', { handlers: [fileHandler] }).info('appended');
+      await fileHandler.flush?.();
+
+      if (process.platform !== 'win32') {
+        expect(statSync(tempPath).mode & 0o777).toBe(0o600);
+      }
+      expect(readFileSync(tempPath, 'utf8')).toContain('appended');
+      unlinkSync(tempPath);
     });
   });
 });

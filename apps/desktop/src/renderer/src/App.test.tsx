@@ -397,6 +397,7 @@ describe('App Desktop Shell', () => {
     // Keep the preload bridge from leaking between tests.
     // @ts-expect-error test cleanup
     delete window.spawneaApi;
+    window.history.replaceState({}, '', '/');
   });
 
   it('renders a fatal startup error when window.spawneaApi is not present', () => {
@@ -405,6 +406,16 @@ describe('App Desktop Shell', () => {
     render(<App />);
     expect(screen.getByText('The desktop bridge is unavailable')).toBeDefined();
     expect(screen.getByText(/No fallback data was loaded/i)).toBeDefined();
+  });
+
+  it('shows the effective private log path when the preload bridge is unavailable', () => {
+    window.history.pushState({}, '', '?spawneaLogFile=%2Fprivate%2Fspawnea.log');
+    // @ts-expect-error test cleanup
+    delete window.spawneaApi;
+
+    render(<App />);
+
+    expect(screen.getByText(/private application log at \/private\/spawnea\.log/i)).toBeDefined();
   });
 
   it('loads sessions, servers, projects, and agents from window.spawneaApi', async () => {

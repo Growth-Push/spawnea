@@ -418,10 +418,8 @@ export class SessionSupervisor {
       this.feedbackDir ||
       join(process.cwd(), '.spawnea', 'feedback');
 
-    const createdFeedbackDir = await mkdir(feedbackDir, { recursive: true });
-    if (createdFeedbackDir) {
-      try { await chmod(feedbackDir, 0o700); } catch { /* Platform permissions may be unavailable. */ }
-    }
+    await mkdir(feedbackDir, { recursive: true, mode: 0o700 });
+    try { await chmod(feedbackDir, 0o700); } catch { /* Platform permissions may be unavailable. */ }
 
     const safeSessionId = report.sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
     const timestamp = Date.now();

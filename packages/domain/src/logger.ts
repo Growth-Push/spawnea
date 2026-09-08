@@ -302,6 +302,27 @@ export interface FileLogOptions {
   wipeOnStart?: boolean;
 }
 
+/** Serializes diagnostic values without allowing unsupported values to break logging. */
+function safelyStringifyDiagnostic(value: unknown): string {
+  const seen = new WeakSet<object>();
+  try {
+    return JSON.stringify(
+      value,
+      (_key, nestedValue: unknown) => {
+        if (typeof nestedValue === 'bigint') return nestedValue.toString();
+        if (typeof nestedValue === 'object' && nestedValue !== null) {
+          if (seen.has(nestedValue)) return '[CIRCULAR]';
+          seen.add(nestedValue);
+        }
+        return nestedValue;
+      },
+      2,
+    ) ?? '"[UNSERIALIZABLE]"';
+  } catch {
+    return '"[UNSERIALIZABLE]"';
+  }
+}
+
 /** Creates a private, asynchronous, bounded and rotating file log handler. */
 export function createFileLogHandler(filePath: string, options: FileLogOptions | boolean = {}): LogHandler {
   const config: Required<FileLogOptions> = {
@@ -323,13 +344,13 @@ export function createFileLogHandler(filePath: string, options: FileLogOptions |
     const level = entry.level.toUpperCase().padEnd(5);
     let line = `[${timestamp}] [${level}] [${entry.namespace}]: ${entry.message}`;
     if (entry.context && Object.keys(entry.context).length > 0) {
-      line += `\n  Context: ${JSON.stringify(entry.context, null, 2).replace(/\n/g, '\n  ')}`;
+      line += `\n  Context: ${safelyStringifyDiagnostic(entry.context).replace(/\n/g, '\n  ')}`;
     }
     if (entry.error) {
       if (entry.error instanceof Error) {
         line += `\n  Error: ${entry.error.stack || entry.error.message}`;
       } else if (typeof entry.error === 'object' && entry.error !== null) {
-        line += `\n  Error: ${(entry.error as { stack?: string; message?: string }).stack || (entry.error as { message?: string }).message || JSON.stringify(entry.error)}`;
+        line += `\n  Error: ${(entry.error as { stack?: string; message?: string }).stack || (entry.error as { message?: string }).message || safelyStringifyDiagnostic(entry.error)}`;
       }
     }
     return `${line}\n`;
@@ -366,6 +387,14 @@ export function createFileLogHandler(filePath: string, options: FileLogOptions |
         const existingTarget = await stat(filePath);
         if (!existingTarget.isFile()) {
           queue.length = 0;
+          initialized = true;
+          return;
+        }
+        try {
+          await chmod(filePath, 0o600);
+        } catch {
+          queue.length = 0;
+          queuedBytes = 0;
           initialized = true;
           return;
         }

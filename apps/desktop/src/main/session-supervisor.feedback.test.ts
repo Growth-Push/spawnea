@@ -148,8 +148,10 @@ describe('SessionSupervisor - State Feedback & Misclassification Reporting', () 
 
     expect(result.success).toBe(true);
     expect(result.filePath).toContain('state-feedback-sess-test-123-');
-    expect(statSync(result.filePath).mode & 0o777).toBe(0o600);
-    expect(statSync(feedbackDir).mode & 0o777).toBe(0o755);
+    if (process.platform !== 'win32') {
+      expect(statSync(result.filePath).mode & 0o777).toBe(0o600);
+      expect(statSync(feedbackDir).mode & 0o777).toBe(0o700);
+    }
     expect(result.filePath.endsWith('.json')).toBe(true);
     expect(existsSync(result.filePath)).toBe(true);
 

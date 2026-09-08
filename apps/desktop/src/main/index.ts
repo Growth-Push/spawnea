@@ -891,9 +891,11 @@ function createWindow(): void {
   });
 
   if (process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
+    const rendererUrl = new URL(process.env['ELECTRON_RENDERER_URL']);
+    rendererUrl.searchParams.set('spawneaLogFile', logFilePath);
+    mainWindow.loadURL(rendererUrl.toString());
   } else {
-    mainWindow.loadFile(rendererPath);
+    mainWindow.loadFile(rendererPath, { query: { spawneaLogFile: logFilePath } });
   }
 
   mainWindow.show();
