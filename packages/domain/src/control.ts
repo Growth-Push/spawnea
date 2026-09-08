@@ -57,6 +57,27 @@ export interface ControlStateSnapshot {
   recentErrors: ControlErrorRecord[];
 }
 
+export interface ControlBootstrapState {
+  apiVersion: SpawneaControlApiVersion;
+  mode: 'bootstrap';
+  hosts: Array<{ id: string; name: string }>;
+  projects: Array<{ id: string; name: string; hostId: string; baseBranch?: string }>;
+  harnesses: Array<{ id: string; name: string }>;
+}
+
+export interface ControlCreateSessionRequest extends CreateSessionInput {
+  clientRequestId: string;
+}
+
+export interface ControlCreateSessionResult {
+  apiVersion: SpawneaControlApiVersion;
+  sessionCreated: true;
+  rootSessionId: string;
+  sessionId: string;
+  session: ControlSessionView;
+  replayed: boolean;
+}
+
 export interface ControlCreateSessionItem extends CreateSessionInput {
   clientRequestId: string;
 }

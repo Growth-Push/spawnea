@@ -17,13 +17,11 @@ export function attachMcpBridgeSocket(
 
   socket.once('connect', () => {
     const sessionId = process.env.SPAWNEA_SESSION_ID;
-    if (!sessionId) {
-      connectionFailed = true;
-      io.reportConnectionError(new Error('SPAWNEA_SESSION_ID is required for scoped MCP access'));
-      socket.destroy();
-      return;
-    }
-    socket.write(`${JSON.stringify({ type: 'spawnea-auth', token, sessionId })}\n`);
+    const hasSessionId = Object.prototype.hasOwnProperty.call(process.env, 'SPAWNEA_SESSION_ID');
+    const authentication = hasSessionId
+      ? { type: 'spawnea-auth', token, sessionId }
+      : { type: 'spawnea-auth', token };
+    socket.write(`${JSON.stringify(authentication)}\n`);
     io.stdin.pipe(socket);
     socket.pipe(io.stdout);
     io.stdin.resume();
