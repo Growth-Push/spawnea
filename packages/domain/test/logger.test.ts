@@ -325,21 +325,77 @@ describe('Sensitive Data Masking', () => {
       unlinkSync(tempPath);
     });
 
-    it('normalizes non-finite and invalid retention limits to bounded defaults', async () => {
-      const tempPath = `/tmp/spawnea-invalid-options-log-${Date.now()}.txt`;
+    it('normalizes invalid maxBytes to bounded default', async () => {
+      const tempPath = `/tmp/spawnea-invalid-maxbytes-log-${Date.now()}.txt`;
       const fileHandler = createFileLogHandler(tempPath, {
-        maxBytes: Infinity,
-        maxFiles: Infinity,
-        maxQueueEntries: Number.NaN,
-        maxQueueBytes: -1,
+        maxBytes: -1,
       });
-      createLogger('invalid-options', {
+      createLogger('invalid-maxbytes', {
         handlers: [fileHandler],
         sanitize: false,
-      }).error('x'.repeat(2 * 1024 * 1024));
+      }).error('x'.repeat(2 * 1024 * 1024 + 100));
       await fileHandler.flush?.();
 
       expect(existsSync(tempPath)).toBe(false);
+    });
+
+    it('normalizes invalid maxQueueBytes to bounded default', async () => {
+      const tempPath = `/tmp/spawnea-invalid-queuebytes-log-${Date.now()}.txt`;
+      const fileHandler = createFileLogHandler(tempPath, {
+        maxQueueBytes: -1,
+      });
+      createLogger('invalid-queuebytes', {
+        handlers: [fileHandler],
+        sanitize: false,
+      }).info('disallowed-by-fallback-default-if-not-normalized');
+      await fileHandler.flush?.();
+
+      expect(existsSync(tempPath)).toBe(true);
+      expect(readFileSync(tempPath, 'utf8')).toContain('disallowed-by-fallback-default-if-not-normalized');
+      unlinkSync(tempPath);
+    });
+
+    it('normalizes invalid maxQueueEntries to bounded default', async () => {
+      const tempPath = `/tmp/spawnea-invalid-queueentries-log-${Date.now()}.txt`;
+      const fileHandler = createFileLogHandler(tempPath, {
+        maxQueueEntries: Number.NaN,
+      });
+      createLogger('invalid-queueentries', {
+        handlers: [fileHandler],
+        sanitize: false,
+      }).info('normal-entry');
+      await fileHandler.flush?.();
+
+      expect(existsSync(tempPath)).toBe(true);
+      expect(readFileSync(tempPath, 'utf8')).toContain('normal-entry');
+      unlinkSync(tempPath);
+    });
+
+    it('normalizes invalid or unbounded maxFiles to safe default and rotates accordingly', async () => {
+      const tempPath = `/tmp/spawnea-invalid-maxfiles-log-${Date.now()}.txt`;
+      const fileHandler = createFileLogHandler(tempPath, {
+        maxBytes: 100,
+        maxFiles: Infinity,
+      });
+      const logger = createLogger('invalid-maxfiles', { handlers: [fileHandler] });
+      logger.info('rotation message 1');
+      logger.info('rotation message 2');
+      logger.info('rotation message 3');
+      logger.info('rotation message 4');
+      await fileHandler.flush?.();
+
+      // With default fallback maxFiles: 3, at most tempPath, tempPath.1, tempPath.2, tempPath.3 exist.
+      // tempPath.4 must not exist.
+      expect(existsSync(tempPath)).toBe(true);
+      expect(existsSync(`${tempPath}.1`)).toBe(true);
+      expect(existsSync(`${tempPath}.2`)).toBe(true);
+      expect(existsSync(`${tempPath}.3`)).toBe(true);
+      expect(existsSync(`${tempPath}.4`)).toBe(false);
+
+      unlinkSync(tempPath);
+      unlinkSync(`${tempPath}.1`);
+      unlinkSync(`${tempPath}.2`);
+      unlinkSync(`${tempPath}.3`);
     });
 
     it('stops accepting entries before close flushes the pending queue', async () => {

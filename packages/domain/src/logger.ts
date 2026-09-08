@@ -330,9 +330,13 @@ function positiveFiniteLimit(value: number | undefined, fallback: number): numbe
     : fallback;
 }
 
-/** Returns a finite positive integer limit or its safe default. */
-function positiveIntegerLimit(value: number | undefined, fallback: number): number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+/** Returns a finite positive integer limit within bounds or its safe default. */
+function boundedPositiveIntegerLimit(
+  value: number | undefined,
+  fallback: number,
+  max: number = Number.MAX_SAFE_INTEGER,
+): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= max
     ? value
     : fallback;
 }
@@ -344,8 +348,8 @@ export function createFileLogHandler(filePath: string, options: FileLogOptions |
     : options;
   const config: Required<FileLogOptions> = {
     maxBytes: positiveFiniteLimit(rawOptions.maxBytes, 2 * 1024 * 1024),
-    maxFiles: positiveIntegerLimit(rawOptions.maxFiles, 3),
-    maxQueueEntries: positiveIntegerLimit(rawOptions.maxQueueEntries, 1000),
+    maxFiles: boundedPositiveIntegerLimit(rawOptions.maxFiles, 3, 100),
+    maxQueueEntries: boundedPositiveIntegerLimit(rawOptions.maxQueueEntries, 1000),
     maxQueueBytes: positiveFiniteLimit(rawOptions.maxQueueBytes, 8 * 1024 * 1024),
     wipeOnStart: rawOptions.wipeOnStart ?? false,
   };
