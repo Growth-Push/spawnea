@@ -34,5 +34,7 @@ Spawnea interacts with remote shells and developer machines. Changes involving t
 Never commit private keys, access tokens, passwords, or production secrets.
 
 SSH connections verify the server key strictly against the user's OpenSSH
-`~/.ssh/known_hosts` file. Unknown hosts and changed or malformed entries are
-rejected; Spawnea does not implement trust-on-first-use or persist host keys.
+`~/.ssh/known_hosts` file. Unknown hosts, changed keys, revoked keys (`@revoked`
+markers), mismatched port endpoints, and malformed entries are rejected; Spawnea
+does not implement trust-on-first-use or persist host keys.
+

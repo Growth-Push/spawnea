@@ -97,8 +97,10 @@ Spawnea adheres to strict operational boundaries for remote machines:
 
 1. **Strict `known_hosts` Verification**:
    - Every SSH connection verifies the server's public key against your local `~/.ssh/known_hosts` file.
-   - Connections to unknown hosts or hosts with mismatched/changed keys are **immediately rejected**.
+   - Connections to unknown hosts, hosts with mismatched/changed keys, or revoked keys (`@revoked` markers) are **immediately rejected**.
+   - Host identity is verified strictly against the exact endpoint (non-default ports must match bracketed `[host]:port` entries and cannot inherit bare-hostname trust).
    - Spawnea does not use trust-on-first-use (TOFU) and never prompts you to accept an unverified key blindly. Connect once with standard OpenSSH in your terminal first to populate `known_hosts`.
+
 2. **Zero Credential Storage**:
    - Spawnea never stores SSH passwords, passphrases, or private keys.
    - Authentication is handled exclusively by your system SSH configuration, SSH Agent (`SSH_AUTH_SOCK`), or 1Password (`IdentityAgent`).
