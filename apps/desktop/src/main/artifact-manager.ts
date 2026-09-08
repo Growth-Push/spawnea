@@ -694,10 +694,12 @@ export class ArtifactManager {
         if (!cacheSizeMatchesArtifact) {
           throw new Error(`Cached artifact size mismatch: expected ${artifact.sizeBytes}, got ${cachedStat.size}`);
         }
+        let resolvedCachedPath = cachedPath;
         if (cachedPath === legacyCachedLocalPath && !isTruncated && !existsSync(expectedCachedLocalPath)) {
           try {
             await mkdir(dirname(expectedCachedLocalPath), { recursive: true });
             await rename(legacyCachedLocalPath, expectedCachedLocalPath);
+            resolvedCachedPath = expectedCachedLocalPath;
             await this.repos.artifacts.save({ ...artifact, cachedLocalPath: expectedCachedLocalPath });
           } catch (error) {
             this.logger.warn('Could not migrate legacy artifact cache path', { artifactId, error });
@@ -711,7 +713,7 @@ export class ArtifactManager {
           isTruncated,
           sizeBytes: artifact.sizeBytes,
           mimeType,
-          cachedLocalPath: cachedPath,
+          cachedLocalPath: resolvedCachedPath,
         };
       } catch (err) {
         this.logger.warn('Failed to read from local artifact cache, falling back to host', {

@@ -322,12 +322,15 @@ describe('ArtifactManager', () => {
     await repos.artifacts.save({ ...artifact, cachedLocalPath: legacyPath });
     mockHost.mockFiles.delete(artifact.remotePath);
 
-    const result = await artifactManager.getArtifactContent(sessionId, artifact.id);
+    const result = await artifactManager.getArtifactContentForExport(sessionId, artifact.id);
 
     expect(result.content).toBe('legacy content');
     expect(result.isTruncated).toBe(false);
     expect(existsSync(legacyPath)).toBe(false);
-    expect((await repos.artifacts.findById(artifact.id))?.cachedLocalPath).not.toBe(legacyPath);
+    expect(result.cachedLocalPath).toBeDefined();
+    expect(result.cachedLocalPath).not.toBe(legacyPath);
+    expect(existsSync(result.cachedLocalPath!)).toBe(true);
+    expect((await repos.artifacts.findById(artifact.id))?.cachedLocalPath).toBe(result.cachedLocalPath);
   });
 
   it('clears all session artifacts without deleting remote files', async () => {
