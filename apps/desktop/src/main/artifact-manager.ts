@@ -625,7 +625,7 @@ export class ArtifactManager {
     );
   }
 
-  async getArtifactContentForExport(sessionId: string, artifactId: string): Promise<FileContentResult> {
+  async getArtifactContentForExport(sessionId: string, artifactId: string): Promise<FileContentResult & { cachedLocalPath?: string }> {
     return this.withSessionArtifactLock(sessionId, () =>
       this.getArtifactContentUnlocked(sessionId, artifactId, this.maxFileBytes, true)
     );
@@ -636,7 +636,7 @@ export class ArtifactManager {
     artifactId: string,
     maxBytes = this.maxPreviewBytes,
     allowFullContent = false
-  ): Promise<FileContentResult> {
+  ): Promise<FileContentResult & { cachedLocalPath?: string }> {
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
@@ -711,6 +711,7 @@ export class ArtifactManager {
           isTruncated,
           sizeBytes: artifact.sizeBytes,
           mimeType,
+          cachedLocalPath: cachedPath,
         };
       } catch (err) {
         this.logger.warn('Failed to read from local artifact cache, falling back to host', {
@@ -739,6 +740,7 @@ export class ArtifactManager {
     }
 
     // Never cache a preview: a truncated response must not become a seemingly complete artifact.
+    let verifiedCachePath: string | undefined;
     if (!result.isTruncated && result.sizeBytes <= this.maxFileBytes &&
         currentRemoteSize === result.sizeBytes && currentRemoteSize <= this.maxFileBytes) {
       try {
@@ -748,6 +750,7 @@ export class ArtifactManager {
         const oldSize = await localStat(expectedCachedLocalPath).then((s) => s.size).catch(() => 0);
         await this.withCacheWrite(Math.max(0, cachedBytes.length - oldSize), () => writeFile(expectedCachedLocalPath, cachedBytes));
         await this.repos.artifacts.save({ ...artifact, cachedLocalPath: expectedCachedLocalPath, sizeBytes: currentSize });
+        verifiedCachePath = expectedCachedLocalPath;
         if (artifact.cachedLocalPath && artifact.cachedLocalPath !== expectedCachedLocalPath &&
             isOwnedCachePath(this.getSessionCacheDir(sessionId), artifact.cachedLocalPath) &&
             !(await this.cachePathIsReferenced(artifact.cachedLocalPath, artifact.id))) {
@@ -758,7 +761,7 @@ export class ArtifactManager {
       }
     }
 
-    return { ...result, path: artifact.remotePath };
+    return { ...result, path: artifact.remotePath, cachedLocalPath: verifiedCachePath };
   }
 
   /**
@@ -841,7 +844,7 @@ export class ArtifactManager {
     try {
       used = await getDirectorySize(this.cacheDir);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || existsSync(this.cacheDir)) throw error;
     }
     if (used + additionalBytes > this.maxCacheBytes) {
       throw new Error(`Artifact cache limit reached (${formatBytes(this.maxCacheBytes)})`);

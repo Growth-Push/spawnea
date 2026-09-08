@@ -36,6 +36,7 @@ export function ArtifactPreviewModal({
   const [contentResult, setContentResult] = useState<FileContentResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // View state
   const [activeTab, setActiveTab] = useState<'rendered' | 'raw'>('rendered');
@@ -49,11 +50,13 @@ export function ArtifactPreviewModal({
     if (!artifact) {
       setContentResult(null);
       setError(null);
+      setActionError(null);
       return;
     }
 
     setIsLoading(true);
     setError(null);
+    setActionError(null);
     setZoomLevel(1);
 
     if (window.spawneaApi?.getArtifactContent) {
@@ -118,7 +121,7 @@ export function ArtifactPreviewModal({
     try {
       await window.spawneaApi.saveArtifactAs(sessionId, artifact.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to save the complete artifact.');
+      setActionError(err instanceof Error ? err.message : 'Unable to save the complete artifact.');
     } finally {
       setIsSaving(false);
     }
@@ -129,7 +132,7 @@ export function ArtifactPreviewModal({
       try {
         await window.spawneaApi.openArtifactInOs(sessionId, artifact.id);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unable to open the complete artifact.');
+        setActionError(err instanceof Error ? err.message : 'Unable to open the complete artifact.');
       }
     }
   };
@@ -313,6 +316,13 @@ export function ArtifactPreviewModal({
 
         {/* Modal Main Content */}
         <div className="flex-1 overflow-auto bg-[#0d1117] flex flex-col relative select-text">
+          {actionError && (
+            <div className="flex items-center gap-2 px-4 py-2 text-rose-300 bg-rose-950/30 border-b border-rose-900/50 text-xs shrink-0">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{actionError}</span>
+              <button type="button" className="ml-auto underline" onClick={() => setActionError(null)}>Dismiss</button>
+            </div>
+          )}
           {contentResult?.isTruncated && !contentResult.isBinary && !isImage && contentResult.mimeType !== 'application/pdf' && (
             <div className="flex items-center gap-2 px-4 py-2 text-amber-300 bg-amber-950/20 border-b border-amber-900/40 text-xs shrink-0">
               <AlertTriangle className="w-4 h-4 shrink-0" />

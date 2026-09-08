@@ -728,9 +728,8 @@ function registerIpcHandlers(
       if (content.isTruncated) {
         throw new Error(`Artifact '${artifact.filename}' exceeds the configured file limit and cannot be opened completely`);
       }
-      const updated = await repos.artifacts.findById(artifactId);
-      if (updated?.cachedLocalPath && existsSync(updated.cachedLocalPath)) {
-        const openError = await shell.openPath(updated.cachedLocalPath);
+      if (content.cachedLocalPath && existsSync(content.cachedLocalPath)) {
+        const openError = await shell.openPath(content.cachedLocalPath);
         if (openError) throw new Error(`Unable to open artifact '${artifact.filename}': ${openError}`);
         return true;
       }
