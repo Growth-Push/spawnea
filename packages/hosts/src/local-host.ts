@@ -91,7 +91,7 @@ export class LocalHostAdapter implements HostAdapter {
   }
 
   async execute(command: string, options?: ExecOptions): Promise<ExecResult> {
-    this.logger.debug('Executing local command', { command, cwd: options?.cwd });
+    this.logger.debug('Executing local command', { cwd: options?.cwd, commandLength: command.length });
     try {
       const { stdout, stderr } = await execAsync(command, {
         cwd: options?.cwd,

@@ -637,7 +637,7 @@ The PTY broker forwards output and input between the host adapter and the render
 
 ### 9.1 Terminal data retention boundary
 
-PTY bytes are forwarded to the renderer for live display and used transiently for activity metrics. Spawnea does not record a terminal transcript, upload terminal output to a Spawnea service, or run a remote terminal recorder. Status checks inspect a bounded `tmux capture-pane` tail in memory; that tail is not persisted as terminal history. Explicit state-feedback reports may persist a recent tail when the user submits a diagnostic report, and artifact actions may persist files the user uploads or the detector registers.
+PTY bytes are forwarded to the renderer for live display and used transiently for activity metrics. Spawnea does not record a terminal transcript, upload terminal output to a Spawnea service, or run a remote terminal recorder. Status checks inspect a bounded `tmux capture-pane` tail in memory; that tail is not persisted as terminal history. Explicit state-feedback reports may persist a recent tail when the user submits a diagnostic report, and artifact actions may persist files the user uploads or the detector registers. Diagnostic logs use structured metadata, are stored in private application user-data storage by default, and use bounded asynchronous rotation; an explicit `SPAWNEA_LOG_FILE` override is the caller's responsibility to keep private.
 
 ---
 

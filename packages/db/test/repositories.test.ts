@@ -598,7 +598,13 @@ describe('Domain Repositories & Logging Integration', () => {
       const logContextStr = JSON.stringify(agentLog?.context);
       expect(logContextStr).not.toContain('sk-ant-secretkey999888777');
       expect(logContextStr).not.toContain('super_secret_password');
-      expect(logContextStr).toContain('[REDACTED]');
+      expect(agentLog?.context).toMatchObject({
+        commandLength: 'claude'.length,
+        argumentCount: 0,
+        environmentVariableCount: 3,
+      });
+      expect(logContextStr).not.toContain('argsTemplate');
+      expect(logContextStr).not.toContain('envVars');
     });
   });
 });

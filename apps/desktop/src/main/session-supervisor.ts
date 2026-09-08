@@ -1,7 +1,6 @@
 import type { WebContents } from 'electron';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import type {
 
   SessionSignals,
@@ -31,6 +30,7 @@ export interface SessionSupervisorOptions {
   stateDetector?: StateDetector;
   logger?: Logger;
   pollIntervalMs?: number;
+  feedbackDir?: string;
 }
 
 export type StatusChangeListener = (
@@ -48,6 +48,7 @@ export class SessionSupervisor {
   private readonly stateDetector: StateDetector;
   private readonly logger: Logger;
   private readonly defaultPollIntervalMs: number;
+  private readonly feedbackDir?: string;
 
 
   private pollTimer: NodeJS.Timeout | null = null;
@@ -68,6 +69,7 @@ export class SessionSupervisor {
     this.tmuxManager = options.tmuxManager || new TmuxManager(this.logger.child('tmux'));
     this.stateDetector = options.stateDetector || new StateDetector();
     this.defaultPollIntervalMs = options.pollIntervalMs || 10000;
+    this.feedbackDir = options.feedbackDir;
 
 
     // Listen to real-time PTY activity bursts (debounced to avoid flooding commands on stream bursts)
@@ -407,16 +409,19 @@ export class SessionSupervisor {
   }
 
   /**
-   * Saves a state detection feedback report as a JSON fixture under ~/.config/spawnea/feedback/
+   * Saves an explicitly requested state detection feedback report under private application storage.
    */
   async saveFeedbackReport(report: StateFeedbackReport, customDir?: string): Promise<StateFeedbackResult> {
     const feedbackDir =
       customDir ||
       process.env.SPAWNEA_FEEDBACK_DIR ||
-      process.env.SPAWNEA_FEEDBACK_DIR ||
-      join(homedir(), '.config', 'spawnea', 'feedback');
+      this.feedbackDir ||
+      join(process.cwd(), '.spawnea', 'feedback');
 
-    await mkdir(feedbackDir, { recursive: true });
+    const createdFeedbackDir = await mkdir(feedbackDir, { recursive: true });
+    if (createdFeedbackDir) {
+      try { await chmod(feedbackDir, 0o700); } catch { /* Platform permissions may be unavailable. */ }
+    }
 
     const safeSessionId = report.sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
     const timestamp = Date.now();
@@ -442,7 +447,8 @@ export class SessionSupervisor {
     };
 
     const fixtureJson = JSON.stringify(fixturePayload, null, 2);
-    await writeFile(filePath, fixtureJson, 'utf-8');
+    await writeFile(filePath, fixtureJson, { encoding: 'utf-8', mode: 0o600 });
+    try { await chmod(filePath, 0o600); } catch { /* Platform permissions may be unavailable. */ }
 
     this.logger.info('Saved state detection feedback report fixture', {
       filePath,

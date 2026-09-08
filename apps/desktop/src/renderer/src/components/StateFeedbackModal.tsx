@@ -203,7 +203,7 @@ export function StateFeedbackModal({
         // Fallback for tests/mock
         setSubmitResult({
           success: true,
-          filePath: `~/.config/spawnea/feedback/state-feedback-${session.id}.json`,
+          filePath: `application user-data/feedback/state-feedback-${session.id}.json`,
           fixtureJson: JSON.stringify(report, null, 2),
         });
       }
@@ -280,7 +280,7 @@ export function StateFeedbackModal({
                   <span>Feedback Fixture Saved Successfully!</span>
                 </div>
                 <p className="text-xs text-emerald-200/80">
-                  Saved test fixture to:
+                  Saved local diagnostic report to (it may contain sensitive terminal text):
                 </p>
                 <code className="block p-2 bg-black/40 rounded text-xs font-mono text-emerald-300 break-all select-all">
                   {submitResult.filePath}
@@ -289,7 +289,7 @@ export function StateFeedbackModal({
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs text-zinc-400">
-                  <span className="font-semibold uppercase tracking-wider">Test Fixture JSON</span>
+          <span className="font-semibold uppercase tracking-wider">Local Diagnostic Report JSON</span>
                   <button
                     type="button"
                     onClick={handleCopyFixture}
@@ -351,6 +351,12 @@ export function StateFeedbackModal({
                     <span className="text-zinc-600 italic">No recent terminal output captured.</span>
                   )}
                 </div>
+                <p
+                  className="text-xs text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2"
+                  data-testid="feedback-sensitive-content-warning"
+                >
+                  This report includes a recent terminal tail and your notes. It may contain sensitive text. Review it before saving; the report stays local and is not uploaded.
+                </p>
               </div>
 
               {/* Expected Status Selector */}

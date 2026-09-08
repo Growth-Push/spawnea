@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, statSync, mkdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
@@ -126,6 +126,8 @@ describe('SessionSupervisor - State Feedback & Misclassification Reporting', () 
   });
 
   it('saves feedback report as JSON test fixture under feedback directory', async () => {
+    mkdirSync(feedbackDir, { recursive: true, mode: 0o755 });
+    chmodSync(feedbackDir, 0o755);
     const report: StateFeedbackReport = {
       sessionId: 'sess-test-123',
       sessionName: 'Fix parser bug',
@@ -146,6 +148,8 @@ describe('SessionSupervisor - State Feedback & Misclassification Reporting', () 
 
     expect(result.success).toBe(true);
     expect(result.filePath).toContain('state-feedback-sess-test-123-');
+    expect(statSync(result.filePath).mode & 0o777).toBe(0o600);
+    expect(statSync(feedbackDir).mode & 0o777).toBe(0o755);
     expect(result.filePath.endsWith('.json')).toBe(true);
     expect(existsSync(result.filePath)).toBe(true);
 

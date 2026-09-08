@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync, existsSync, unlinkSync } from 'node:fs';
+import { readFileSync, existsSync, unlinkSync, statSync, mkdirSync, rmSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import {
   maskSensitiveString,
   isSensitiveKey,
@@ -215,7 +216,7 @@ describe('Sensitive Data Masking', () => {
       expect(logs[0].namespace).toBe('app:db');
     });
 
-    it('writes formatted and sanitized log entries to file via createFileLogHandler', () => {
+    it('writes formatted and sanitized log entries to file via createFileLogHandler', async () => {
       const tempPath = `/tmp/spawnea-test-log-${Date.now()}.txt`;
       const fileHandler = createFileLogHandler(tempPath, true);
       const logger = createLogger('file-test', {
@@ -224,6 +225,7 @@ describe('Sensitive Data Masking', () => {
       });
 
       logger.info('Test file message', { token: 'secret-token-value' });
+      await fileHandler.flush?.();
 
       const content = readFileSync(tempPath, 'utf8');
       expect(content).toContain('[INFO ] [file-test]: Test file message');
@@ -232,6 +234,99 @@ describe('Sensitive Data Masking', () => {
       if (existsSync(tempPath)) {
         unlinkSync(tempPath);
       }
+    });
+
+    it('does not persist opaque command credentials and does not write synchronously', async () => {
+      const tempPath = `/tmp/spawnea-private-log-${Date.now()}.txt`;
+      const credential = 'opaque-test-credential-7f4c9d';
+      const fileHandler = createFileLogHandler(tempPath);
+      const logger = createLogger('host', { minLevel: 'debug', handlers: [fileHandler] });
+
+      logger.info('Sending harness command to tmux session', {
+        sessionName: 'test-session',
+        argumentCount: 2,
+        environmentVariableCount: 0,
+      });
+      logger.debug('Executing local command', { commandLength: credential.length, cwd: '/tmp' });
+      expect(existsSync(tempPath)).toBe(false);
+      await fileHandler.flush?.();
+      const content = await readFile(tempPath, 'utf8');
+      expect(content).not.toContain(credential);
+      expect(content).not.toContain('fullCommand');
+      unlinkSync(tempPath);
+    });
+
+    it('rotates within a bounded file set and exposes private permissions where supported', async () => {
+      const tempPath = `/tmp/spawnea-rotation-log-${Date.now()}.txt`;
+      const fileHandler = createFileLogHandler(tempPath, { maxBytes: 100, maxFiles: 2 });
+      const logger = createLogger('rotation', { handlers: [fileHandler] });
+      logger.info('first message that forces rotation');
+      logger.info('second message that forces rotation');
+      logger.info('third message that forces rotation');
+      await fileHandler.flush?.();
+      expect(existsSync(tempPath)).toBe(true);
+      expect(existsSync(`${tempPath}.1`)).toBe(true);
+      expect(existsSync(`${tempPath}.2`)).toBe(true);
+      expect(statSync(tempPath).mode & 0o777).toBe(0o600);
+      unlinkSync(tempPath);
+      unlinkSync(`${tempPath}.1`);
+      unlinkSync(`${tempPath}.2`);
+    });
+
+    it('rejects an individual entry larger than the configured retention bound', async () => {
+      const tempPath = `/tmp/spawnea-oversized-log-${Date.now()}.txt`;
+      const fileHandler = createFileLogHandler(tempPath, { maxBytes: 100 });
+      createLogger('oversized', { handlers: [fileHandler] }).error('x'.repeat(1_000));
+      await fileHandler.flush?.();
+      expect(existsSync(tempPath)).toBe(false);
+    });
+
+    it('bounds queued entries by bytes, not only by count', async () => {
+      const tempPath = `/tmp/spawnea-queue-bound-log-${Date.now()}.txt`;
+      const fileHandler = createFileLogHandler(tempPath, { maxBytes: 10_000, maxQueueBytes: 350 });
+      const logger = createLogger('queue-bound', { handlers: [fileHandler] });
+      logger.info('a'.repeat(100));
+      logger.info('b'.repeat(100));
+      logger.info('c'.repeat(100));
+      await fileHandler.flush?.();
+      const content = readFileSync(tempPath, 'utf8');
+      expect(content).toContain('a'.repeat(100));
+      expect(content).toContain('b'.repeat(100));
+      expect(content).not.toContain('c'.repeat(100));
+      unlinkSync(tempPath);
+    });
+
+    it('stops accepting entries before close flushes the pending queue', async () => {
+      const tempPath = `/tmp/spawnea-close-log-${Date.now()}.txt`;
+      const fileHandler = createFileLogHandler(tempPath);
+      const logger = createLogger('close', { handlers: [fileHandler] });
+      logger.info('retained before close');
+      await fileHandler.close?.();
+      logger.info('discarded after close began');
+      const content = readFileSync(tempPath, 'utf8');
+      expect(content).toContain('retained before close');
+      expect(content).not.toContain('discarded after close began');
+      unlinkSync(tempPath);
+    });
+
+    it('swallows file write failures and resolves shutdown flush', async () => {
+      const blockedPath = `/tmp/spawnea-write-failure-${Date.now()}`;
+      mkdirSync(blockedPath);
+      const fileHandler = createFileLogHandler(blockedPath);
+      const logger = createLogger('write-failure', { handlers: [fileHandler] });
+      logger.info('This diagnostic write cannot replace a directory');
+      await expect(fileHandler.flush?.()).resolves.toBeUndefined();
+      rmSync(blockedPath, { recursive: true, force: true });
+    });
+
+    it('does not change permissions on an existing directory used as the log target', async () => {
+      const blockedPath = `/tmp/spawnea-directory-target-${Date.now()}`;
+      mkdirSync(blockedPath, { mode: 0o755 });
+      const fileHandler = createFileLogHandler(blockedPath);
+      createLogger('directory-target', { handlers: [fileHandler] }).info('ignored');
+      await fileHandler.flush?.();
+      expect(statSync(blockedPath).mode & 0o777).toBe(0o755);
+      rmSync(blockedPath, { recursive: true, force: true });
     });
   });
 });

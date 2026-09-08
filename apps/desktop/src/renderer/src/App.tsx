@@ -1037,7 +1037,7 @@ export function App(): React.JSX.Element {
           <pre className="overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-red-300">
             {startupError ?? 'window.spawneaApi is not available'}
           </pre>
-          <p className="mt-4 text-xs text-zinc-500">Check the Electron terminal and log.txt for the preload error.</p>
+          <p className="mt-4 text-xs text-zinc-500">Check the Electron terminal and the private application log at user-data/logs/spawnea.log for the preload error.</p>
         </section>
       </main>
     );

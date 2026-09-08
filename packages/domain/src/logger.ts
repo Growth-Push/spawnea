@@ -1,4 +1,5 @@
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFile, chmod, mkdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
 
@@ -11,7 +12,10 @@ export interface LogEntry {
   error?: Error | { name: string; message: string; stack?: string };
 }
 
-export type LogHandler = (entry: LogEntry) => void;
+export type LogHandler = ((entry: LogEntry) => void) & {
+  flush?: () => Promise<void>;
+  close?: () => Promise<void>;
+};
 
 export interface LoggerOptions {
   minLevel?: LogLevel;
@@ -289,41 +293,128 @@ export function createLogger(namespace: string, options?: LoggerOptions): Logger
  * Creates a file log handler that formats and appends log entries to disk.
  * Optionally wipes/resets the file when initialized.
  */
-export function createFileLogHandler(filePath: string, wipeOnStart = false): LogHandler {
-  if (wipeOnStart) {
-    try {
-      writeFileSync(
-        filePath,
-        `=== Spawnea Execution Log [Started: ${new Date().toISOString()}] ===\n\n`,
-        'utf8'
-      );
-    } catch {
-      // Ignore initial write failure
+export interface FileLogOptions {
+  maxBytes?: number;
+  maxFiles?: number;
+  maxQueueEntries?: number;
+  maxQueueBytes?: number;
+  /** Kept for compatibility; truncation is opt-in and never used by startup. */
+  wipeOnStart?: boolean;
+}
+
+/** Creates a private, asynchronous, bounded and rotating file log handler. */
+export function createFileLogHandler(filePath: string, options: FileLogOptions | boolean = {}): LogHandler {
+  const config: Required<FileLogOptions> = {
+    maxBytes: 2 * 1024 * 1024,
+    maxFiles: 3,
+    maxQueueEntries: 1000,
+    maxQueueBytes: 8 * 1024 * 1024,
+    ...(typeof options === 'boolean' ? { wipeOnStart: options } : options),
+  } as Required<FileLogOptions>;
+  const queue: string[] = [];
+  let queuedBytes = 0;
+  let drainPromise: Promise<void> | null = null;
+  let initialized = false;
+  let closed = false;
+  let accepting = true;
+
+  const formatEntry = (entry: LogEntry): string => {
+    const timestamp = entry.timestamp.toISOString();
+    const level = entry.level.toUpperCase().padEnd(5);
+    let line = `[${timestamp}] [${level}] [${entry.namespace}]: ${entry.message}`;
+    if (entry.context && Object.keys(entry.context).length > 0) {
+      line += `\n  Context: ${JSON.stringify(entry.context, null, 2).replace(/\n/g, '\n  ')}`;
     }
-  }
-
-  return (entry: LogEntry) => {
-    try {
-      const timestamp = entry.timestamp.toISOString();
-      const level = entry.level.toUpperCase().padEnd(5);
-      let line = `[${timestamp}] [${level}] [${entry.namespace}]: ${entry.message}`;
-
-      if (entry.context && Object.keys(entry.context).length > 0) {
-        line += `\n  Context: ${JSON.stringify(entry.context, null, 2).replace(/\n/g, '\n  ')}`;
+    if (entry.error) {
+      if (entry.error instanceof Error) {
+        line += `\n  Error: ${entry.error.stack || entry.error.message}`;
+      } else if (typeof entry.error === 'object' && entry.error !== null) {
+        line += `\n  Error: ${(entry.error as { stack?: string; message?: string }).stack || (entry.error as { message?: string }).message || JSON.stringify(entry.error)}`;
       }
+    }
+    return `${line}\n`;
+  };
 
-      if (entry.error) {
-        if (entry.error instanceof Error) {
-          line += `\n  Error: ${entry.error.stack || entry.error.message}`;
-        } else if (typeof entry.error === 'object' && entry.error !== null) {
-          line += `\n  Error: ${(entry.error as any).stack || (entry.error as any).message || JSON.stringify(entry.error)}`;
+  const rotateIfNeeded = async (nextBytes: number): Promise<void> => {
+    let currentBytes = 0;
+    try { currentBytes = (await stat(filePath)).size; } catch { /* file is new */ }
+    if (currentBytes + nextBytes <= config.maxBytes) return;
+    for (let index = config.maxFiles - 1; index >= 1; index -= 1) {
+      const source = `${filePath}.${index}`;
+      const target = `${filePath}.${index + 1}`;
+      try { await unlink(target); } catch { /* target may not exist */ }
+      try { await rename(source, target); } catch { /* missing rotation slot */ }
+    }
+    try { await unlink(`${filePath}.1`); } catch { /* archive may not exist */ }
+    try { await rename(filePath, `${filePath}.1`); } catch { /* file may not exist */ }
+  };
+
+  const writeQueue = async (): Promise<void> => {
+    if (!initialized) {
+      try {
+        const createdDirectory = await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
+        if (createdDirectory) {
+          try { await chmod(dirname(filePath), 0o700); } catch { /* platform may not support chmod */ }
         }
+      } catch {
+        queue.length = 0;
+        queuedBytes = 0;
+        initialized = true;
+        return;
       }
-
-      line += '\n';
-      appendFileSync(filePath, line, 'utf8');
-    } catch {
-      // Ignore append errors
+      try {
+        const existingTarget = await stat(filePath);
+        if (!existingTarget.isFile()) {
+          queue.length = 0;
+          initialized = true;
+          return;
+        }
+      } catch {
+        // The target will be created by the first successful write.
+      }
+      if (config.wipeOnStart) {
+        try {
+          await writeFile(filePath, `=== Spawnea Execution Log [Started: ${new Date().toISOString()}] ===\n\n`, { encoding: 'utf8', mode: 0o600 });
+          try { await chmod(filePath, 0o600); } catch { /* platform may not support chmod */ }
+        } catch { /* handled below */ }
+      }
+      initialized = true;
+    }
+    while (queue.length > 0 && !closed) {
+      const line = queue.shift()!;
+      queuedBytes -= Buffer.byteLength(line, 'utf8');
+      try {
+        await rotateIfNeeded(Buffer.byteLength(line, 'utf8'));
+        await appendFile(filePath, line, { encoding: 'utf8', mode: 0o600 });
+        try { await chmod(filePath, 0o600); } catch { /* platform may not support chmod */ }
+      } catch { /* Diagnostics must never crash the application. */ }
     }
   };
+
+  const scheduleDrain = (): void => {
+    if (drainPromise) return;
+    drainPromise = writeQueue().finally(() => {
+      drainPromise = null;
+      if (queue.length > 0 && !closed) scheduleDrain();
+    });
+  };
+
+  const handler = ((entry: LogEntry) => {
+    if (!accepting || closed || queue.length >= config.maxQueueEntries) return;
+    const formattedEntry = formatEntry(entry);
+    const entryBytes = Buffer.byteLength(formattedEntry, 'utf8');
+    if (entryBytes > config.maxBytes || queuedBytes + entryBytes > config.maxQueueBytes) return;
+    queue.push(formattedEntry);
+    queuedBytes += entryBytes;
+    scheduleDrain();
+  }) as LogHandler;
+  handler.flush = async () => {
+    while (drainPromise) await drainPromise;
+  };
+  handler.close = async () => {
+    accepting = false;
+    await handler.flush?.();
+    closed = true;
+  };
+  return handler;
 }
