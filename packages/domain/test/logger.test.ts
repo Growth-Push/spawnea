@@ -325,6 +325,23 @@ describe('Sensitive Data Masking', () => {
       unlinkSync(tempPath);
     });
 
+    it('normalizes non-finite and invalid retention limits to bounded defaults', async () => {
+      const tempPath = `/tmp/spawnea-invalid-options-log-${Date.now()}.txt`;
+      const fileHandler = createFileLogHandler(tempPath, {
+        maxBytes: Infinity,
+        maxFiles: Infinity,
+        maxQueueEntries: Number.NaN,
+        maxQueueBytes: -1,
+      });
+      createLogger('invalid-options', {
+        handlers: [fileHandler],
+        sanitize: false,
+      }).error('x'.repeat(2 * 1024 * 1024));
+      await fileHandler.flush?.();
+
+      expect(existsSync(tempPath)).toBe(false);
+    });
+
     it('stops accepting entries before close flushes the pending queue', async () => {
       const tempPath = `/tmp/spawnea-close-log-${Date.now()}.txt`;
       const fileHandler = createFileLogHandler(tempPath);

@@ -323,16 +323,30 @@ function safelyStringifyDiagnostic(value: unknown): string {
   }
 }
 
+/** Returns a finite positive limit or its safe default. */
+function positiveFiniteLimit(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
+/** Returns a finite positive integer limit or its safe default. */
+function positiveIntegerLimit(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : fallback;
+}
+
 /** Creates a private, asynchronous, bounded and rotating file log handler. */
 export function createFileLogHandler(filePath: string, options: FileLogOptions | boolean = {}): LogHandler {
   const rawOptions: FileLogOptions = typeof options === 'boolean'
     ? { wipeOnStart: options }
     : options;
   const config: Required<FileLogOptions> = {
-    maxBytes: rawOptions.maxBytes ?? 2 * 1024 * 1024,
-    maxFiles: rawOptions.maxFiles ?? 3,
-    maxQueueEntries: rawOptions.maxQueueEntries ?? 1000,
-    maxQueueBytes: rawOptions.maxQueueBytes ?? 8 * 1024 * 1024,
+    maxBytes: positiveFiniteLimit(rawOptions.maxBytes, 2 * 1024 * 1024),
+    maxFiles: positiveIntegerLimit(rawOptions.maxFiles, 3),
+    maxQueueEntries: positiveIntegerLimit(rawOptions.maxQueueEntries, 1000),
+    maxQueueBytes: positiveFiniteLimit(rawOptions.maxQueueBytes, 8 * 1024 * 1024),
     wipeOnStart: rawOptions.wipeOnStart ?? false,
   };
   const queue: string[] = [];
