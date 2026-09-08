@@ -159,6 +159,7 @@ describe('StateFeedbackModal (FG-4.2.5)', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('feedback-modal-submit-btn')).toBeDefined();
+      expect(screen.getByTestId('feedback-sensitive-content-warning')).toBeDefined();
     });
 
     fireEvent.click(screen.getByTestId('expected-status-needs_input'));

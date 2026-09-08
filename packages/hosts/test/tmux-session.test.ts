@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createLogger, type LogEntry } from '@spawnea/domain';
 import { MockHostAdapter } from '../src/mock-host.js';
 import { TmuxManager } from '../src/tmux-session.js';
 import { fileURLToPath } from 'node:url';
@@ -70,14 +71,16 @@ describe('TmuxManager', () => {
 
   it('creates a persistent tmux session and sends the harness command (FG-2.2.6, FG-2.2.7)', async () => {
     const host = new MockHostAdapter('host-1');
-    const tmux = new TmuxManager();
+    const entries: LogEntry[] = [];
+    const tmux = new TmuxManager(createLogger('test', { minLevel: 'debug', handlers: [(entry) => entries.push(entry)] }));
+    const opaqueCredential = 'opaque-harness-credential-7f4c9d';
 
     const result = await tmux.createPersistentSession({
       host,
       sessionName: 'spawnea-test-session',
       cwd: '/workspace/code',
       command: 'claude',
-      args: ['--debug'],
+      args: ['--credential', opaqueCredential],
     });
 
     expect(result.success).toBe(true);
@@ -90,6 +93,8 @@ describe('TmuxManager', () => {
     expect(commands.some((c) => c.includes('tmux send-keys'))).toBe(true);
     expect(commands.some((c) => c.includes('set-option') && c.includes('mouse'))).toBe(false);
     expect(commands.some((c) => c.includes('set-option') && c.includes('history-limit'))).toBe(false);
+    expect(JSON.stringify(entries)).not.toContain(opaqueCredential);
+    expect(JSON.stringify(entries)).not.toContain('args');
   });
 
   it('applies only explicitly configured tmux options and commands', async () => {

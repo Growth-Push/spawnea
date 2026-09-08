@@ -64,8 +64,8 @@ export class TmuxManager {
       serverId: host.serverId,
       sessionName,
       cwd,
-      command,
-      args,
+      commandLength: command.length,
+      argumentCount: (args || []).length,
     });
 
     // 1. Verify tmux is installed on target host
@@ -113,7 +113,11 @@ export class TmuxManager {
         .map((part) => (/[ \t\n"'\\$`!*?~#&;|<>()[\]{}]/.test(part) ? escapeShellArg(part) : part))
         .join(' ');
 
-    this.logger.info('Sending harness command to tmux session', { sessionName, fullCommand });
+    this.logger.info('Sending harness command to tmux session', {
+      sessionName,
+      argumentCount: (args || []).length,
+      environmentVariableCount: envEntries.length,
+    });
 
     // Send command literals to tmux session followed by Enter
     // Using -l sends the exact characters without extra shell quoting layers
@@ -142,7 +146,7 @@ export class TmuxManager {
     if (!Number.isSafeInteger(submitCount) || submitCount < 1 || submitCount > 2) {
       throw new Error('tmux submitCount must be a safe integer between 1 and 2');
     }
-    this.logger.info('Sending input to tmux session', { serverId: host.serverId, sessionName });
+    this.logger.info('Sending input to tmux session', { serverId: host.serverId, sessionName, inputLength: text.length });
     // Using -l sends the literal characters without duplicate newline before Enter
     const sanitizedText = text.replace(/\r?\n$/, '').replace(/\r$/, '');
     const sendCmd = `tmux send-keys -t ${escapeShellArg(sessionName)} -l -- ${escapeShellArg(sanitizedText)}`;
@@ -200,9 +204,16 @@ export class TmuxManager {
         const expandedCommand = expandedArgs.map(escapeShellArg).join(' ');
         const result = await host.execute(`tmux ${expandedCommand}`);
         if (result.exitCode === 0) continue;
-        this.logger.warn('Configured tmux command could not be applied', { sessionName, command: expandedCommand });
+        this.logger.warn('Configured tmux command could not be applied', {
+          sessionName,
+          argumentCount: expandedArgs.length,
+        });
       } catch (error) {
-        this.logger.warn('Configured tmux command could not be applied', { sessionName, command, error });
+        this.logger.warn('Configured tmux command could not be applied', {
+          sessionName,
+          argumentCount: command.length,
+          error,
+        });
       }
     }
   }

@@ -74,9 +74,11 @@ Operational data needed to manage sessions is stored strictly on your local mach
 
 1. **Operational Catalog**: Your host and project configuration in `~/.config/spawnea/config.yaml`.
 2. **Session Metadata**: Session identifiers, creation timestamps, target hosts, worktree paths, and normalized status states in a local SQLite database (`better-sqlite3`).
-3. **Application Logs**: Standard diagnostic application logs, which mask sensitive credentials and secret references.
+3. **Application Logs**: Bounded, rotating diagnostic logs stored under the private application user-data directory. Explicit `SPAWNEA_LOG_FILE` overrides are respected and should point to a private location. Logs contain structured operational metadata, not command strings or terminal transcripts.
 4. **Session Artifacts**: Files or images explicitly uploaded by the user or identified in the session artifact directory.
-5. **Explicit Feedback Reports**: If you explicitly choose to submit a diagnostic feedback report (via the state feedback dialog), a recent tail snapshot is packaged for that specific report. These reports remain stored locally in your application user-data directory until manually removed, allowing you to inspect or delete them at any time.
+5. **Explicit Feedback Reports**: If you explicitly choose to submit a diagnostic feedback report (via the state feedback dialog), a recent tail snapshot is packaged for that specific report. The report can contain sensitive terminal text and user notes. It remains locally in the application user-data `feedback` directory until manually removed; Spawnea does not upload it. `SPAWNEA_FEEDBACK_DIR` replaces that default directory and must point to a private local directory.
+
+Fatal process handlers also apply the structured redaction rules before writing to the console. Arbitrary exception text cannot be guaranteed to be free of every possible secret, so users should treat diagnostic output as private.
 
 Artifact cache retention is bounded by the desktop artifact manager: 50 MiB per
 cached file, 250 MiB total cache usage, and 10 MiB per preview by default. These

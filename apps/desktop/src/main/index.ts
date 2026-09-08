@@ -69,26 +69,23 @@ try {
 }
 
 process.on('unhandledRejection', (reason) => {
-  console.error('[Spawnea Fatal Unhandled Rejection]:', reason);
+  console.error('[Spawnea Fatal Unhandled Rejection]:', maskSensitiveData(reason));
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('[Spawnea Fatal Uncaught Exception]:', err);
+  console.error('[Spawnea Fatal Uncaught Exception]:', maskSensitiveData(err));
 });
 
-// Setup real-time file logging to log.txt at the workspace root
-function resolveRootLogPath(): string {
+// Keep diagnostics inside private application storage unless explicitly overridden.
+function resolveLogPath(): string {
   if (process.env.SPAWNEA_LOG_FILE) {
-    return process.env.SPAWNEA_LOG_FILE;
+    return resolve(process.env.SPAWNEA_LOG_FILE);
   }
-  if (process.cwd().endsWith('apps/desktop')) {
-    return resolve(process.cwd(), '../../log.txt');
-  }
-  return resolve(process.cwd(), 'log.txt');
+  return join(app.getPath('userData'), 'logs', 'spawnea.log');
 }
 
-const logFilePath = resolveRootLogPath();
-const fileLogHandler = createFileLogHandler(logFilePath, true);
+const logFilePath = resolveLogPath();
+const fileLogHandler = createFileLogHandler(logFilePath);
 const minLogLevel: LogLevel = (
   process.env.SPAWNEA_LOG_LEVEL || 'debug'
 ) as LogLevel;
@@ -112,6 +109,8 @@ let agentControlService: AgentControlService | null = null;
 let controlMcpGateway: ControlMcpGateway | null = null;
 let mainWindowRef: BrowserWindow | null = null;
 let shutdownPromise: Promise<void> | null = null;
+let shutdownComplete = false;
+let quitRequestScheduled = false;
 let terminationSignal: 'SIGINT' | 'SIGTERM' | null = null;
 
 function getLiveWebContents(): WebContents | null {
@@ -156,7 +155,16 @@ async function shutdownApplication(): Promise<void> {
         logger.error('Error closing database connection', { error: err });
       }
     }
+    try {
+      await fileLogHandler.close?.();
+    } catch {
+      // A diagnostics failure must not prevent the application from exiting.
+    }
   })();
+  void shutdownPromise.then(
+    () => { shutdownComplete = true; },
+    () => { shutdownComplete = true; },
+  );
 
   return shutdownPromise;
 }
@@ -177,6 +185,16 @@ process.on('SIGINT', () => {
 
 process.on('SIGTERM', () => {
   void handleTerminationSignal('SIGTERM');
+});
+
+// app.quit() can bypass window-all-closed. Keep every quit request blocked
+// until asynchronous cleanup completes.
+app.on('before-quit', (event) => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (quitRequestScheduled) return;
+  quitRequestScheduled = true;
+  void shutdownApplication().then(() => app.quit());
 });
 
 async function seedInitialDataIfEmpty(repos: Repositories): Promise<void> {
@@ -877,9 +895,11 @@ function createWindow(): void {
   });
 
   if (process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
+    const rendererUrl = new URL(process.env['ELECTRON_RENDERER_URL']);
+    rendererUrl.searchParams.set('spawneaLogFile', logFilePath);
+    mainWindow.loadURL(rendererUrl.toString());
   } else {
-    mainWindow.loadFile(rendererPath);
+    mainWindow.loadFile(rendererPath, { query: { spawneaLogFile: logFilePath } });
   }
 
   mainWindow.show();
@@ -997,6 +1017,7 @@ app.whenReady().then(async () => {
       ptyBroker,
       artifactManager,
       logger: logger.child('supervisor'),
+      feedbackDir: join(app.getPath('userData'), 'feedback'),
       pollIntervalMs: statusCheckIntervalMs,
     });
 
@@ -1052,6 +1073,7 @@ app.whenReady().then(async () => {
     console.error('[Spawnea Bootstrap Error]:', error);
     logger.error('Failed to initialize main process application services', { error });
     if (process.env.SPAWNEA_SMOKE_TEST === '1' || process.argv.includes('--smoke-test')) {
+      await shutdownApplication();
       process.exit(1);
     }
   }
