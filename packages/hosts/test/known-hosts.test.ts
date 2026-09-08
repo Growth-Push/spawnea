@@ -141,10 +141,11 @@ describe('known_hosts verification', () => {
     // Subdomain wildcard @revoked *.example.test
     const pathSubdomain = knownHosts([
       `server.example.test ssh-ed25519 ${keyB64}`,
+      `other.other.test ssh-ed25519 ${keyB64}`,
       `@revoked *.example.test ssh-ed25519 ${keyB64}`,
     ].join('\n'));
     expect(createKnownHostsVerifier('server.example.test', 22, pathSubdomain)(key)).toBe(false);
-    expect(createKnownHostsVerifier('other.other.test', 22, pathSubdomain)(key)).toBe(false);
+    expect(createKnownHostsVerifier('other.other.test', 22, pathSubdomain)(key)).toBe(true);
 
     // Wildcard for nondefault port @revoked [*]:2222
     const pathPortWildcard = knownHosts([
@@ -162,10 +163,11 @@ describe('known_hosts verification', () => {
     // Wildcard with '?' single character match
     const pathSingleChar = knownHosts([
       `host1.example.test ssh-ed25519 ${keyB64}`,
+      `host12.example.test ssh-ed25519 ${keyB64}`,
       `@revoked host?.example.test ssh-ed25519 ${keyB64}`,
     ].join('\n'));
     expect(createKnownHostsVerifier('host1.example.test', 22, pathSingleChar)(key)).toBe(false);
-    expect(createKnownHostsVerifier('host12.example.test', 22, pathSingleChar)(key)).toBe(false);
+    expect(createKnownHostsVerifier('host12.example.test', 22, pathSingleChar)(key)).toBe(true);
   });
 
   it('honors negated known_hosts patterns and does not authorize excluded hosts', () => {
