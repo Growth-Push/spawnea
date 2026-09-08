@@ -9,7 +9,18 @@ Validation expectations:
 - authenticate with `root-alpha`: only `root-alpha` and `child-alpha-1` are visible or actionable;
 - authenticate with `root-beta`: only the beta pair is visible or actionable;
 - authenticate with a child or `missing-root`: the gateway rejects the handshake;
-- the stdio bridge must send `SPAWNEA_SESSION_ID` in its auth line.
+- for the existing-root flow, the stdio bridge must send `SPAWNEA_SESSION_ID` in its auth line.
+
+Parent-session bootstrap adds a separate absent-ID flow. Bootstrap discovery
+must not reveal either root in this fixture;
+after `spawnea_create_session`, the connection must expose only the newly created
+root and its direct children. It must still accept an exact creation replay, and
+a replacement absent-ID connection must use that replay to bind to the same root
+without creating another session or worktree. Only those bootstrap-bound
+connections may deliver prompts to the root. A connection using the root's
+injected `SPAWNEA_SESSION_ID` must remain limited to direct-child prompt
+delivery. Bootstrap replay records last for the lifetime of the running desktop
+process.
 
 The desktop test suite exercises the same boundary against an isolated in-memory
 SQLite database. Run it from the repository root with:

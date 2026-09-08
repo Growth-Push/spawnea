@@ -1,6 +1,10 @@
 # Spawnea local control API / MCP v1
 
-Spawnea exposes a local, root-scoped MCP surface for inspecting sessions, creating direct children, submitting prompts, reading turns, and requesting guarded worktree finalization. It is enabled by default on Unix-like systems and does not open an HTTP or network port. Windows support is deferred until named-pipe transport is implemented.
+Spawnea exposes a local MCP surface for creating or attaching to one root session, inspecting that root and its direct children, submitting prompts, reading turns, and requesting guarded worktree finalization. It is enabled by default on Unix-like systems and does not open an HTTP or network port. Windows support is deferred until named-pipe transport is implemented.
+
+Bootstrap mode is available only when `SPAWNEA_SESSION_ID` is absent. A defined
+but empty value is rejected. Root-creation retry records live for the lifetime
+of the running desktop process and are not restored after Spawnea restarts.
 
 ## Enable and connect
 
@@ -65,15 +69,74 @@ Child close requests accept a `sessionId` and optional `force`; `force: true` is
 - The gateway starts by default with the desktop app on Unix-like systems. It is disabled on Windows until named-pipe transport is implemented. Set `SPAWNEA_CONTROL_ENABLED=0` (or `false`, `off`, `no`, `disabled`) to disable it elsewhere. There is no TCP listener, public API, remote daemon, or remote host installation.
 - Every socket connection must authenticate with the random 256-bit token from the protected runtime descriptor. A connection that supplies a session ID must name an active local root; the gateway rejects unknown IDs, child IDs, and non-local roots. A connection without a session ID receives only the local bootstrap surface until it creates and binds one root.
 - Spawnea persists a new root session's scoped identity before launching its harness. If tmux startup fails, that persistence is rolled back. Authentication also rechecks the same identity during the existing three-second window, then rejects it if the root never becomes active.
-- After authentication, the MCP server is scoped to the authenticated root and its direct child sessions. Requests targeting another root or an unrelated session are rejected.
+- After authentication, the MCP server is scoped to the authenticated root and its direct child sessions. Requests targeting another root or an unrelated session are rejected. Prompt delivery from this injected-identity connection is restricted to direct children; it cannot target the root harness that is executing the tool call.
+- After bootstrap root creation, the same boundary is pinned to the created root for the lifetime of that connection. Bootstrap is one-root: `spawnea_create_session` remains callable only for an exact replay of the binding request and cannot create or select another root.
+- The connection retains its origin after binding. Only an absent-ID bootstrap-bound connection may deliver prompts to its root. Exact replay on a replacement absent-ID connection restores that bootstrap-bound origin; supplying the returned root as `SPAWNEA_SESSION_ID` creates an injected-identity connection and therefore does not grant root prompt delivery.
 - The read model returns host IDs and display names, never SSH targets, usernames, passwords, tokens, secret references, or resolved credentials.
 - Zod schemas reject malformed tool input before the control service can call a host adapter, tmux, or Git.
 
 Any process running as the same OS user can normally read that user's files and interact with that user's desktop applications. The token and file permissions prevent access from other users and accidental unauthenticated connections; they are not a sandbox against a malicious process already running as the operator.
 
+## Connection lifecycle
+
+- With `SPAWNEA_SESSION_ID`, the connection starts root-scoped after the gateway validates an enabled, active root. Its prompt-delivery scope contains direct children only.
+- Without `SPAWNEA_SESSION_ID`, the connection starts in restricted bootstrap mode and becomes bootstrap-bound after `spawnea_create_session` succeeds or exactly replays a successful creation from another connection to the same running desktop process. Its prompt-delivery scope contains the root and its direct children.
+- Root creation starts the same persistent tmux-backed session lifecycle used by the renderer. Closing the MCP client or Spawnea does not terminate that tmux session.
+- Tracked turns, cursors, idempotency caches, bootstrap creation records, and Agent Context records are volatile. They disappear when Spawnea restarts.
+- A replacement connection may authenticate with the returned root ID. If the creation response was lost while the same desktop process is running, it may omit `SPAWNEA_SESSION_ID` and repeat the exact `spawnea_create_session` request. A successful replay binds the replacement connection to the recorded root before returning it. Restarting Spawnea clears this recovery record.
+
 ## Tools
 
 All structured responses include `apiVersion: "v1"` where the response is owned by Spawnea.
+
+### `spawnea_create_session`
+
+Creates one new independent/root Spawnea session. It is available in bootstrap
+mode and remains registered after scope binding solely for exact replay of the
+request that established that scope. It does not adopt an arbitrary existing
+session and does not create a child.
+
+Input:
+
+```json
+{
+  "clientRequestId": "root-bootstrap-1",
+  "serverId": "local",
+  "projectId": "spawnea",
+  "agentId": "codex",
+  "task": "Coordinate the documentation update",
+  "baseBranch": "main",
+  "useWorktree": true
+}
+```
+
+`clientRequestId`, `serverId`, `projectId`, `agentId`, and `task` are required.
+`baseBranch` and `useWorktree` use the existing root-session creation inputs and
+are optional. IDs must come from bootstrap discovery rather than from the normal
+root-scoped state of another connection.
+
+The successful output contains `apiVersion`, `replayed`, and the
+sanitized created `session` view, including its ID, status, host/project/harness
+display identities, and worktree metadata. Success also means the current MCP
+connection has transitioned to that session's root scope; a response must not
+report success before both creation and scope binding have completed.
+
+Exact retries with the same `clientRequestId` and identical input
+must return the original session with `replayed: true` and must not launch a
+second tmux session or create a second worktree. This replay is accepted both on
+the connection already bound by that request and on a replacement bootstrap
+connection while the same desktop process remains active. On a replacement
+connection, Spawnea finds the in-memory request record, binds the connection to
+that root, and only then returns the replayed result. A
+root-scoped connection rejects every other creation request, including a new
+`clientRequestId`; it cannot use this replay path to switch roots.
+
+Bootstrap idempotency is shared across connections to the running desktop
+process. Concurrent exact requests share one creation attempt. Successful
+request IDs and their full normalized-input fingerprints remain in memory for
+the process lifetime; reusing an ID with different input returns a conflict. A
+failed creation is removed from the cache so an exact later retry may try again.
+Restarting Spawnea clears these records.
 
 ### `spawnea_get_state`
 
@@ -261,7 +324,16 @@ Input:
 }
 ```
 
-Use a direct child's session ID or alias from any root-scoped connection. A bootstrap-bound connection may also use its root's session ID. Aliases resolve inside the scoped root automatically. Optional `parentSession` must match that root. Unrelated sessions and root prompts from connections authenticated with `SPAWNEA_SESSION_ID` are rejected. Root creation does not submit the recorded `task` automatically.
+Use a direct child's session ID or alias from any root-scoped connection. An
+external connection that omitted `SPAWNEA_SESSION_ID` and became bootstrap-bound
+by creating or exactly replaying the root may also use that root's session ID.
+The connection origin is part of the authorization decision and remains fixed
+after binding. A connection authenticated with the root harness's injected
+identity cannot prompt the root, because doing so would write bracketed input and
+Enter into the same tmux pane while that harness is executing this tool call.
+Aliases resolve inside the scoped root automatically. Optional `parentSession`
+must match that root. Unrelated roots, unrelated children, and grandchildren are
+rejected. Root creation does not submit the recorded `task` automatically.
 
 Waits for a `starting` session to become usable for a bounded period, captures an initial terminal cursor, and submits at most 32,000 characters through the PTY or tmux. Known interactive editors receive bracketed paste, followed by a separate Enter after 500 ms. The caller must not send another prompt or key to submit the text. Delivery reports terminal writes, not proof that the harness has started answering. The result contains `turnId`, `version`, and delivery metadata. Exact `clientRequestId` retries do not submit twice. A second unrelated prompt is rejected while the turn is working; an answer is accepted after `needs_input`.
 
@@ -283,7 +355,16 @@ Input:
 }
 ```
 
-Reads output produced after the prompt's initial cursor or after the supplied cursor. `waitMs` is bounded to 30 seconds and wakes when the turn changes or reaches `needs_input`, `completed`, or `failed`. The result always includes a replacement cursor, version, `truncated`, and `cursorExpired`. `compact` is the default and applies the selected harness adapter's bounded output extraction, returning any reported omissions in the `omitted` result field. `raw` returns the bounded captured terminal output without filtering. Turn state and cursors are volatile and disappear when Spawnea restarts.
+Reads output produced after the prompt's initial cursor or after the supplied cursor for a tracked turn owned by either the scoped root or one of its direct children. The caller supplies a `turnId`, not a session ID; Spawnea resolves the owning session and enforces the scope before reading. `waitMs` is bounded to 30 seconds and wakes when the turn changes or reaches `needs_input`, `completed`, or `failed`. The result always includes the owning `sessionId`, a replacement cursor, version, `truncated`, and `cursorExpired`. `compact` is the default and applies the selected harness adapter's bounded output extraction, returning any reported omissions in the `omitted` result field. `raw` returns the bounded captured terminal output without filtering. Turn state and cursors are volatile and disappear when Spawnea restarts.
+
+## Concise bootstrap flow
+
+1. Start Spawnea and launch the stdio helper without `SPAWNEA_SESSION_ID`.
+2. Call `spawnea_get_state` to obtain eligible host, project, and harness IDs.
+3. Call `spawnea_create_session` with a stable `clientRequestId` and one discovered configuration.
+4. Retain the returned root session ID. The same MCP connection is now scoped to that root. If the response is lost, open a replacement helper without `SPAWNEA_SESSION_ID` and repeat the identical request; its replay binds the replacement connection to the original root.
+5. Call `spawnea_send_prompt` with the root ID, and read its returned `turnId` with `spawnea_get_turn`.
+6. Create direct children as needed. This bootstrap-bound connection may deliver prompts to the root or those direct children, while unrelated roots remain inaccessible. A later connection using `SPAWNEA_SESSION_ID` remains limited to direct-child prompt delivery.
 
 ## Threat-model decisions
 
@@ -294,7 +375,8 @@ Reads output produced after the prompt's initial cursor or after the supplied cu
 | Other local users | Owner-only runtime directory, socket, descriptor, and per-run random token. |
 | Malformed or oversized input | Authentication line limit, MCP transport buffer limit, strict schemas and batch limit. |
 | Credential disclosure | Sanitized control DTOs omit connection targets and all credential fields. |
-| Retry creates duplicates | Correlation ID plus payload fingerprint cache. |
+| Reentrant root input | Root prompt delivery requires an immutable absent-ID bootstrap origin. Connections authenticated with the root harness's injected identity can prompt direct children only. |
+| Retry creates duplicates | Existing child and batch flows use request/correlation IDs plus payload fingerprints. Root bootstrap shares in-flight work and retains successful request fingerprints and results for the lifetime of the desktop process, allowing exact replay from the same or a replacement connection without creating another root. |
 | Ambiguous batch failure | One success/error result per `clientRequestId`. |
 | Autonomous destructive Git | Integrate and unvalidated MCP requests require trusted UI approval. A close may execute without the dialog only when the authenticated MCP request carries the explicit `llm-validated` protocol signal; the existing finalization guards still decide whether it can mutate anything. |
 | Accidental dirty-work loss | Close requires an explicit `stash` or `discard` choice; UI-confirmation requests repeat it in the dialog, while validated MCP closes carry it in the authenticated request. |
