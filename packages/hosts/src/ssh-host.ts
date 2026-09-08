@@ -622,15 +622,18 @@ export class SSHHostAdapter implements HostAdapter {
 
   async readFile(
     filePath: string,
-    maxBytes = 2 * 1024 * 1024
+    maxBytes?: number
   ): Promise<FileContentResult> {
-    this.logger.debug('Reading remote file via SFTP', { filePath, maxBytes, serverId: this.serverId });
+    const requestedMaxBytes = maxBytes ?? 2 * 1024 * 1024;
+    this.logger.debug('Reading remote file via SFTP', { filePath, maxBytes: requestedMaxBytes, serverId: this.serverId });
     const sftp = await this.getSftp();
 
     const stat = await this.stat(filePath);
     const mimeType = getSshMimeType(filePath);
     const isImage = mimeType.startsWith('image/');
-    const effectiveMaxBytes = isImage ? Math.max(maxBytes, 10 * 1024 * 1024) : maxBytes;
+    const effectiveMaxBytes = maxBytes === undefined && isImage
+      ? 10 * 1024 * 1024
+      : requestedMaxBytes;
 
     const isTruncated = stat.size > effectiveMaxBytes;
     const lengthToRead = isTruncated ? effectiveMaxBytes : stat.size;
@@ -653,7 +656,7 @@ export class SSHHostAdapter implements HostAdapter {
 
       readStream.on('close', () => {
         const fullBuffer = Buffer.concat(chunks);
-        const binary = isImage || isSshBinaryBuffer(fullBuffer);
+        const binary = isImage || mimeType === 'application/pdf' || !isTextMimeType(mimeType) || isSshBinaryBuffer(fullBuffer);
 
         let content: string;
         if (isImage) {
@@ -673,6 +676,19 @@ export class SSHHostAdapter implements HostAdapter {
           mimeType,
         });
       });
+    });
+  }
+
+  async readFileRaw(filePath: string, maxBytes: number): Promise<Buffer> {
+    const sftp = await this.getSftp();
+    const stat = await this.stat(filePath);
+    const lengthToRead = Math.min(stat.size, maxBytes);
+    return new Promise((resolve, reject) => {
+      const stream = sftp.createReadStream(filePath, { start: 0, end: Math.max(0, lengthToRead - 1) });
+      const chunks: Buffer[] = [];
+      stream.on('data', (chunk: Buffer) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      stream.on('error', (error: Error) => reject(new Error(`Failed to read remote file '${filePath}': ${error.message}`)));
+      stream.on('close', () => resolve(Buffer.concat(chunks).subarray(0, lengthToRead)));
     });
   }
 
@@ -793,6 +809,10 @@ function isSshBinaryBuffer(buf: Buffer): boolean {
     if (buf[i] === 0) return true;
   }
   return false;
+}
+
+function isTextMimeType(mimeType: string): boolean {
+  return mimeType.startsWith('text/') || mimeType === 'application/json' || mimeType === 'application/xml';
 }
 
 function escapeShellArg(arg: string): string {

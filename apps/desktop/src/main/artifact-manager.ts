@@ -1,6 +1,7 @@
 import { join, basename, dirname } from 'node:path';
-import { mkdir, copyFile, writeFile, readFile, rm, stat as localStat } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, rm, rename, readdir, stat as localStat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import type {
   Artifact,
   ArtifactDirection,
@@ -30,7 +31,16 @@ export interface ArtifactManagerOptions {
   cacheDir: string;
   blacklistFilePath?: string;
   logger?: Logger;
+  maxFileBytes?: number;
+  maxCacheBytes?: number;
+  maxPreviewBytes?: number;
 }
+
+export const DEFAULT_ARTIFACT_LIMITS = {
+  maxFileBytes: 50 * 1024 * 1024,
+  maxCacheBytes: 250 * 1024 * 1024,
+  maxPreviewBytes: 10 * 1024 * 1024,
+} as const;
 
 export class ArtifactManager {
   private readonly repos: Repositories;
@@ -38,7 +48,13 @@ export class ArtifactManager {
   private readonly cacheDir: string;
   private readonly blacklistFilePath: string;
   private readonly logger: Logger;
+  private readonly maxFileBytes: number;
+  private readonly maxCacheBytes: number;
+  private readonly maxPreviewBytes: number;
   private readonly sessionArtifactLocks = new Map<string, Promise<void>>();
+  private cacheWriteQueue: Promise<void> = Promise.resolve();
+  private artifactTransferQueue: Promise<void> = Promise.resolve();
+  private readonly cacheReconciliation: Promise<void>;
 
   constructor(options: ArtifactManagerOptions) {
     this.repos = options.repositories;
@@ -47,6 +63,14 @@ export class ArtifactManager {
     this.blacklistFilePath =
       options.blacklistFilePath || join(dirname(options.cacheDir), 'artifact-blacklist.json');
     this.logger = options.logger || createLogger('ArtifactManager');
+    this.maxFileBytes = options.maxFileBytes ?? DEFAULT_ARTIFACT_LIMITS.maxFileBytes;
+    this.maxCacheBytes = options.maxCacheBytes ?? DEFAULT_ARTIFACT_LIMITS.maxCacheBytes;
+    this.maxPreviewBytes = options.maxPreviewBytes ?? DEFAULT_ARTIFACT_LIMITS.maxPreviewBytes;
+    if (![this.maxFileBytes, this.maxCacheBytes, this.maxPreviewBytes].every(Number.isSafeInteger) ||
+        this.maxFileBytes < 1 || this.maxCacheBytes < 1 || this.maxPreviewBytes < 1) {
+      throw new Error('Artifact cache limits must be positive safe integers');
+    }
+    this.cacheReconciliation = this.reconcileCache();
   }
 
   /**
@@ -197,7 +221,18 @@ export class ArtifactManager {
 
       const localSessionCache = this.getSessionCacheDir(sessionId);
       await mkdir(localSessionCache, { recursive: true });
-      const cachedLocalPath = resolveContainedPath(localSessionCache, filename);
+      const artifactId = `art-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      const cachedLocalPath = this.getCachePath(sessionId, `${persistedRemotePath}|${direction}|${artifactId}`, filename);
+      await mkdir(dirname(cachedLocalPath), { recursive: true });
+      const sourceStat = await localStat(localSourcePath);
+      this.assertFileWithinLimit(sourceStat.size, 'upload');
+      const sourceBuffer = await readLocalPrefix(localSourcePath, this.maxFileBytes + 1);
+      const finalSourceStat = await localStat(localSourcePath);
+      if (sourceBuffer.length !== finalSourceStat.size) {
+        throw new Error(`Cannot upload artifact: source file changed while being read`);
+      }
+      this.assertFileWithinLimit(sourceBuffer.length, 'upload');
+
 
       this.logger.info('Uploading artifact file to host and caching locally', {
         sessionId,
@@ -206,20 +241,25 @@ export class ArtifactManager {
         direction,
       });
 
-      // Upload to host
-      await host.uploadFile(localSourcePath, remotePath);
+      // Write a temporary cache entry so a failed replacement preserves the previous cache.
+      const temporaryCachedPath = join(dirname(cachedLocalPath), `.tmp-${artifactId}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      await this.withCacheWrite(sourceBuffer.length, async () => {
+        await writeFile(temporaryCachedPath, sourceBuffer);
+        try {
+          await host.writeFile(remotePath, sourceBuffer);
+          await rename(temporaryCachedPath, cachedLocalPath);
+        } catch (error) {
+          await rm(temporaryCachedPath, { force: true });
+          throw error;
+        }
+      });
 
-      // Cache locally if source is not already in cache
-      if (localSourcePath !== cachedLocalPath) {
-        await copyFile(localSourcePath, cachedLocalPath).catch(() => {});
-      }
-
-      const lstat = await localStat(cachedLocalPath).catch(() => null);
+      const lstat = await localStat(cachedLocalPath);
       const sizeBytes = lstat?.size ?? 0;
       const mimeType = getMimeType(filename);
 
       const artifact: Omit<Artifact, 'createdAt'> & { createdAt?: Date } = {
-        id: `art-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        id: artifactId,
         sessionId,
         direction,
         remotePath: persistedRemotePath,
@@ -273,7 +313,11 @@ export class ArtifactManager {
 
       const localSessionCache = this.getSessionCacheDir(sessionId);
       await mkdir(localSessionCache, { recursive: true });
-      const cachedLocalPath = resolveContainedPath(localSessionCache, safeFilename);
+      const artifactId = `art-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      const cachedLocalPath = this.getCachePath(sessionId, `${persistedRemotePath}|${direction}|${artifactId}`, safeFilename);
+      await mkdir(dirname(cachedLocalPath), { recursive: true });
+      this.assertFileWithinLimit(buffer.length, 'upload');
+
 
       this.logger.info('Writing artifact buffer to host and caching locally', {
         sessionId,
@@ -282,14 +326,21 @@ export class ArtifactManager {
         direction,
       });
 
-      // Write to remote host
-      await host.writeFile(remotePath, buffer);
-
-      // Write to local cache
-      await writeFile(cachedLocalPath, buffer);
+      // Write a temporary cache entry so a failed replacement preserves the previous cache.
+      const temporaryCachedPath = join(dirname(cachedLocalPath), `.tmp-${artifactId}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      await this.withCacheWrite(buffer.length, async () => {
+        await writeFile(temporaryCachedPath, buffer);
+        try {
+          await host.writeFile(remotePath, buffer);
+          await rename(temporaryCachedPath, cachedLocalPath);
+        } catch (error) {
+          await rm(temporaryCachedPath, { force: true });
+          throw error;
+        }
+      });
 
       const artifact: Omit<Artifact, 'createdAt'> & { createdAt?: Date } = {
-        id: `art-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        id: artifactId,
         sessionId,
         direction,
         remotePath: persistedRemotePath,
@@ -334,7 +385,8 @@ export class ArtifactManager {
 
   private async promoteFileUnlocked(
     sessionId: string,
-    relativeOrAbsolutePath: string
+    relativeOrAbsolutePath: string,
+    allowMetadataOnly = false
   ): Promise<Artifact> {
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) {
@@ -367,24 +419,49 @@ export class ArtifactManager {
       const existing = await this.repos.artifacts.findBySessionId(sessionId);
       const matched = existing.find((a) => a.remotePath === persistedTargetPath);
       if (matched) {
-        this.logger.info('Artifact already registered, returning existing record', {
-          sessionId,
-          filename,
-          id: matched.id,
-        });
-        return matched;
+        if (matched.cachedLocalPath && existsSync(matched.cachedLocalPath)) {
+          this.logger.info('Artifact already registered, returning existing record', {
+            sessionId,
+            filename,
+            id: matched.id,
+          });
+          return matched;
+        }
+
+        // Retry explicit promotion for metadata-only records instead of reporting a false success.
+        this.assertFileWithinLimit(rstat.size, 'promote');
+        const retryBytes = await host.readFileRaw(targetPath, this.maxFileBytes + 1);
+        const retryStat = await host.stat(targetPath);
+        if (retryStat.isDirectory || retryStat.size !== retryBytes.length || retryBytes.length > this.maxFileBytes) {
+          throw new Error(`Artifact '${filename}' changed while being read or exceeds the ${formatBytes(this.maxFileBytes)} per-file cache limit`);
+        }
+        const retryCachePath = this.getCachePath(sessionId, `${persistedTargetPath}|output|${matched.id}`, filename);
+        await mkdir(dirname(retryCachePath), { recursive: true });
+        await this.withCacheWrite(retryBytes.length, () => writeFile(retryCachePath, retryBytes));
+        return await this.repos.artifacts.save({ ...matched, cachedLocalPath: retryCachePath, sizeBytes: retryStat.size });
       }
 
-      // Cache locally in background
-      const localSessionCache = this.getSessionCacheDir(sessionId);
-      await mkdir(localSessionCache, { recursive: true });
-      const cachedLocalPath = resolveContainedPath(localSessionCache, filename);
+      const cachedLocalPath = this.getCachePath(sessionId, `${persistedTargetPath}|output`, filename);
 
-      try {
-        await host.downloadFile(targetPath, cachedLocalPath);
-      } catch (err) {
-        this.logger.warn('Could not cache promoted file locally immediately', { filename, error: err });
-      }
+      let persistedSize = rstat.size;
+      await this.withArtifactTransferSlot(async () => {
+        try {
+          this.assertFileWithinLimit(rstat.size, 'promote');
+
+          const cachedBytes = await host.readFileRaw(targetPath, this.maxFileBytes + 1);
+          const postReadStat = await host.stat(targetPath);
+          if (postReadStat.isDirectory || postReadStat.size !== cachedBytes.length || cachedBytes.length > this.maxFileBytes) {
+            throw new Error(`Artifact '${filename}' changed while being read or exceeds the ${formatBytes(this.maxFileBytes)} per-file cache limit`);
+          }
+          persistedSize = postReadStat.size;
+          await mkdir(dirname(cachedLocalPath), { recursive: true });
+          await this.withCacheWrite(cachedBytes.length, () => writeFile(cachedLocalPath, cachedBytes));
+        } catch (err) {
+          if (!allowMetadataOnly) throw err;
+          this.logger.warn('Could not cache promoted file locally immediately', { filename, error: err });
+          await this.removeEmptyCacheDirectories(dirname(cachedLocalPath));
+        }
+      });
 
       const mimeType = getMimeType(filename);
       const artifact: Omit<Artifact, 'createdAt'> & { createdAt?: Date } = {
@@ -395,7 +472,7 @@ export class ArtifactManager {
         cachedLocalPath: existsSync(cachedLocalPath) ? cachedLocalPath : undefined,
         filename,
         mimeType,
-        sizeBytes: rstat.size,
+        sizeBytes: persistedSize,
         createdAt: new Date(),
       };
 
@@ -529,7 +606,7 @@ export class ArtifactManager {
         runtimeTargetPath.release();
       }
 
-      return await this.promoteFileUnlocked(sessionId, promotablePath);
+      return await this.promoteFileUnlocked(sessionId, promotablePath, true);
     } catch {
       return null;
     }
@@ -541,18 +618,25 @@ export class ArtifactManager {
   async getArtifactContent(
     sessionId: string,
     artifactId: string,
-    maxBytes = 10 * 1024 * 1024
+    maxBytes = this.maxPreviewBytes
   ): Promise<FileContentResult> {
     return this.withSessionArtifactLock(sessionId, () =>
-      this.getArtifactContentUnlocked(sessionId, artifactId, maxBytes)
+      this.getArtifactContentUnlocked(sessionId, artifactId, maxBytes, false)
+    );
+  }
+
+  async getArtifactContentForExport(sessionId: string, artifactId: string): Promise<FileContentResult & { cachedLocalPath?: string }> {
+    return this.withSessionArtifactLock(sessionId, () =>
+      this.getArtifactContentUnlocked(sessionId, artifactId, this.maxFileBytes, true)
     );
   }
 
   private async getArtifactContentUnlocked(
     sessionId: string,
     artifactId: string,
-    maxBytes = 10 * 1024 * 1024
-  ): Promise<FileContentResult> {
+    maxBytes = this.maxPreviewBytes,
+    allowFullContent = false
+  ): Promise<FileContentResult & { cachedLocalPath?: string }> {
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
@@ -567,17 +651,34 @@ export class ArtifactManager {
     }
 
     const safeFilename = assertSafeFilename(artifact.filename);
-    const localSessionCache = this.getSessionCacheDir(sessionId);
-    const expectedCachedLocalPath = resolveContainedPath(localSessionCache, safeFilename);
+    const previewLimit = allowFullContent
+      ? Math.min(Math.max(1, maxBytes), this.maxFileBytes)
+      : Math.min(Math.max(1, maxBytes), this.maxPreviewBytes);
+    const expectedCachedLocalPath = this.getCachePath(sessionId, `${artifact.remotePath}|${artifact.direction}`, safeFilename);
+    const legacyCachedLocalPath = resolveContainedPath(this.getSessionCacheDir(sessionId), safeFilename);
+    const cachedPath = artifact.cachedLocalPath && isOwnedCachePath(this.getSessionCacheDir(sessionId), artifact.cachedLocalPath) && existsSync(artifact.cachedLocalPath)
+      ? artifact.cachedLocalPath
+      : null;
 
-    // Only read a cache path derived from the validated session and filename.
-    if (artifact.cachedLocalPath === expectedCachedLocalPath && existsSync(expectedCachedLocalPath)) {
+    // Accept both current hashed paths and ownership-checked legacy paths during migration.
+    if (cachedPath) {
       try {
-        const buf = await readFile(expectedCachedLocalPath);
+        if (cachedPath === legacyCachedLocalPath && await this.cachePathIsReferenced(cachedPath, artifact.id)) {
+          try {
+            await rm(cachedPath, { force: true });
+          } catch (error) {
+            this.logger.warn('Could not quarantine ambiguous legacy artifact cache', { artifactId, error });
+          }
+          throw new Error('Ambiguous legacy artifact cache was quarantined; refreshing from host');
+        }
+        const cachedStat = await localStat(cachedPath);
+        const buf = await readLocalPrefix(cachedPath, previewLimit);
         const mimeType = artifact.mimeType || getMimeType(safeFilename);
         const isImage = mimeType.startsWith('image/');
         const isPdf = mimeType === 'application/pdf';
-        const binary = isImage || isPdf || isBinaryBuffer(buf);
+        const binary = isImage || isPdf ||
+          (mimeType !== 'application/octet-stream' && !isTextMimeType(mimeType)) ||
+          isBinaryBuffer(buf);
 
         let content: string;
         if (isImage || isPdf) {
@@ -588,13 +689,31 @@ export class ArtifactManager {
           content = buf.toString('utf8');
         }
 
+        const isTruncated = cachedStat.size > previewLimit;
+        const cacheSizeMatchesArtifact = cachedStat.size === artifact.sizeBytes;
+        if (!cacheSizeMatchesArtifact) {
+          throw new Error(`Cached artifact size mismatch: expected ${artifact.sizeBytes}, got ${cachedStat.size}`);
+        }
+        let resolvedCachedPath = cachedPath;
+        if (cachedPath === legacyCachedLocalPath && !isTruncated && !existsSync(expectedCachedLocalPath)) {
+          try {
+            await mkdir(dirname(expectedCachedLocalPath), { recursive: true });
+            await rename(legacyCachedLocalPath, expectedCachedLocalPath);
+            resolvedCachedPath = expectedCachedLocalPath;
+            await this.repos.artifacts.save({ ...artifact, cachedLocalPath: expectedCachedLocalPath });
+          } catch (error) {
+            this.logger.warn('Could not migrate legacy artifact cache path', { artifactId, error });
+          }
+        }
+
         return {
           path: artifact.remotePath,
           content,
           isBinary: binary,
-          isTruncated: false,
-          sizeBytes: buf.length,
+          isTruncated,
+          sizeBytes: artifact.sizeBytes,
           mimeType,
+          cachedLocalPath: resolvedCachedPath,
         };
       } catch (err) {
         this.logger.warn('Failed to read from local artifact cache, falling back to host', {
@@ -608,32 +727,43 @@ export class ArtifactManager {
     const host = await this.sessionManager.getHostAdapter(session.serverId);
     const remotePath = await this.sessionManager.resolvePersistedSessionPath(session, artifact.remotePath);
     let result: FileContentResult;
+    let currentRemoteSize: number | undefined;
+    let resolvedRemotePath: string | undefined;
     try {
-      result = await host.readFile(remotePath.value, maxBytes);
+      resolvedRemotePath = remotePath.value;
+      result = await host.readFile(resolvedRemotePath, previewLimit);
+      const postReadStat = await host.stat(resolvedRemotePath);
+      currentRemoteSize = postReadStat.size;
+      if (currentRemoteSize !== result.sizeBytes) {
+        throw new Error(`Artifact '${artifact.filename}' changed size while being read`);
+      }
     } finally {
       remotePath.release();
     }
 
-    // Cache locally for next time
-    await mkdir(localSessionCache, { recursive: true });
-    try {
-      if (result.isBinary) {
-        const rawBase64 = result.content.includes('base64,')
-          ? result.content.split('base64,')[1]
-          : result.content;
-        await writeFile(expectedCachedLocalPath, Buffer.from(rawBase64, 'base64'));
-      } else {
-        await writeFile(expectedCachedLocalPath, result.content, 'utf8');
+    // Never cache a preview: a truncated response must not become a seemingly complete artifact.
+    let verifiedCachePath: string | undefined;
+    if (!result.isTruncated && result.sizeBytes <= this.maxFileBytes &&
+        currentRemoteSize === result.sizeBytes && currentRemoteSize <= this.maxFileBytes) {
+      try {
+        await mkdir(dirname(expectedCachedLocalPath), { recursive: true });
+        const currentSize = result.sizeBytes;
+        const cachedBytes = encodeCachedResult(result);
+        const oldSize = await localStat(expectedCachedLocalPath).then((s) => s.size).catch(() => 0);
+        await this.withCacheWrite(Math.max(0, cachedBytes.length - oldSize), () => writeFile(expectedCachedLocalPath, cachedBytes));
+        await this.repos.artifacts.save({ ...artifact, cachedLocalPath: expectedCachedLocalPath, sizeBytes: currentSize });
+        verifiedCachePath = expectedCachedLocalPath;
+        if (artifact.cachedLocalPath && artifact.cachedLocalPath !== expectedCachedLocalPath &&
+            isOwnedCachePath(this.getSessionCacheDir(sessionId), artifact.cachedLocalPath) &&
+            !(await this.cachePathIsReferenced(artifact.cachedLocalPath, artifact.id))) {
+          await rm(artifact.cachedLocalPath, { force: true });
+        }
+      } catch (error) {
+        this.logger.warn('Could not cache complete artifact content', { artifactId, error });
       }
-      await this.repos.artifacts.save({
-        ...artifact,
-        cachedLocalPath: expectedCachedLocalPath,
-      });
-    } catch {
-      // Ignore cache write errors
     }
 
-    return { ...result, path: artifact.remotePath };
+    return { ...result, path: artifact.remotePath, cachedLocalPath: verifiedCachePath };
   }
 
   /**
@@ -651,11 +781,11 @@ export class ArtifactManager {
       return false;
     }
 
-    const safeFilename = assertSafeFilename(artifact.filename);
-    const expectedCachedLocalPath = resolveContainedPath(this.getSessionCacheDir(sessionId), safeFilename);
-    if (artifact.cachedLocalPath === expectedCachedLocalPath && existsSync(expectedCachedLocalPath)) {
+    const cacheRoot = this.getSessionCacheDir(sessionId);
+    if (artifact.cachedLocalPath && isOwnedCachePath(cacheRoot, artifact.cachedLocalPath) &&
+        existsSync(artifact.cachedLocalPath) && !(await this.cachePathIsReferenced(artifact.cachedLocalPath, artifact.id))) {
       try {
-        await rm(expectedCachedLocalPath, { force: true });
+        await rm(artifact.cachedLocalPath, { force: true });
       } catch {
         // Ignore cache removal errors
       }
@@ -674,11 +804,123 @@ export class ArtifactManager {
       }
 
       const artifacts = await this.repos.artifacts.findBySessionId(sessionId);
-      const deleted = await Promise.all(
-        artifacts.map((artifact) => this.deleteArtifactUnlocked(sessionId, artifact.id))
+      const ownedPaths = new Set(
+        artifacts
+          .map((artifact) => artifact.cachedLocalPath)
+          .filter((path): path is string => path !== undefined && isOwnedCachePath(this.getSessionCacheDir(sessionId), path))
       );
-      return deleted.filter(Boolean).length;
+      for (const path of ownedPaths) {
+        try {
+          await rm(path, { force: true });
+        } catch (error) {
+          this.logger.warn('Could not remove artifact cache during clear', { sessionId, path, error });
+        }
+      }
+      await this.removeEmptyCacheDirectories(this.getSessionCacheDir(sessionId));
+      let deletedCount = 0;
+      for (const artifact of artifacts) {
+        if (await this.repos.artifacts.delete(artifact.id)) deletedCount++;
+      }
+      return deletedCount;
     });
+  }
+
+  private getCachePath(sessionId: string, sourceIdentity: string, filename: string): string {
+    const key = createHash('sha256').update(sourceIdentity).digest('hex').slice(0, 16);
+    return resolveContainedPath(this.getSessionCacheDir(sessionId), `${key}/${filename}`);
+  }
+
+  private assertFileWithinLimit(size: number, operation: string): void {
+    if (!Number.isSafeInteger(size) || size > this.maxFileBytes) {
+      throw new Error(`Cannot ${operation} artifact: file exceeds the ${formatBytes(this.maxFileBytes)} per-file limit`);
+    }
+  }
+
+  getMaxFileBytes(): number {
+    return this.maxFileBytes;
+  }
+
+  private async assertCacheCapacity(additionalBytes: number): Promise<void> {
+    await this.cacheReconciliation;
+    let used = 0;
+    try {
+      used = await getDirectorySize(this.cacheDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || existsSync(this.cacheDir)) throw error;
+    }
+    if (used + additionalBytes > this.maxCacheBytes) {
+      throw new Error(`Artifact cache limit reached (${formatBytes(this.maxCacheBytes)})`);
+    }
+  }
+
+  private async withCacheWrite<T>(size: number, operation: () => Promise<T>): Promise<T> {
+    const previous = this.cacheWriteQueue;
+    let release!: () => void;
+    this.cacheWriteQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      await this.assertCacheCapacity(size);
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private async withArtifactTransferSlot<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.artifactTransferQueue;
+    let release!: () => void;
+    this.artifactTransferQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private async reconcileCache(): Promise<void> {
+    let files: Array<{ path: string; size: number; mtimeMs: number }>;
+    try {
+      files = await getCacheFiles(this.cacheDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    const oversizedFiles = files.filter((file) => file.size > this.maxFileBytes);
+    let total = files.reduce((sum, file) => sum + file.size, 0);
+    for (const file of files.sort((a, b) => {
+      const oversizedOrder = Number(oversizedFiles.includes(b)) - Number(oversizedFiles.includes(a));
+      return oversizedOrder || a.mtimeMs - b.mtimeMs;
+    })) {
+      if (total <= this.maxCacheBytes && file.size <= this.maxFileBytes) break;
+      try {
+        await rm(file.path, { force: true });
+        total -= file.size;
+      } catch (error) {
+        this.logger.warn('Could not evict oversized artifact cache entry', { path: file.path, error });
+      }
+    }
+    await this.removeEmptyCacheDirectories(this.cacheDir);
+  }
+
+  private async removeEmptyCacheDirectories(startPath: string): Promise<void> {
+    let current = startPath;
+    while (current.startsWith(this.cacheDir) && current !== this.cacheDir) {
+      try {
+        if ((await readdir(current)).length > 0) break;
+        await rm(current, { recursive: false, force: true });
+      } catch {
+        break;
+      }
+      current = dirname(current);
+    }
+  }
+
+  private async cachePathIsReferenced(path: string, exceptId: string): Promise<boolean> {
+    const current = await this.repos.artifacts.findById(exceptId);
+    if (!current) return false;
+    const artifacts = await this.repos.artifacts.findBySessionId(current.sessionId);
+    return artifacts.some((candidate) => candidate.id !== exceptId && candidate.cachedLocalPath === path);
   }
 
   private async withSessionArtifactLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
@@ -704,6 +946,73 @@ export class ArtifactManager {
 
 function quoteShellArgument(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function encodeCachedResult(result: FileContentResult): Buffer {
+  return result.isBinary
+    ? Buffer.from(result.content.includes('base64,') ? result.content.split('base64,')[1] : result.content, 'base64')
+    : Buffer.from(result.content, 'utf8');
+}
+
+async function readLocalPrefix(path: string, maxBytes: number): Promise<Buffer> {
+  const handle = await (await import('node:fs/promises')).open(path, 'r');
+  try {
+    const fileStat = await handle.stat();
+    const buffer = Buffer.alloc(Math.min(fileStat.size, maxBytes));
+    let totalRead = 0;
+    while (totalRead < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, totalRead, buffer.length - totalRead, totalRead);
+      if (bytesRead === 0) break;
+      totalRead += bytesRead;
+    }
+    return buffer.subarray(0, totalRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+function isTextMimeType(mimeType: string): boolean {
+  return mimeType.startsWith('text/') || mimeType === 'application/json' || mimeType === 'application/xml' || mimeType === 'application/sql';
+}
+
+async function getCacheFiles(path: string): Promise<Array<{ path: string; size: number; mtimeMs: number }>> {
+  const entries = await readdir(path, { withFileTypes: true });
+  const files: Array<{ path: string; size: number; mtimeMs: number }> = [];
+  for (const entry of entries) {
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await getCacheFiles(entryPath));
+    } else if (entry.isFile()) {
+      const fileStat = await localStat(entryPath);
+      files.push({ path: entryPath, size: fileStat.size, mtimeMs: fileStat.mtimeMs });
+    }
+  }
+  return files;
+}
+
+async function getDirectorySize(path: string): Promise<number> {
+  const entries = await (await import('node:fs/promises')).readdir(path, { withFileTypes: true });
+  let total = 0;
+  for (const entry of entries) {
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) total += await getDirectorySize(child);
+    else if (entry.isFile()) total += (await localStat(child)).size;
+  }
+  return total;
+}
+
+function isOwnedCachePath(root: string, candidate: string): boolean {
+  try {
+    return resolveContainedPath(root, candidate) === candidate;
+  } catch {
+    return false;
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
+  return `${Math.round(bytes / (1024 * 1024))} MiB`;
 }
 
 export function getMimeType(filePath: string): string {

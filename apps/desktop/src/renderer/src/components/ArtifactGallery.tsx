@@ -183,19 +183,36 @@ export function ArtifactGallery({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const runSaveAs = async (art: Artifact) => {
+    if (window.spawneaApi?.saveArtifactAs) {
+      try {
+        await window.spawneaApi.saveArtifactAs(sessionId, art.id);
+      } catch (err) {
+        showToast(`Unable to save ${art.filename}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
+    }
+  };
+
   const handleSaveAs = async (e: React.MouseEvent, art: Artifact) => {
     e.stopPropagation();
-    if (window.spawneaApi?.saveArtifactAs) {
-      await window.spawneaApi.saveArtifactAs(sessionId, art.id);
+    await runSaveAs(art);
+  };
+
+  const runOpenInOs = async (art: Artifact) => {
+    if (window.spawneaApi?.openArtifactInOs) {
+      try {
+        const opened = await window.spawneaApi.openArtifactInOs(sessionId, art.id);
+        if (opened) showToast('Opened in default app');
+        else showToast(`Unable to open ${art.filename}`);
+      } catch (err) {
+        showToast(`Unable to open ${art.filename}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
     }
   };
 
   const handleOpenInOs = async (e: React.MouseEvent, art: Artifact) => {
     e.stopPropagation();
-    if (window.spawneaApi?.openArtifactInOs) {
-      await window.spawneaApi.openArtifactInOs(sessionId, art.id);
-      showToast('Opened in default app');
-    }
+    await runOpenInOs(art);
   };
 
   const handleDelete = async (e: React.MouseEvent, art: Artifact) => {
@@ -643,17 +660,8 @@ export function ArtifactGallery({
             navigator.clipboard.writeText(contextMenu.artifact.remotePath);
             showToast('Copied remote path');
           }}
-          onOpenInOs={() => {
-            if (window.spawneaApi?.openArtifactInOs) {
-              window.spawneaApi.openArtifactInOs(sessionId, contextMenu.artifact.id);
-              showToast('Opened in default app');
-            }
-          }}
-          onSaveAs={() => {
-            if (window.spawneaApi?.saveArtifactAs) {
-              window.spawneaApi.saveArtifactAs(sessionId, contextMenu.artifact.id);
-            }
-          }}
+          onOpenInOs={() => runOpenInOs(contextMenu.artifact)}
+          onSaveAs={() => runSaveAs(contextMenu.artifact)}
           onDelete={() => {
             handleDelete({ stopPropagation: () => {} } as any, contextMenu.artifact);
           }}
