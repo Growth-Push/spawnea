@@ -117,8 +117,8 @@ export function ArtifactPreviewModal({
     setIsSaving(true);
     try {
       await window.spawneaApi.saveArtifactAs(sessionId, artifact.id);
-    } catch {
-      // ignore
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to save the complete artifact.');
     } finally {
       setIsSaving(false);
     }
@@ -126,7 +126,11 @@ export function ArtifactPreviewModal({
 
   const handleOpenInOs = async () => {
     if (window.spawneaApi?.openArtifactInOs) {
-      await window.spawneaApi.openArtifactInOs(sessionId, artifact.id);
+      try {
+        await window.spawneaApi.openArtifactInOs(sessionId, artifact.id);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unable to open the complete artifact.');
+      }
     }
   };
 
@@ -309,6 +313,12 @@ export function ArtifactPreviewModal({
 
         {/* Modal Main Content */}
         <div className="flex-1 overflow-auto bg-[#0d1117] flex flex-col relative select-text">
+          {contentResult?.isTruncated && !contentResult.isBinary && !isImage && contentResult.mimeType !== 'application/pdf' && (
+            <div className="flex items-center gap-2 px-4 py-2 text-amber-300 bg-amber-950/20 border-b border-amber-900/40 text-xs shrink-0">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>Preview is truncated; only the first portion of this artifact is shown.</span>
+            </div>
+          )}
           {isLoading ? (
             <div className="flex-1 flex flex-col items-center justify-center p-12 text-zinc-400 gap-2">
               <Loader2 className="w-6 h-6 animate-spin text-emerald-400" />
@@ -319,6 +329,14 @@ export function ArtifactPreviewModal({
               <AlertTriangle className="w-10 h-10 mb-2 opacity-80" />
               <p className="font-semibold text-sm">Failed to load preview</p>
               <p className="text-zinc-500 mt-1 text-xs max-w-sm text-center">{error}</p>
+            </div>
+          ) : contentResult?.isTruncated && (contentResult.isBinary || isImage || contentResult.mimeType === 'application/pdf') ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-12 text-amber-300">
+              <AlertTriangle className="w-10 h-10 mb-2 opacity-80" />
+              <p className="font-semibold text-sm">Preview is truncated</p>
+              <p className="text-zinc-500 mt-1 text-xs max-w-sm text-center">
+                Only the first portion of this artifact is available in the preview. Save or open the artifact to access the complete file.
+              </p>
             </div>
           ) : isImage && contentResult?.content ? (
             <div className="flex-1 flex flex-col bg-[#090d13] overflow-hidden">

@@ -326,7 +326,7 @@ export class MockHostAdapter implements HostAdapter {
       throw new Error(`File not found: ${filePath}`);
     }
 
-    const totalSize = file.size ?? Buffer.byteLength(file.content, 'utf8');
+    const totalSize = Buffer.byteLength(file.content, 'utf8');
     const isTruncated = totalSize > maxBytes;
     const content = isTruncated ? file.content.slice(0, maxBytes) : file.content;
 
@@ -338,6 +338,14 @@ export class MockHostAdapter implements HostAdapter {
       sizeBytes: totalSize,
       mimeType: file.mimeType || (file.isBinary ? 'application/octet-stream' : 'text/plain'),
     };
+  }
+
+  async readFileRaw(filePath: string, maxBytes: number): Promise<Buffer> {
+    if (!this.connected) await this.connect();
+    const result = await this.readFile(filePath, maxBytes);
+    return result.isBinary
+      ? Buffer.from(result.content, 'base64')
+      : Buffer.from(result.content, 'utf8');
   }
 
   async stat(filePath: string): Promise<import('@spawnea/domain').FileStat> {

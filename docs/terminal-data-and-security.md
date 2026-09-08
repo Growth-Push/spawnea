@@ -78,6 +78,15 @@ Operational data needed to manage sessions is stored strictly on your local mach
 4. **Session Artifacts**: Files or images explicitly uploaded by the user or identified in the session artifact directory.
 5. **Explicit Feedback Reports**: If you explicitly choose to submit a diagnostic feedback report (via the state feedback dialog), a recent tail snapshot is packaged for that specific report. These reports remain stored locally in your application user-data directory until manually removed, allowing you to inspect or delete them at any time.
 
+Artifact cache retention is bounded by the desktop artifact manager: 50 MiB per
+cached file, 250 MiB total cache usage, and 10 MiB per preview by default. These
+limits are enforced for automatic output discovery and on-demand reads. An
+oversized automatic output may remain registered as metadata without a local
+copy; explicit promotion reports the size limit. Truncated previews are not
+cached and cannot be exported as complete files. Cache names include a hash of
+the complete source locator and direction so same-basename artifacts remain
+independent.
+
 ---
 
 ## Related Source and Specifications

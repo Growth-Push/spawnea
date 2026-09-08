@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
@@ -315,6 +315,21 @@ describe('ArtifactManager', () => {
     expect(check).toBeNull();
   });
 
+  it('reads and migrates a complete legacy cached artifact while the host is unavailable', async () => {
+    const artifact = await artifactManager.createTextArtifact(sessionId, 'legacy.txt', 'legacy content');
+    const legacyPath = join(artifactManager.getSessionCacheDir(sessionId), artifact.filename);
+    renameSync(artifact.cachedLocalPath!, legacyPath);
+    await repos.artifacts.save({ ...artifact, cachedLocalPath: legacyPath });
+    mockHost.mockFiles.delete(artifact.remotePath);
+
+    const result = await artifactManager.getArtifactContent(sessionId, artifact.id);
+
+    expect(result.content).toBe('legacy content');
+    expect(result.isTruncated).toBe(false);
+    expect(existsSync(legacyPath)).toBe(false);
+    expect((await repos.artifacts.findById(artifact.id))?.cachedLocalPath).not.toBe(legacyPath);
+  });
+
   it('clears all session artifacts without deleting remote files', async () => {
     const first = await artifactManager.createTextArtifact(sessionId, 'first.txt', 'first');
     const second = await artifactManager.createTextArtifact(sessionId, 'second.txt', 'second');
@@ -420,6 +435,113 @@ describe('ArtifactManager', () => {
     const contentRes = await artifactManager.getArtifactContent(sessionId, artifact.id);
     expect(contentRes.isBinary).toBe(false);
     expect(contentRes.content).toBe(textSnippet);
+  });
+
+  it('enforces injectable file and total cache limits before writing', async () => {
+    const limited = new ArtifactManager({
+      repositories: repos,
+      sessionManager,
+      cacheDir: join(tempDir, 'limited-artifacts'),
+      maxFileBytes: 4,
+      maxCacheBytes: 6,
+      maxPreviewBytes: 3,
+    });
+
+    await expect(
+      limited.uploadArtifactBuffer(sessionId, Buffer.from('12345'), 'too-large.txt', 'text/plain')
+    ).rejects.toThrow(/per-file limit/);
+
+    await limited.uploadArtifactBuffer(sessionId, Buffer.from('1234'), 'first.txt', 'text/plain');
+    await expect(
+      limited.uploadArtifactBuffer(sessionId, Buffer.from('1234'), 'second.txt', 'text/plain')
+    ).rejects.toThrow(/cache limit/);
+
+    const localSource = join(tempDir, 'quota-source.txt');
+    writeFileSync(localSource, '1234');
+    await expect(limited.uploadArtifactFile(sessionId, localSource, 'input')).rejects.toThrow(/cache limit/);
+  });
+
+  it('keeps oversized automatic outputs as metadata while explicit promotion fails', async () => {
+    const limited = new ArtifactManager({
+      repositories: repos,
+      sessionManager,
+      cacheDir: join(tempDir, 'limited-detected-artifacts'),
+      maxFileBytes: 4,
+      maxCacheBytes: 20,
+      maxPreviewBytes: 3,
+    });
+    mockHost.mockFiles.set('/workspace/spawnea/docs/oversized.txt', {
+      content: '12345',
+      mimeType: 'text/plain',
+      size: 5,
+    });
+    mockHost.customRules.push({
+      pattern: 'git ls-files --error-unmatch',
+      response: { stdout: '', stderr: 'pathspec did not match', exitCode: 1 },
+    });
+
+    await expect(limited.promoteFile(sessionId, 'docs/oversized.txt')).rejects.toThrow(/per-file limit/);
+    const detected = await limited.handleDetectedOutput(sessionId, '/workspace/spawnea/docs/oversized.txt');
+    expect(detected).toMatchObject({ filename: 'oversized.txt', sizeBytes: 5 });
+    expect(detected?.cachedLocalPath).toBeUndefined();
+  });
+
+  it('keeps same-basename output artifacts in separate cache files', async () => {
+    mockHost.mockFiles.set('/workspace/spawnea/docs/report.txt', {
+      content: 'docs-version',
+      mimeType: 'text/plain',
+      size: 12,
+    });
+    mockHost.mockFiles.set('/workspace/spawnea/results/report.txt', {
+      content: 'results-version',
+      mimeType: 'text/plain',
+      size: 15,
+    });
+
+    const first = await artifactManager.promoteFile(sessionId, 'docs/report.txt');
+    const second = await artifactManager.promoteFile(sessionId, 'results/report.txt');
+    expect(first.cachedLocalPath).not.toBe(second.cachedLocalPath);
+    expect((await artifactManager.getArtifactContent(sessionId, first.id)).content).toBe('docs-version');
+    expect((await artifactManager.getArtifactContent(sessionId, second.id)).content).toBe('results-version');
+
+    await artifactManager.deleteArtifact(sessionId, first.id);
+    expect(existsSync(second.cachedLocalPath!)).toBe(true);
+    expect((await artifactManager.getArtifactContent(sessionId, second.id)).content).toBe('results-version');
+  });
+
+  it('reports preview truncation and does not cache a partial response', async () => {
+    mockHost.mockFiles.set('/workspace/spawnea/docs/large.txt', {
+      content: '0123456789',
+      mimeType: 'text/plain',
+      size: 10,
+    });
+    const artifact = await artifactManager.promoteFile(sessionId, 'docs/large.txt');
+    await rmSync(artifact.cachedLocalPath!, { force: true });
+    const result = await artifactManager.getArtifactContent(sessionId, artifact.id, 3);
+    expect(result.content).toBe('012');
+    expect(result.isTruncated).toBe(true);
+    expect(existsSync(artifact.cachedLocalPath!)).toBe(false);
+  });
+
+  it('rejects a promotion when the source grows during the bounded read', async () => {
+    mockHost.mockFiles.set('/workspace/spawnea/docs/growing.txt', {
+      content: '1234',
+      mimeType: 'text/plain',
+      size: 4,
+    });
+    const originalReadFile = mockHost.readFile.bind(mockHost);
+    vi.spyOn(mockHost, 'readFile').mockImplementation(async (...args) => {
+      const result = await originalReadFile(...args);
+      const current = mockHost.mockFiles.get('/workspace/spawnea/docs/growing.txt');
+      if (current) {
+        mockHost.mockFiles.set('/workspace/spawnea/docs/growing.txt', { ...current, content: '12345', size: 5 });
+      }
+      return result;
+    });
+
+    await expect(artifactManager.promoteFile(sessionId, 'docs/growing.txt'))
+      .rejects.toThrow(/changed while being read/);
+    expect(await repos.artifacts.findBySessionId(sessionId)).toHaveLength(0);
   });
 
   it('manages blacklist patterns and prevents blacklisted file promotions', async () => {

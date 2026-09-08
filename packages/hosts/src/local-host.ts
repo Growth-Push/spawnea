@@ -231,16 +231,19 @@ export class LocalHostAdapter implements HostAdapter {
 
   async readFile(
     filePath: string,
-    maxBytes = 2 * 1024 * 1024
+    maxBytes?: number
   ): Promise<import('@spawnea/domain').FileContentResult> {
-    this.logger.debug('Reading local file', { filePath, maxBytes });
+    const requestedMaxBytes = maxBytes ?? 2 * 1024 * 1024;
+    this.logger.debug('Reading local file', { filePath, maxBytes: requestedMaxBytes });
     const fs = await import('node:fs/promises');
 
     try {
       const stats = await fs.stat(filePath);
       const mimeType = getLocalMimeType(filePath);
       const isImage = mimeType.startsWith('image/');
-      const effectiveMaxBytes = isImage ? Math.max(maxBytes, 10 * 1024 * 1024) : maxBytes;
+      const effectiveMaxBytes = maxBytes === undefined && isImage
+        ? 10 * 1024 * 1024
+        : requestedMaxBytes;
 
       const isTruncated = stats.size > effectiveMaxBytes;
       const lengthToRead = isTruncated ? effectiveMaxBytes : stats.size;
@@ -253,7 +256,7 @@ export class LocalHostAdapter implements HostAdapter {
         await fileHandle.close();
       }
 
-      const binary = isImage || isLocalBinaryBuffer(buffer);
+      const binary = isImage || mimeType === 'application/pdf' || !isTextMimeType(mimeType) || isLocalBinaryBuffer(buffer);
 
       let content: string;
       if (isImage) {
@@ -274,6 +277,24 @@ export class LocalHostAdapter implements HostAdapter {
       };
     } catch (err: any) {
       throw new Error(`Failed to read file '${filePath}': ${err.message || String(err)}`);
+    }
+  }
+
+  async readFileRaw(filePath: string, maxBytes: number): Promise<Buffer> {
+    const fs = await import('node:fs/promises');
+    const stats = await fs.stat(filePath);
+    const handle = await fs.open(filePath, 'r');
+    try {
+      const buffer = Buffer.alloc(Math.min(stats.size, maxBytes));
+      let offset = 0;
+      while (offset < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      return buffer.subarray(0, offset);
+    } finally {
+      await handle.close();
     }
   }
 
@@ -371,4 +392,8 @@ function isLocalBinaryBuffer(buf: Buffer): boolean {
     if (buf[i] === 0) return true;
   }
   return false;
+}
+
+function isTextMimeType(mimeType: string): boolean {
+  return mimeType.startsWith('text/') || mimeType === 'application/json' || mimeType === 'application/xml';
 }
