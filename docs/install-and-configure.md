@@ -1,6 +1,6 @@
 # Installation and Configuration
 
-Spawnea is currently installed and run directly from source. Packaged binary installers (such as AppImage, `.deb`, `.dmg`, or `.exe`) and pre-built GitHub Releases are in development and are not yet published.
+No GitHub Releases are currently published. Run Spawnea from a source checkout or create a package locally with the implemented packaging commands. The tag-triggered workflow for future draft GitHub Releases is described in [Desktop Distribution](desktop-distribution.md).
 
 ---
 
@@ -47,6 +47,14 @@ pnpm start
 ```
 
 On Linux environments running Wayland, `pnpm start` automatically passes `--ozone-platform-hint=auto` to avoid Xwayland mapping delays.
+
+To create a package for the current host without publishing it:
+
+```bash
+pnpm package:desktop:host
+```
+
+Artifacts are written to the repository `release/` directory. This local command does not create or publish a GitHub Release. See [Desktop Distribution](desktop-distribution.md) for packaging details and the future release process.
 
 ---
 
@@ -201,8 +209,8 @@ Spawnea includes an explicit, read-only discovery tool:
 
 ### Configuring the local MCP bridge
 
-The packaged macOS and Linux application includes a stdio MCP helper. Configure
-the absolute helper path as described in the [Local Control API and MCP
+Locally packaged macOS and Linux applications include a stdio MCP helper. Configure
+the package-specific command as described in the [Local Control API and MCP
 contract](control-api-mcp.md). Spawnea must be running; the helper connects to
 the owner-only local Unix socket and opens no network port.
 
@@ -218,15 +226,34 @@ independent root, the connection is pinned to it and its direct children. The
 creation tool then accepts only an exact replay of the request that established
 that scope.
 
-Bootstrap configuration uses the normal helper command with no session
+For a macOS application bundle or a directory-style package, configure the
+absolute `resources/spawnea-mcp` helper path with no arguments and no session
 environment override:
 
 ```json
 {
   "mcpServers": {
     "spawnea": {
-      "command": "/absolute/path/to/spawnea-mcp",
+      "command": "/Applications/Spawnea.app/Contents/Resources/spawnea-mcp",
       "args": []
+    }
+  }
+}
+```
+
+For a directory-style Linux package, use
+`/absolute/path/to/package/resources/spawnea-mcp` as `command`; `args` remains
+`[]`.
+
+For a Linux AppImage, use the absolute AppImage path and pass
+`--spawnea-mcp` as its only initial argument:
+
+```json
+{
+  "mcpServers": {
+    "spawnea": {
+      "command": "/absolute/path/to/Spawnea-0.1.0-linux-x86_64.AppImage",
+      "args": ["--spawnea-mcp"]
     }
   }
 }

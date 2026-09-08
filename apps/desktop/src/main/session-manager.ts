@@ -675,7 +675,7 @@ export class SessionManager {
       const projectName = catProject?.name || dbProject?.name || 'Project';
       const gitUrl = catProject?.git_url || dbProject?.repoUrl || undefined;
       const configuredBaseBranch = catProject?.base_branch?.trim() || dbProject?.baseBranch?.trim() || undefined;
-      const effectiveBaseBranch = options.parentSessionId && options.creationSource === 'mcp'
+      const effectiveBaseBranch = options.creationSource === 'mcp'
         ? options.baseBranch?.trim() || configuredBaseBranch || undefined
         : configuredBaseBranch || options.baseBranch?.trim() || undefined;
 

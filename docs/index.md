@@ -3,7 +3,7 @@
 Spawnea is a local-first desktop workspace for supervising and operating AI coding agents across local machines and remote servers. It brings persistent `tmux` sessions, integrated terminals, Git worktrees, file trees, diffs, session artifacts, and agent attention state into a single desktop interface.
 
 > [!NOTE]
-> Spawnea is early-stage, pre-MVP software under active development. The guides below document the behavior currently implemented in the repository. Packaged installers and one-click binaries are pending development; running Spawnea currently requires building from source.
+> Spawnea is early-stage, pre-MVP software under active development. No GitHub Releases are currently published. Run it from a source checkout or create a package locally; the implemented packaging and future draft-release pipeline are documented in [Desktop Distribution](desktop-distribution.md).
 
 ---
 
@@ -37,6 +37,7 @@ Spawnea is a local-first desktop workspace for supervising and operating AI codi
 - **[Vision](vision.md)**: Product goals, operational axioms, and MVP scope.
 - **[Architecture Specification](architecture.md)**: Monorepo layout, process isolation, SQLite schema, and state detection.
 - **[Local Control API and MCP](control-api-mcp.md)**: Local Unix-domain socket MCP server, root/bootstrap scoping, session creation, prompt/turn lifecycle, and protocol contract.
+- **[Desktop Distribution](desktop-distribution.md)**: Local packaging and the implemented pipeline for future draft GitHub Releases.
 - **[Public-Source Privacy](public-source-privacy.md)**: Privacy standards and sanitization rules.
 
 ---
