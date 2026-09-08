@@ -274,9 +274,31 @@ The configurable MCP integration remains a main-process adapter, not a renderer 
 
 `SessionApplicationService` also retains a bounded, in-memory record of scoped MCP calls for the read-only Agent Context tab. Requests and responses are recursively bounded and secret-shaped fields are redacted. This context is deliberately lost on restart; the UI reports that loss instead of reconstructing a transcript.
 
-Child prompt orchestration is tracked as bounded, volatile turns in Main. Known interactive editors receive bracketed paste followed by a separate delayed Enter through PTY or tmux; the MCP caller never needs a second submission key. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. Completed turns stop capturing later terminal activity. Bounded long polling wakes on output or state changes. Raw output is opt-in in MCP and Agent Context. Turns and captured output are not persisted across application restarts.
+Under the target parent-session contract, root and child prompt orchestration is tracked as bounded, volatile turns in Main. Known interactive editors receive bracketed paste followed by a separate delayed Enter through PTY or tmux; the MCP caller never needs a second submission key. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. Completed turns stop capturing later terminal activity. Bounded long polling wakes on output or state changes. Raw output is opt-in in MCP and Agent Context. Turns and captured output are not persisted across application restarts. A connection authenticated with the root harness's injected `SPAWNEA_SESSION_ID` can deliver prompts only to direct children; allowing it to write into its own tmux pane would create a reentrant terminal-input path. Only an external connection that entered through absent-ID bootstrap and became bound to the root can deliver a prompt to that root. Tracked-turn reads remain authorized for the root and its direct children. Current scoped prompt authorization admits direct children only.
 
 Spawnea persists a root session's scoped identity before launching its harness, so the injected `SPAWNEA_SESSION_ID` is resolvable when the MCP client starts. If tmux startup fails, session and context persistence are rolled back. The gateway also performs bounded rechecks within the existing authentication timeout and still requires the identity to resolve to an enabled, active local root before exposing MCP tools.
+
+The target parent-session capability adds a two-phase connection state when
+`SPAWNEA_SESSION_ID` is absent. The unaffiliated phase exposes only sanitized
+creation-option discovery and single-root creation. Successful creation binds
+that connection to the new root; all subsequent operations resolve only that
+root and its direct children. The connection cannot change roots, and unrelated
+roots never enter its read model. This bootstrap origin is retained after
+binding so `spawnea_send_prompt` may target the root or a direct child. A
+connection that supplied an injected root identity may target direct children
+only. Tracked-turn reads accept turns owned by the root or a direct child for
+either connection origin. Creation remains registered after binding only as an
+exact replay of the request that established that scope. A replacement absent-ID
+connection can submit the same request, resolve its durable bootstrap record,
+and bind to the original root before the replayed response is returned.
+
+This two-phase gateway and `spawnea_create_session` registration are not present
+in the current source. Implementation must define the bootstrap discovery
+schema and remote-root eligibility. It must also persist an installation-wide
+request fingerprint, reserved session ID, and attempt state before side effects;
+reconcile in-progress attempts; retain successful records for the root lifetime;
+and retain removed-root tombstones for a defined period so retries cannot create
+a replacement root.
 
 Destructive operations use an explicit finalization mode. Integration and scoped discard require trusted renderer approval. A preserving close may carry `confirmation: "llm-validated"`; Main delegates to `SessionManager.finishSession` with its existing lifecycle guards. Same-project children have a separate close operation that preserves shared files. Integration preflight uses Git merge-tree to report conflicts before stopping a child or merging its branch. The contract and threat model are documented in [`control-api-mcp.md`](control-api-mcp.md).
 

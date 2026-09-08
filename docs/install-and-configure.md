@@ -199,6 +199,50 @@ Spawnea includes an explicit, read-only discovery tool:
 3. The scan makes no network connections and runs no commands.
 4. You review a preview of proposed changes and confirm before Spawnea writes to `config.yaml`.
 
+### Configuring the local MCP bridge
+
+The packaged macOS and Linux application includes a stdio MCP helper. Configure
+the absolute helper path as described in the [Local Control API and MCP
+contract](control-api-mcp.md). Spawnea must be running; the helper connects to
+the owner-only local Unix socket and opens no network port.
+
+For an MCP client launched inside a Spawnea root harness, Spawnea injects
+`SPAWNEA_SESSION_ID`; the connection attaches to that root and its direct
+children. Prompt delivery is restricted to direct children so the harness cannot
+write input into its own tmux pane while executing the MCP tool call. Do not
+hard-code another session's ID in shared configuration.
+
+The requested parent-session capability will also allow the same helper to start
+without `SPAWNEA_SESSION_ID`. That connection receives only bootstrap discovery
+and `spawnea_create_session`. After creating one independent root, the connection
+is pinned to it and its direct children. The creation tool then accepts only an
+exact replay of the request that established that scope. This absent-ID bootstrap
+flow is not yet implemented in the current bridge, so current installations
+still need the injected variable.
+
+Intended bootstrap configuration uses the normal helper command with no session
+environment override:
+
+```json
+{
+  "mcpServers": {
+    "spawnea": {
+      "command": "/absolute/path/to/spawnea-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+After implementation, discover eligible catalog IDs, call
+`spawnea_create_session` with a stable `clientRequestId`, retain the returned
+root ID, and use `spawnea_send_prompt` plus `spawnea_get_turn` for the root or a
+direct child on that bootstrap-bound connection. If the creation response is
+lost, launch a replacement helper without `SPAWNEA_SESSION_ID` and repeat the
+identical request. Its durable replay must bind that connection to the original
+root. The exact bootstrap discovery tool remains an implementation decision
+documented in the MCP contract.
+
 ---
 
 ## Troubleshooting
