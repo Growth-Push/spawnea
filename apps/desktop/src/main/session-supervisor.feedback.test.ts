@@ -1,5 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync, statSync, mkdirSync, chmodSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  mkdirSync,
+  chmodSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
@@ -72,6 +81,7 @@ describe('SessionSupervisor - State Feedback & Misclassification Reporting', () 
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     supervisor.stopPolling();
     dbConn.close();
     try {
@@ -164,5 +174,30 @@ describe('SessionSupervisor - State Feedback & Misclassification Reporting', () 
 
     // Fixture JSON matches formatted payload
     expect(JSON.parse(result.fixtureJson)).toEqual(savedContent);
+  });
+
+  it('does not overwrite an existing feedback report with the same generated name', async () => {
+    mkdirSync(feedbackDir, { recursive: true, mode: 0o700 });
+    const timestamp = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(timestamp);
+    const existingPath = join(feedbackDir, `state-feedback-sess-test-123-${timestamp}.json`);
+    writeFileSync(existingPath, 'existing report', { mode: 0o644 });
+
+    await expect(supervisor.saveFeedbackReport({
+      sessionId: 'sess-test-123',
+      sessionName: 'Existing report collision',
+      harness: 'claude',
+      worktreePath: '/workspace/spawnea',
+      branch: 'fix/parser',
+      detectedStatus: 'idle',
+      detectedSource: 'terminal_prompt',
+      detectedConfidence: 0.75,
+      detectionReason: 'Prompt ready',
+      expectedStatus: 'needs_input',
+      tailLines: ['sensitive terminal content'],
+      timestamp: new Date().toISOString(),
+    }, feedbackDir)).rejects.toMatchObject({ code: 'EEXIST' });
+
+    expect(readFileSync(existingPath, 'utf8')).toBe('existing report');
   });
 });

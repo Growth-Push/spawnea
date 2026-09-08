@@ -325,13 +325,16 @@ function safelyStringifyDiagnostic(value: unknown): string {
 
 /** Creates a private, asynchronous, bounded and rotating file log handler. */
 export function createFileLogHandler(filePath: string, options: FileLogOptions | boolean = {}): LogHandler {
+  const rawOptions: FileLogOptions = typeof options === 'boolean'
+    ? { wipeOnStart: options }
+    : options;
   const config: Required<FileLogOptions> = {
-    maxBytes: 2 * 1024 * 1024,
-    maxFiles: 3,
-    maxQueueEntries: 1000,
-    maxQueueBytes: 8 * 1024 * 1024,
-    ...(typeof options === 'boolean' ? { wipeOnStart: options } : options),
-  } as Required<FileLogOptions>;
+    maxBytes: rawOptions.maxBytes ?? 2 * 1024 * 1024,
+    maxFiles: rawOptions.maxFiles ?? 3,
+    maxQueueEntries: rawOptions.maxQueueEntries ?? 1000,
+    maxQueueBytes: rawOptions.maxQueueBytes ?? 8 * 1024 * 1024,
+    wipeOnStart: rawOptions.wipeOnStart ?? false,
+  };
   const queue: string[] = [];
   let queuedBytes = 0;
   let drainPromise: Promise<void> | null = null;

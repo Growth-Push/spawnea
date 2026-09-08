@@ -307,6 +307,24 @@ describe('Sensitive Data Masking', () => {
       unlinkSync(tempPath);
     });
 
+    it('preserves retention defaults when optional settings are undefined', async () => {
+      const tempPath = `/tmp/spawnea-undefined-options-log-${Date.now()}.txt`;
+      const fileHandler = createFileLogHandler(tempPath, {
+        maxBytes: undefined,
+        maxFiles: undefined,
+        maxQueueEntries: undefined,
+        maxQueueBytes: undefined,
+      });
+      const logger = createLogger('undefined-options', { handlers: [fileHandler] });
+      logger.info('first bounded message');
+      logger.info('second bounded message');
+      await fileHandler.flush?.();
+
+      expect(readFileSync(tempPath, 'utf8')).toContain('second bounded message');
+      expect(existsSync(`${tempPath}.1`)).toBe(false);
+      unlinkSync(tempPath);
+    });
+
     it('stops accepting entries before close flushes the pending queue', async () => {
       const tempPath = `/tmp/spawnea-close-log-${Date.now()}.txt`;
       const fileHandler = createFileLogHandler(tempPath);

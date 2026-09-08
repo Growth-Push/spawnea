@@ -419,7 +419,11 @@ export class SessionSupervisor {
       join(process.cwd(), '.spawnea', 'feedback');
 
     await mkdir(feedbackDir, { recursive: true, mode: 0o700 });
-    try { await chmod(feedbackDir, 0o700); } catch { /* Platform permissions may be unavailable. */ }
+    if (process.platform === 'win32') {
+      try { await chmod(feedbackDir, 0o700); } catch { /* Windows has no equivalent POSIX mode contract. */ }
+    } else {
+      await chmod(feedbackDir, 0o700);
+    }
 
     const safeSessionId = report.sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
     const timestamp = Date.now();
@@ -445,7 +449,7 @@ export class SessionSupervisor {
     };
 
     const fixtureJson = JSON.stringify(fixturePayload, null, 2);
-    await writeFile(filePath, fixtureJson, { encoding: 'utf-8', mode: 0o600 });
+    await writeFile(filePath, fixtureJson, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
     try { await chmod(filePath, 0o600); } catch { /* Platform permissions may be unavailable. */ }
 
     this.logger.info('Saved state detection feedback report fixture', {
