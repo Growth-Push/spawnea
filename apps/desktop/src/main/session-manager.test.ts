@@ -688,6 +688,39 @@ hosts:
     expect(session.branch).not.toContain('explicit-worktree-task');
   });
 
+  it('honors an explicit MCP root base branch without changing UI precedence', async () => {
+    await repos.projects.save({
+      id: 'dev-workstation:spawnea',
+      serverId: 'dev-workstation',
+      name: 'Spawnea',
+      rootPath: '/workspace/spawnea',
+      baseBranch: 'main',
+    });
+    await enableManagedWorktrees();
+    mockHost.customRules.unshift({
+      pattern: "git show-ref --verify --quiet 'refs/heads/release'",
+      response: { stdout: '', stderr: '', exitCode: 0 },
+    });
+
+    const mcpSession = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'MCP release task',
+      baseBranch: 'release',
+    }, 'mcp');
+    const uiSession = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'UI release task',
+      baseBranch: 'release',
+    });
+
+    expect(mcpSession.baseBranch).toBe('release');
+    expect(uiSession.baseBranch).toBe('main');
+  });
+
   it('keeps five isolated sessions active on distinct branches and worktrees', async () => {
     await enableManagedWorktrees();
 

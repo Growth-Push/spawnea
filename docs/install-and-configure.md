@@ -1,6 +1,6 @@
 # Installation and Configuration
 
-Spawnea is currently installed and run directly from source. Packaged binary installers (such as AppImage, `.deb`, `.dmg`, or `.exe`) and pre-built GitHub Releases are in development and are not yet published.
+No GitHub Releases are currently published. Run Spawnea from a source checkout or create a package locally with the implemented packaging commands. The tag-triggered workflow for future draft GitHub Releases is described in [Desktop Distribution](desktop-distribution.md).
 
 ---
 
@@ -47,6 +47,14 @@ pnpm start
 ```
 
 On Linux environments running Wayland, `pnpm start` automatically passes `--ozone-platform-hint=auto` to avoid Xwayland mapping delays.
+
+To create a package for the current host without publishing it:
+
+```bash
+pnpm package:desktop:host
+```
+
+Artifacts are written to the repository `release/` directory. This local command does not create or publish a GitHub Release. See [Desktop Distribution](desktop-distribution.md) for packaging details and the future release process.
 
 ---
 
@@ -198,6 +206,67 @@ Spawnea includes an explicit, read-only discovery tool:
 2. Spawnea inspects `/etc/hosts` for host aliases and checks your local `$PATH` for allowlisted agent CLIs (`claude`, `codex`, `hermes`, `opencode`, and standard shells).
 3. The scan makes no network connections and runs no commands.
 4. You review a preview of proposed changes and confirm before Spawnea writes to `config.yaml`.
+
+### Configuring the local MCP bridge
+
+Locally packaged macOS and Linux applications include a stdio MCP helper. Configure
+the package-specific command as described in the [Local Control API and MCP
+contract](control-api-mcp.md). Spawnea must be running; the helper connects to
+the owner-only local Unix socket and opens no network port.
+
+For an MCP client launched inside a Spawnea root harness, Spawnea injects
+`SPAWNEA_SESSION_ID`; the connection attaches to that root and its direct
+children. Prompt delivery is restricted to direct children so the harness cannot
+write input into its own tmux pane while executing the MCP tool call. Do not
+hard-code another session's ID in shared configuration.
+
+The same helper can start without `SPAWNEA_SESSION_ID`. That connection receives
+only bootstrap discovery and `spawnea_create_session`. After creating one
+independent root, the connection is pinned to it and its direct children. The
+creation tool then accepts only an exact replay of the request that established
+that scope.
+
+For a macOS application bundle or a directory-style package, configure the
+absolute `resources/spawnea-mcp` helper path with no arguments and no session
+environment override:
+
+```json
+{
+  "mcpServers": {
+    "spawnea": {
+      "command": "/Applications/Spawnea.app/Contents/Resources/spawnea-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+For a directory-style Linux package, use
+`/absolute/path/to/package/resources/spawnea-mcp` as `command`; `args` remains
+`[]`.
+
+For a Linux AppImage, use the absolute AppImage path and pass
+`--spawnea-mcp` as its only initial argument:
+
+```json
+{
+  "mcpServers": {
+    "spawnea": {
+      "command": "/absolute/path/to/Spawnea-0.1.0-linux-x86_64.AppImage",
+      "args": ["--spawnea-mcp"]
+    }
+  }
+}
+```
+
+Discover eligible catalog IDs with `spawnea_get_state`, call
+`spawnea_create_session` with a stable `clientRequestId`, retain the returned
+root ID, and use `spawnea_send_prompt` plus `spawnea_get_turn` for the root or a
+direct child on that bootstrap-bound connection. If the creation response is
+lost, launch a replacement helper without `SPAWNEA_SESSION_ID` and repeat the
+identical request while the same desktop process remains active. Its in-memory
+replay binds that connection to the original root. Restarting Spawnea clears the
+bootstrap retry record.
 
 ---
 

@@ -100,4 +100,88 @@ describe('packaged MCP socket bridge', () => {
     expect(errors).toEqual(['connection refused']);
     expect(exitCodes).toEqual([1]);
   });
+
+  it('authenticates in bootstrap mode when SPAWNEA_SESSION_ID is absent', async () => {
+    const previousSessionId = process.env.SPAWNEA_SESSION_ID;
+    try {
+      delete process.env.SPAWNEA_SESSION_ID;
+      const token = 'b'.repeat(64);
+      const directory = await mkdtemp(join(tmpdir(), 'spawnea-mcp-bridge-'));
+      directories.push(directory);
+      const socketPath = join(directory, 'control.sock');
+      let authenticationLine = '';
+      const server = createServer((connection) => {
+        sockets.push(connection);
+        connection.once('data', (chunk) => {
+          authenticationLine = chunk.toString('utf8');
+          connection.end();
+        });
+      });
+      servers.push(server);
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(socketPath, resolve);
+      });
+      const client = createConnection(socketPath);
+      sockets.push(client);
+      const exitCode = new Promise<number>((resolve) => {
+        attachMcpBridgeSocket(client, token, {
+          stdin: new PassThrough(),
+          stdout: new PassThrough(),
+          reportConnectionError: (error) => { throw error; },
+          setExitCode: resolve,
+        });
+      });
+
+      await expect(exitCode).resolves.toBe(0);
+      expect(authenticationLine).toBe(`${JSON.stringify({ type: 'spawnea-auth', token })}\n`);
+    } finally {
+      if (previousSessionId === undefined) delete process.env.SPAWNEA_SESSION_ID;
+      else process.env.SPAWNEA_SESSION_ID = previousSessionId;
+    }
+  });
+
+  it('preserves an explicitly empty session identity for fail-closed authentication', async () => {
+    const previousSessionId = process.env.SPAWNEA_SESSION_ID;
+    try {
+      process.env.SPAWNEA_SESSION_ID = '';
+      const token = 'c'.repeat(64);
+      const directory = await mkdtemp(join(tmpdir(), 'spawnea-mcp-bridge-'));
+      directories.push(directory);
+      const socketPath = join(directory, 'control.sock');
+      let authenticationLine = '';
+      const server = createServer((connection) => {
+        sockets.push(connection);
+        connection.once('data', (chunk) => {
+          authenticationLine = chunk.toString('utf8');
+          connection.end();
+        });
+      });
+      servers.push(server);
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(socketPath, resolve);
+      });
+      const client = createConnection(socketPath);
+      sockets.push(client);
+      const exitCode = new Promise<number>((resolve) => {
+        attachMcpBridgeSocket(client, token, {
+          stdin: new PassThrough(),
+          stdout: new PassThrough(),
+          reportConnectionError: (error) => { throw error; },
+          setExitCode: resolve,
+        });
+      });
+
+      await expect(exitCode).resolves.toBe(0);
+      expect(authenticationLine).toBe(`${JSON.stringify({
+        type: 'spawnea-auth',
+        token,
+        sessionId: '',
+      })}\n`);
+    } finally {
+      if (previousSessionId === undefined) delete process.env.SPAWNEA_SESSION_ID;
+      else process.env.SPAWNEA_SESSION_ID = previousSessionId;
+    }
+  });
 });

@@ -3,7 +3,7 @@
 Spawnea is a local-first desktop workspace for supervising and operating AI coding agents across local machines and remote servers. It brings persistent `tmux` sessions, integrated terminals, Git worktrees, file trees, diffs, session artifacts, and agent attention state into a single desktop interface.
 
 > [!NOTE]
-> Spawnea is early-stage, pre-MVP software under active development. The guides below document the behavior currently implemented in the repository. Packaged installers and one-click binaries are pending development; running Spawnea currently requires building from source.
+> Spawnea is early-stage, pre-MVP software under active development. No GitHub Releases are currently published. Run it from a source checkout or create a package locally; the implemented packaging and future draft-release pipeline are documented in [Desktop Distribution](desktop-distribution.md).
 
 ---
 
@@ -13,7 +13,7 @@ Spawnea is a local-first desktop workspace for supervising and operating AI codi
   The fastest path from a clean repository to launching a local agent session in Spawnea, plus an overview of remote sessions.
 
 - **[Installation and Configuration](install-and-configure.md)**  
-  Prerequisites, repository setup, running the desktop app, configuring the operational catalog (`config.yaml`), and troubleshooting startup.
+  Prerequisites, repository setup, running the desktop app, configuring the operational catalog (`config.yaml`) and local MCP helper, and troubleshooting startup.
 
 - **[SSH Connections](ssh.md)**  
   How Spawnea connects to remote Linux hosts over SSH, relies on remote `tmux`, enforces strict `known_hosts` verification, and maintains zero stored credentials.
@@ -36,7 +36,8 @@ Spawnea is a local-first desktop workspace for supervising and operating AI codi
 
 - **[Vision](vision.md)**: Product goals, operational axioms, and MVP scope.
 - **[Architecture Specification](architecture.md)**: Monorepo layout, process isolation, SQLite schema, and state detection.
-- **[Local Control API and MCP](control-api-mcp.md)**: Local Unix-domain socket MCP server and protocol contract.
+- **[Local Control API and MCP](control-api-mcp.md)**: Local Unix-domain socket MCP server, root/bootstrap scoping, session creation, prompt/turn lifecycle, and protocol contract.
+- **[Desktop Distribution](desktop-distribution.md)**: Local packaging and the implemented pipeline for future draft GitHub Releases.
 - **[Public-Source Privacy](public-source-privacy.md)**: Privacy standards and sanitization rules.
 
 ---

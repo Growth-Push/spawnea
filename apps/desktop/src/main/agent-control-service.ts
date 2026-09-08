@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import type { Repositories } from '@spawnea/db';
 import {
   SPAWNEA_CONTROL_API_VERSION,
+  type ControlBootstrapState,
+  type ControlCreateSessionRequest,
+  type ControlCreateSessionResult,
   type ControlCreateSessionsRequest,
   type ControlCreateSessionsResult,
   type ControlErrorRecord,
@@ -35,7 +38,10 @@ import {
   type GitDiffResult,
   type Artifact,
   type Logger,
+  type OperationalCatalog,
+  type Server,
   type Session,
+  isLoopbackHost,
 } from '@spawnea/domain';
 import type { SessionManager } from './session-manager.js';
 import { resolveHarnessOutputAdapter } from '@spawnea/state';
@@ -44,6 +50,11 @@ import { PromptSubmissionError } from '@spawnea/hosts';
 interface CachedBatchResult {
   fingerprint: string;
   result: ControlCreateSessionsResult;
+}
+
+interface CachedRootResult {
+  fingerprint: string;
+  result: ControlCreateSessionResult;
 }
 
 interface CachedChildResult {
@@ -92,6 +103,7 @@ export interface AgentControlServiceOptions {
   notifyNavigate?: (state: ControlUiState) => boolean;
   notifyFinalizationRequested?: (request: ControlFinalizationRequest) => boolean;
   notifyDataChanged?: () => boolean;
+  getActiveCatalog?: () => OperationalCatalog | null;
 }
 
 export interface ScopedAgentControlService {
@@ -115,6 +127,11 @@ export interface ScopedAgentControlService {
   getFinalizationRequest(requestId: string): ControlFinalizationRequest | Promise<ControlFinalizationRequest>;
 }
 
+export interface BootstrapAgentControlService {
+  getState(): Promise<ControlBootstrapState>;
+  createSession(request: ControlCreateSessionRequest): Promise<ControlCreateSessionResult>;
+}
+
 function toIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
@@ -131,6 +148,13 @@ function errorCode(error: unknown): string {
   return 'operation_failed';
 }
 
+function isLocalControlHost(server: Server): boolean {
+  const hasDirectSshSettings = Boolean(
+    server.sshConfigAlias || server.sshUser || server.sshPort !== 22,
+  );
+  return isLoopbackHost(server.host) && !hasDirectSshSettings;
+}
+
 export class AgentControlService {
   private readonly repos: Repositories;
   private readonly sessionManager: SessionManager;
@@ -138,7 +162,13 @@ export class AgentControlService {
   private readonly notifyNavigate?: (state: ControlUiState) => boolean;
   private readonly notifyFinalizationRequested?: (request: ControlFinalizationRequest) => boolean;
   private readonly notifyDataChanged?: () => boolean;
+  private readonly getActiveCatalog?: () => OperationalCatalog | null;
   private readonly batchResults = new Map<string, CachedBatchResult>();
+  private readonly rootResults = new Map<string, CachedRootResult>();
+  private readonly rootRequestsInFlight = new Map<string, {
+    fingerprint: string;
+    promise: Promise<ControlCreateSessionResult>;
+  }>();
   private readonly finalizationRequests = new Map<string, ControlFinalizationRequest>();
   private readonly finalizationRequestIds = new Map<string, { fingerprint: string; requestId: string }>();
   private readonly recentErrors: ControlErrorRecord[] = [];
@@ -159,6 +189,7 @@ export class AgentControlService {
     this.notifyNavigate = options.notifyNavigate;
     this.notifyFinalizationRequested = options.notifyFinalizationRequested;
     this.notifyDataChanged = options.notifyDataChanged;
+    this.getActiveCatalog = options.getActiveCatalog;
   }
 
   setUiState(state: ControlUiState): void {
@@ -173,12 +204,22 @@ export class AgentControlService {
     return this.sessionManager.closeSharedChildSession(sessionId, force);
   }
 
-  async createScopedControl(rootSessionId: string): Promise<ScopedAgentControlService> {
+  createBootstrapControl(): BootstrapAgentControlService {
+    return {
+      getState: () => this.getBootstrapState(),
+      createSession: (request) => this.createRootSession(request),
+    };
+  }
+
+  async createScopedControl(
+    rootSessionId: string,
+    options: { allowRootPrompts?: boolean } = {},
+  ): Promise<ScopedAgentControlService> {
+    const allowRootPrompts = options.allowRootPrompts === true;
     const validateRoot = async () => {
       const root = await this.repos.sessions.findById(rootSessionId);
       const server = root ? await this.repos.servers.findById(root.serverId) : null;
-      if (!root || root.parentSessionId || !server?.enabled ||
-          !['localhost', '127.0.0.1', '::1'].includes(server.host) ||
+      if (!root || root.parentSessionId || !server?.enabled || !isLocalControlHost(server) ||
           ['done', 'error', 'disconnected'].includes(root.status)) {
         throw new Error('MCP session identity is not an active local root');
       }
@@ -195,7 +236,7 @@ export class AgentControlService {
 
     const root = await this.repos.sessions.findById(rootSessionId);
     const rootServer = root ? await this.repos.servers.findById(root.serverId) : null;
-    const localHost = rootServer && ['localhost', '127.0.0.1', '::1'].includes(rootServer.host);
+    const localHost = rootServer && isLocalControlHost(rootServer);
     const active = root && !['done', 'error', 'disconnected'].includes(root.status);
     if (!root || root.parentSessionId || !rootServer?.enabled || !localHost || !active) {
       throw new Error('MCP session identity is not an active local root');
@@ -250,13 +291,13 @@ export class AgentControlService {
         if (request.parentSession && request.parentSession !== rootSessionId) throw new Error('Session is outside the authenticated MCP scope');
         if (!target) target = await this.repos.sessions.findByParentAndAlias(rootSessionId, request.target);
         if (!target) throw new Error('Session is outside the authenticated MCP scope');
-        await resolveInScope(target.id);
+        await resolveInScope(target.id, allowRootPrompts);
         return this.sendPrompt({ ...request, target: target.id });
       },
       getTurn: async (request) => {
         const turn = this.turns.get(request.turnId);
         if (!turn) throw new Error(`Turn '${request.turnId}' not found`);
-        await resolveInScope(turn.sessionId, true);
+        await resolveInScope(turn.sessionId, allowRootPrompts);
         return this.getTurn(request);
       },
       listChildFiles: async (sessionId, subPath) => {
@@ -514,6 +555,136 @@ export class AgentControlService {
     } catch (error) {
       this.rememberError('rename_session', error);
       throw error;
+    }
+  }
+
+  private async getBootstrapState(): Promise<ControlBootstrapState> {
+    const [hosts, projects, harnesses] = await Promise.all([
+      this.repos.servers.findAll(),
+      this.repos.projects.findAll(),
+      this.repos.agents.findAll(),
+    ]);
+    const localHostIds = new Set(hosts
+      .filter((host) => host.enabled && isLocalControlHost(host))
+      .map((host) => host.id));
+
+    return {
+      apiVersion: SPAWNEA_CONTROL_API_VERSION,
+      mode: 'bootstrap',
+      hosts: hosts
+        .filter((host) => localHostIds.has(host.id))
+        .map((host) => ({ id: host.id, name: host.name })),
+      projects: projects
+        .filter((project) => localHostIds.has(project.serverId) &&
+          this.isBootstrapProjectAvailable(project.id, project.serverId))
+        .map((project) => ({
+          id: project.id,
+          name: project.name,
+          hostId: project.serverId,
+          baseBranch: project.baseBranch,
+        })),
+      harnesses: harnesses
+        .filter((harness) => {
+          if (!harness.id.includes(':')) return true;
+          const hostId = harness.id.split(':', 1)[0];
+          return localHostIds.has(hostId) && this.isBootstrapHarnessAvailable(harness.id, hostId);
+        })
+        .map((harness) => ({ id: harness.id, name: harness.name })),
+    };
+  }
+
+  private isBootstrapHarnessAvailable(harnessId: string, hostId: string): boolean {
+    if (!harnessId.includes(':')) return true;
+    const prefix = `${hostId}:`;
+    if (!harnessId.startsWith(prefix)) return false;
+    const catalogHost = this.getActiveCatalog?.()?.hosts[hostId];
+    if (!catalogHost?.enabled || catalogHost.ssh) return false;
+    return catalogHost.harnesses[harnessId.slice(prefix.length)]?.enabled === true;
+  }
+
+  private isBootstrapProjectAvailable(projectId: string, hostId: string): boolean {
+    if (!projectId.includes(':')) return true;
+    const prefix = `${hostId}:`;
+    if (!projectId.startsWith(prefix)) return false;
+    const catalogHost = this.getActiveCatalog?.()?.hosts[hostId];
+    if (!catalogHost?.enabled || catalogHost.ssh) return false;
+    return catalogHost.projects[projectId.slice(prefix.length)]?.enabled === true;
+  }
+
+  private async validateBootstrapRootRequest(request: ControlCreateSessionRequest): Promise<void> {
+    const [host, project, harness] = await Promise.all([
+      this.repos.servers.findById(request.serverId),
+      this.repos.projects.findById(request.projectId),
+      this.repos.agents.findById(request.agentId),
+    ]);
+    if (!host || !host.enabled || !isLocalControlHost(host)) {
+      throw new Error('Bootstrap root creation requires an enabled local host');
+    }
+    if (!project || project.serverId !== host.id ||
+        !this.isBootstrapProjectAvailable(project.id, host.id)) {
+      throw new Error(`Project '${request.projectId}' is not available on bootstrap host '${host.id}'`);
+    }
+    if (!harness || !this.isBootstrapHarnessAvailable(harness.id, host.id)) {
+      throw new Error(`Harness '${request.agentId}' is not available on bootstrap host '${host.id}'`);
+    }
+  }
+
+  private async createRootSession(request: ControlCreateSessionRequest): Promise<ControlCreateSessionResult> {
+    const fingerprint = JSON.stringify({
+      serverId: request.serverId,
+      projectId: request.projectId,
+      agentId: request.agentId,
+      task: request.task,
+      baseBranch: request.baseBranch,
+      useWorktree: request.useWorktree,
+    });
+    const cached = this.rootResults.get(request.clientRequestId);
+    if (cached) {
+      if (cached.fingerprint !== fingerprint) {
+        throw new Error(`Client request ID '${request.clientRequestId}' was already used with a different root request`);
+      }
+      return { ...cached.result, replayed: true };
+    }
+    const inflight = this.rootRequestsInFlight.get(request.clientRequestId);
+    if (inflight) {
+      if (inflight.fingerprint !== fingerprint) {
+        throw new Error(`Client request ID '${request.clientRequestId}' was already used with a different root request`);
+      }
+      return { ...(await inflight.promise), replayed: true };
+    }
+
+    const operation = (async (): Promise<ControlCreateSessionResult> => {
+      try {
+        await this.validateBootstrapRootRequest(request);
+        const session = await this.sessionManager.createSession({
+          serverId: request.serverId,
+          projectId: request.projectId,
+          agentId: request.agentId,
+          task: request.task,
+          baseBranch: request.baseBranch,
+          useWorktree: request.useWorktree,
+        }, 'mcp');
+        const result: ControlCreateSessionResult = {
+          apiVersion: SPAWNEA_CONTROL_API_VERSION,
+          sessionCreated: true,
+          rootSessionId: session.id,
+          sessionId: session.id,
+          session: await this.toSessionView(session),
+          replayed: false,
+        };
+        this.rootResults.set(request.clientRequestId, { fingerprint, result });
+        this.notifyDataChanged?.();
+        return result;
+      } catch (error) {
+        this.rememberError('create_session', error);
+        throw error;
+      }
+    })();
+    this.rootRequestsInFlight.set(request.clientRequestId, { fingerprint, promise: operation });
+    try {
+      return await operation;
+    } finally {
+      this.rootRequestsInFlight.delete(request.clientRequestId);
     }
   }
 
@@ -1129,7 +1300,7 @@ export class AgentControlService {
     if (input.action === 'integrate' && session.parentSessionId) {
       const server = await this.repos.servers.findById(session.serverId);
       const parent = session.parentSessionId ? await this.repos.sessions.findById(session.parentSessionId) : undefined;
-      if (!server || !['localhost', '127.0.0.1', '::1'].includes(server.host) || !parent || parent.serverId !== session.serverId) {
+      if (!server || !isLocalControlHost(server) || !parent || parent.serverId !== session.serverId) {
         throw new Error('Remote child integration is unsupported; inspect evidence or close the child instead');
       }
     }
