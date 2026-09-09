@@ -37,6 +37,7 @@ export interface ManagedWorktreeIdentity {
 
 export class GitService {
   private readonly logger: Logger;
+  private static readonly statusTimeoutMs = 5000;
 
   constructor(logger?: Logger) {
     this.logger = logger || createLogger('GitService');
@@ -585,8 +586,23 @@ export class GitService {
 
     try {
       // 1. Verify that the directory is a Git repository
-      const checkRepo = await host.execute('git rev-parse --is-inside-work-tree', { cwd });
-      if (checkRepo.exitCode !== 0 || !checkRepo.stdout.trim().includes('true')) {
+      const checkRepo = await this.executeStatus(host, 'git rev-parse --is-inside-work-tree', cwd);
+      if (checkRepo.exitCode !== 0) {
+        return {
+          isGitRepo: false,
+          unavailable: true,
+          error: checkRepo.stderr.trim() || `Git repository check failed with exit code ${checkRepo.exitCode}`,
+          branch: '',
+          ahead: 0,
+          behind: 0,
+          isClean: false,
+          staged: [],
+          unstaged: [],
+          untracked: [],
+          totalChanges: 0,
+        };
+      }
+      if (!checkRepo.stdout.trim().includes('true')) {
         return {
           isGitRepo: false,
           branch: '',
@@ -601,11 +617,11 @@ export class GitService {
       }
 
       // 2. Query current branch name
-      const branchExec = await host.execute('git branch --show-current', { cwd });
+      const branchExec = await this.executeStatus(host, 'git branch --show-current', cwd);
       let branch = branchExec.stdout.trim();
       if (!branch) {
         // Fallback for detached HEAD or older git versions
-        const headExec = await host.execute('git rev-parse --short HEAD', { cwd });
+        const headExec = await this.executeStatus(host, 'git rev-parse --short HEAD', cwd);
         branch = headExec.stdout.trim() ? `HEAD (${headExec.stdout.trim()})` : 'HEAD';
       }
 
@@ -614,16 +630,18 @@ export class GitService {
       let ahead = 0;
       let behind = 0;
 
-      const upstreamExec = await host.execute(
+      const upstreamExec = await this.executeStatus(
+        host,
         'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}',
-        { cwd }
+        cwd
       );
       if (upstreamExec.exitCode === 0 && upstreamExec.stdout.trim()) {
         trackingBranch = upstreamExec.stdout.trim();
 
-        const countExec = await host.execute(
+        const countExec = await this.executeStatus(
+          host,
           'git rev-list --left-right --count HEAD...@{upstream}',
-          { cwd }
+          cwd
         );
         if (countExec.exitCode === 0) {
           const parts = countExec.stdout.trim().split(/\s+/);
@@ -635,7 +653,12 @@ export class GitService {
       }
 
       // 4. Query porcelain v1 status
-      const statusExec = await host.execute('git status --porcelain=v1 -uall', { cwd });
+      const statusExec = await this.executeStatus(host, 'git status --porcelain=v1 -uall', cwd);
+      if (statusExec.exitCode !== 0) {
+        return this.unavailableStatus(
+          statusExec.stderr.trim() || `Git status failed with exit code ${statusExec.exitCode}`
+        );
+      }
       const rawStatus = statusExec.stdout;
 
       const staged: GitFileStatus[] = [];
@@ -714,16 +737,38 @@ export class GitService {
       this.logger.error('Failed to inspect Git status', err, { serverId: host.serverId, cwd });
       return {
         isGitRepo: false,
+        unavailable: true,
+        error: err instanceof Error ? err.message : String(err),
         branch: '',
         ahead: 0,
         behind: 0,
-        isClean: true,
+        isClean: false,
         staged: [],
         unstaged: [],
         untracked: [],
         totalChanges: 0,
       };
     }
+  }
+
+  private executeStatus(host: HostAdapter, command: string, cwd: string): Promise<import('@spawnea/domain').ExecResult> {
+    return host.execute(command, { cwd, timeoutMs: GitService.statusTimeoutMs });
+  }
+
+  private unavailableStatus(error: string): GitStatusResult {
+    return {
+      isGitRepo: false,
+      unavailable: true,
+      error,
+      branch: '',
+      ahead: 0,
+      behind: 0,
+      isClean: false,
+      staged: [],
+      unstaged: [],
+      untracked: [],
+      totalChanges: 0,
+    };
   }
 
   /**

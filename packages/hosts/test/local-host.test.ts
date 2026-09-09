@@ -26,6 +26,16 @@ describe('LocalHostAdapter', () => {
     expect(result.stdout.trim()).toBe('hello from localhost');
   });
 
+  it('times out and terminates an owned local command', async () => {
+    const result = await adapter.execute(
+      `${process.execPath} -e "setTimeout(() => {}, 10000)"`,
+      { timeoutMs: 50 }
+    );
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('Command failed');
+  });
+
   it('opens a local PTY stream and receives data', async () => {
     const ptyStream = await adapter.openPty('echo "pty-test-output"', { cols: 80, rows: 24 });
 

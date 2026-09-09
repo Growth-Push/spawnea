@@ -1,5 +1,6 @@
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { StringDecoder } from 'node:string_decoder';
 import * as pty from 'node-pty';
 import type {
   HostAdapter,
@@ -92,20 +93,79 @@ export class LocalHostAdapter implements HostAdapter {
 
   async execute(command: string, options?: ExecOptions): Promise<ExecResult> {
     this.logger.debug('Executing local command', { cwd: options?.cwd, commandLength: command.length });
-    try {
-      const { stdout, stderr } = await execAsync(command, {
+    return new Promise((resolve) => {
+      let timedOut = false;
+      let stdout = '';
+      let stderr = '';
+      let outputExceeded = false;
+      let killEscalation: NodeJS.Timeout | undefined;
+      let outputBytes = 0;
+      const maxOutputBytes = options?.maxOutputBytes ?? 10 * 1024 * 1024;
+      const stdoutDecoder = new StringDecoder('utf8');
+      const stderrDecoder = new StringDecoder('utf8');
+      const child = spawn(process.env.SHELL || '/bin/sh', ['-c', command], {
         cwd: options?.cwd,
         env: options?.env ? { ...process.env, ...options.env } : process.env,
-        maxBuffer: options?.maxOutputBytes ?? 10 * 1024 * 1024,
+        detached: true,
       });
-      return { stdout, stderr, exitCode: 0 };
-    } catch (err: any) {
-      return {
-        stdout: err.stdout || '',
-        stderr: err.stderr || err.message || '',
-        exitCode: typeof err.code === 'number' ? err.code : 1,
+
+      const killProcessGroup = () => {
+        if (child.pid) {
+          try {
+            process.kill(-child.pid, 'SIGTERM');
+          } catch {
+            // The command may have exited between the timeout and cleanup.
+          }
+        }
+        if (!killEscalation) {
+          killEscalation = setTimeout(() => {
+            if (child.pid) {
+              try {
+                process.kill(-child.pid, 'SIGKILL');
+              } catch {
+                // The command may have exited before escalation.
+              }
+            }
+          }, 250);
+        }
       };
-    }
+      const appendOutput = (chunk: Buffer, target: 'stdout' | 'stderr') => {
+        if (outputExceeded) return;
+        if (outputBytes + chunk.length > maxOutputBytes) {
+          outputExceeded = true;
+          stderr += `Command output exceeded ${maxOutputBytes} bytes`;
+          killProcessGroup();
+          return;
+        }
+        outputBytes += chunk.length;
+        const value = target === 'stdout' ? stdoutDecoder.write(chunk) : stderrDecoder.write(chunk);
+        if (target === 'stdout') stdout += value;
+        else stderr += value;
+      };
+      child.stdout?.on('data', (chunk: Buffer) => appendOutput(chunk, 'stdout'));
+      child.stderr?.on('data', (chunk: Buffer) => appendOutput(chunk, 'stderr'));
+      child.on('error', (error) => {
+        stderr += error.message;
+      });
+      const timer = options?.timeoutMs && options.timeoutMs > 0
+        ? setTimeout(() => {
+          timedOut = true;
+          killProcessGroup();
+        }, options.timeoutMs)
+        : undefined;
+      child.on('close', (code) => {
+        if (timer) clearTimeout(timer);
+        if (killEscalation) clearTimeout(killEscalation);
+        stdout += stdoutDecoder.end();
+        stderr += stderrDecoder.end();
+        resolve({
+          stdout,
+          stderr: timedOut ? (stderr || `Command failed: timed out after ${options?.timeoutMs}ms`) : stderr,
+          exitCode: timedOut ? 124 : outputExceeded ? 1 : code ?? 1,
+          truncated: outputExceeded,
+        });
+      });
+    });
   }
 
   async openPty(command: string, options: PtyOptions): Promise<PtyStream> {

@@ -30,6 +30,7 @@ export interface SessionSupervisorOptions {
   stateDetector?: StateDetector;
   logger?: Logger;
   pollIntervalMs?: number;
+  maxConcurrentChecks?: number;
   feedbackDir?: string;
 }
 
@@ -48,12 +49,15 @@ export class SessionSupervisor {
   private readonly stateDetector: StateDetector;
   private readonly logger: Logger;
   private readonly defaultPollIntervalMs: number;
+  private readonly maxConcurrentChecks: number;
   private readonly feedbackDir?: string;
 
 
   private pollTimer: NodeJS.Timeout | null = null;
   private isPolling = false;
+  private pollingGeneration = 0;
   private readonly inFlightChecks: Set<string> = new Set();
+  private pollingCursor = 0;
   private readonly activityDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private readonly lastStatusMap: Map<string, SessionStatus> = new Map();
   private readonly statusChangeListeners: Set<StatusChangeListener> = new Set();
@@ -69,6 +73,7 @@ export class SessionSupervisor {
     this.tmuxManager = options.tmuxManager || new TmuxManager(this.logger.child('tmux'));
     this.stateDetector = options.stateDetector || new StateDetector();
     this.defaultPollIntervalMs = options.pollIntervalMs || 10000;
+    this.maxConcurrentChecks = Math.max(1, Math.trunc(options.maxConcurrentChecks ?? 4));
     this.feedbackDir = options.feedbackDir;
 
 
@@ -105,7 +110,7 @@ export class SessionSupervisor {
   /**
    * Evaluates and updates status for a single session.
    */
-  async checkSession(sessionId: string): Promise<SessionStatusResult> {
+  async checkSession(sessionId: string, generation = this.pollingGeneration): Promise<SessionStatusResult> {
     if (this.inFlightChecks.has(sessionId)) {
       const session = await this.repos.sessions.findById(sessionId);
       return {
@@ -119,13 +124,13 @@ export class SessionSupervisor {
 
     this.inFlightChecks.add(sessionId);
     try {
-      return await this.executeSessionInspection(sessionId);
+      return await this.executeSessionInspection(sessionId, generation);
     } finally {
       this.inFlightChecks.delete(sessionId);
     }
   }
 
-  private async executeSessionInspection(sessionId: string): Promise<SessionStatusResult> {
+  private async executeSessionInspection(sessionId: string, generation: number): Promise<SessionStatusResult> {
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
@@ -196,6 +201,10 @@ export class SessionSupervisor {
 
     const result = this.stateDetector.detectStatus(signals, harnessName);
 
+    if (generation !== this.pollingGeneration) {
+      return result;
+    }
+
     // Auto-detect candidate output artifacts from terminal tail lines
     if (this.artifactManager && tailLines && tailLines.length > 0) {
       try {
@@ -264,16 +273,29 @@ export class SessionSupervisor {
    */
   async checkAllSessions(): Promise<Map<string, SessionStatusResult>> {
     const results = new Map<string, SessionStatusResult>();
+    const generation = this.pollingGeneration;
     const allSessions = await this.repos.sessions.findAll();
 
-    for (const session of allSessions) {
-      try {
-        const res = await this.checkSession(session.id);
-        results.set(session.id, res);
-      } catch (err) {
-        this.logger.warn('Failed to check status for session', { sessionId: session.id, error: err });
+    if (allSessions.length === 0) return results;
+    const start = this.pollingCursor % allSessions.length;
+    this.pollingCursor = (start + 1) % allSessions.length;
+    const orderedSessions = [...allSessions.slice(start), ...allSessions.slice(0, start)];
+    let nextIndex = 0;
+    const workerCount = Math.min(this.maxConcurrentChecks, orderedSessions.length);
+
+    const worker = async (): Promise<void> => {
+      while (nextIndex < orderedSessions.length && generation === this.pollingGeneration) {
+        const session = orderedSessions[nextIndex++];
+        try {
+          const res = await this.checkSession(session.id, generation);
+          results.set(session.id, res);
+        } catch (err) {
+          this.logger.warn('Failed to check status for session', { sessionId: session.id, error: err });
+        }
       }
-    }
+    };
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
     return results;
   }
@@ -303,6 +325,12 @@ export class SessionSupervisor {
 
   /**
    * Stops periodic polling.
+   *
+   * An inspection already executing is intentionally not cancelled here. Host
+   * inspection commands have five-second deadlines and may be remote; stopping the
+   * scheduler and invalidating the polling generation prevents any late result
+   * from being published while allowing the owned command to finish safely.
+   * This never targets the persistent tmux session or the agent process.
    */
   stopPolling(): void {
     if (this.pollTimer) {
@@ -310,6 +338,7 @@ export class SessionSupervisor {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    this.pollingGeneration += 1;
     for (const timer of this.activityDebounceTimers.values()) {
       clearTimeout(timer);
     }

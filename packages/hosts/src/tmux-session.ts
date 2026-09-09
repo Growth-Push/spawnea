@@ -49,7 +49,7 @@ export class TmuxManager {
    * Checks whether a tmux session with the given name currently exists on the target host.
    */
   async hasSession(host: HostAdapter, sessionName: string): Promise<boolean> {
-    const result = await host.execute(`tmux has-session -t ${escapeShellArg(sessionName)}`);
+    const result = await host.execute(`tmux has-session -t ${escapeShellArg(sessionName)}`, { timeoutMs: 5000 });
     return result.exitCode === 0;
   }
 
@@ -223,7 +223,7 @@ export class TmuxManager {
    */
   async getPaneInspection(host: HostAdapter, sessionName: string): Promise<PaneInspectionResult | null> {
     const cmd = `tmux list-panes -t ${escapeShellArg(sessionName)} -F "#{pane_pid}:::#{pane_current_command}:::#{pane_dead}"`;
-    const result = await host.execute(cmd);
+    const result = await host.execute(cmd, { timeoutMs: 5000 });
     if (result.exitCode !== 0 || !result.stdout.trim()) {
       return null;
     }
@@ -246,7 +246,7 @@ export class TmuxManager {
   async listSessionPanes(host: HostAdapter): Promise<Map<string, PaneInspectionResult>> {
     const map = new Map<string, PaneInspectionResult>();
     const cmd = `tmux list-panes -a -F "#{session_name}:::#{pane_pid}:::#{pane_current_command}:::#{pane_dead}"`;
-    const result = await host.execute(cmd);
+    const result = await host.execute(cmd, { timeoutMs: 5000 });
     if (result.exitCode !== 0 || !result.stdout.trim()) {
       return map;
     }
@@ -276,7 +276,8 @@ export class TmuxManager {
     // viewed. Hermes can leave its metrics footer in the first tab while a
     // later tab is focused, so resolve the first window explicitly.
     const windowsResult = await host.execute(
-      `tmux list-windows -t ${escapeShellArg(sessionName)} -F '#{window_index}'`
+      `tmux list-windows -t ${escapeShellArg(sessionName)} -F '#{window_index}'`,
+      { timeoutMs: 5000 }
     );
     const firstWindow = windowsResult.stdout
       .split('\n')
@@ -288,7 +289,7 @@ export class TmuxManager {
     const target = firstWindow === undefined ? sessionName : `${sessionName}:${firstWindow}`;
     const safeLines = Number.isFinite(lines) ? Math.min(Math.max(0, Math.trunc(lines)), 2_147_483_647) : 25;
     const cmd = `tmux capture-pane -p -t ${escapeShellArg(target)} -S -${safeLines}`;
-    const result = await host.execute(cmd);
+    const result = await host.execute(cmd, { timeoutMs: 5000 });
     if (result.exitCode !== 0) {
       return [];
     }

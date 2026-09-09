@@ -368,9 +368,35 @@ export class SSHHostAdapter implements HostAdapter {
 
     return new Promise<ExecResult>((resolve, reject) => {
       let timeoutId: NodeJS.Timeout | null = null;
+      let commandStream: import('ssh2').ClientChannel | null = null;
+      let settled = false;
+
+      const cleanup = (): void => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      };
+
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
       if (options?.timeoutMs && options.timeoutMs > 0) {
         timeoutId = setTimeout(() => {
-          reject(new Error(`Command timed out after ${options.timeoutMs}ms`));
+          if (settled) return;
+          const error = new Error(`Command timed out after ${options.timeoutMs}ms`);
+          if (commandStream) {
+            try {
+              commandStream.close();
+            } catch {
+              // The channel may already be closing.
+            }
+          }
+          fail(error);
         }, options.timeoutMs);
       }
 
@@ -387,8 +413,18 @@ export class SSHHostAdapter implements HostAdapter {
 
       this.client!.exec(finalCommand, execOptions, (err, stream) => {
         if (err) {
-          if (timeoutId) clearTimeout(timeoutId);
-          return reject(err);
+          fail(err);
+          return;
+        }
+
+        commandStream = stream;
+        if (settled) {
+          try {
+            stream.close();
+          } catch {
+            // The channel may already be closing.
+          }
+          return;
         }
 
         let stdout = '';
@@ -423,7 +459,9 @@ export class SSHHostAdapter implements HostAdapter {
         });
 
         stream.on('close', (exitCode: number) => {
-          if (timeoutId) clearTimeout(timeoutId);
+          if (settled) return;
+          settled = true;
+          cleanup();
           resolve({
             stdout,
             stderr,
@@ -433,8 +471,7 @@ export class SSHHostAdapter implements HostAdapter {
         });
 
         stream.on('error', (streamErr: Error) => {
-          if (timeoutId) clearTimeout(timeoutId);
-          reject(streamErr);
+          fail(streamErr);
         });
       });
     });
