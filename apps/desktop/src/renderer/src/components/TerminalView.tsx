@@ -18,6 +18,7 @@ import { ReconnectionBanner } from './ReconnectionBanner.js';
 interface TerminalViewProps {
   session: Session;
   agent?: Agent;
+  uiZoom?: number;
   clipboardBridgeAvailable?: boolean;
   onAttach?: (sessionId: string) => void;
   onDetach?: (sessionId: string) => void;
@@ -34,6 +35,12 @@ const HTTP_URL_PATTERN = /https?:\/\/[^\s<>"'`]+/g;
 const OSC52_MAX_DECODED_LENGTH = 1024 * 1024;
 const OSC52_MAX_ENCODED_LENGTH = 4 * Math.ceil(OSC52_MAX_DECODED_LENGTH / 3);
 const OSC52_CLIPBOARD_TARGET_PATTERN = /^(?:c)?$/;
+
+type ZoomAdjustedMouseEvent = MouseEvent & {
+  spawneaOriginalClientX?: number;
+  spawneaOriginalClientY?: number;
+  spawneaCoordinatesCompensated?: boolean;
+};
 
 export function decodeOsc52Clipboard(data: string): string | null {
   const separatorIndex = data.indexOf(';');
@@ -103,6 +110,7 @@ export function createHttpLinkProvider(
 export function TerminalView({
   session,
   agent,
+  uiZoom,
   clipboardBridgeAvailable = false,
   onAttach,
   onDetach: _onDetach,
@@ -156,6 +164,51 @@ export function TerminalView({
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const terminalZoom = uiZoom ?? 1;
+
+  const compensateXtermMouseCoordinates = (event: MouseEvent) => {
+    if (terminalZoom === 1) return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const nativeEvent = event as ZoomAdjustedMouseEvent;
+    if (nativeEvent.spawneaCoordinatesCompensated) return;
+    nativeEvent.spawneaOriginalClientX = nativeEvent.clientX;
+    nativeEvent.spawneaOriginalClientY = nativeEvent.clientY;
+    try {
+      Object.defineProperties(nativeEvent, {
+        clientX: { configurable: true, value: rect.left + (nativeEvent.clientX - rect.left) / terminalZoom },
+        clientY: { configurable: true, value: rect.top + (nativeEvent.clientY - rect.top) / terminalZoom },
+        spawneaCoordinatesCompensated: { configurable: true, value: true },
+      });
+    } catch {
+      // Some browser event implementations expose read-only coordinates.
+    }
+  };
+
+  useEffect(() => {
+    const handleDocumentMouseMove = (event: MouseEvent) => {
+      if (leftMouseDownRef.current) compensateXtermMouseCoordinates(event);
+    };
+    const handleDocumentMouseUp = (event: MouseEvent) => {
+      if (leftMouseDownRef.current) {
+        compensateXtermMouseCoordinates(event);
+        leftMouseDownRef.current = false;
+      }
+    };
+    const handleWindowBlur = () => {
+      leftMouseDownRef.current = false;
+    };
+
+    document.addEventListener('mousemove', handleDocumentMouseMove, true);
+    document.addEventListener('mouseup', handleDocumentMouseUp, true);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      document.removeEventListener('mousemove', handleDocumentMouseMove, true);
+      document.removeEventListener('mouseup', handleDocumentMouseUp, true);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [terminalZoom]);
 
   const showToast = useCallback((msg: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -209,6 +262,23 @@ export function TerminalView({
       unRecon();
     };
   }, [session.serverId]);
+
+  // CSS zoom changes do not reliably trigger ResizeObserver. Refit xterm
+  // explicitly so its grid follows the complete workspace scale change.
+  useEffect(() => {
+    const fitAddon = fitAddonRef.current;
+    const terminal = terminalInstanceRef.current;
+    if (!fitAddon || !terminal) return;
+
+    try {
+      fitAddon.fit();
+      if (activeChannelIdRef.current && window.spawneaApi?.resizePty) {
+        window.spawneaApi.resizePty(activeChannelIdRef.current, terminal.cols, terminal.rows);
+      }
+    } catch {
+      // Ignore fit errors while the terminal is hidden or being disposed.
+    }
+  }, [uiZoom]);
 
   // Clean up any existing listeners, active streams, and pending timers
   const cleanupActiveConnection = useCallback(() => {
@@ -683,9 +753,10 @@ export function TerminalView({
       lastContextSelectionTextRef.current = sel;
     }
 
+    const nativeEvent = e.nativeEvent as ZoomAdjustedMouseEvent;
     setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
+      x: (nativeEvent.spawneaOriginalClientX ?? e.clientX) / terminalZoom,
+      y: (nativeEvent.spawneaOriginalClientY ?? e.clientY) / terminalZoom,
       hasSelection: Boolean(sel && sel.trim().length > 0),
       selectionText: sel,
     });
@@ -833,9 +904,20 @@ export function TerminalView({
 
       {/* Terminal Viewport Container */}
       <div
-        onMouseDownCapture={handleTerminalMouseDown}
-        onMouseMoveCapture={handleTerminalMouseMove}
-        onMouseUpCapture={handleTerminalMouseUp}
+        onMouseDownCapture={(e) => {
+          compensateXtermMouseCoordinates(e.nativeEvent);
+          handleTerminalMouseDown(e);
+        }}
+        onMouseMoveCapture={(e) => {
+          compensateXtermMouseCoordinates(e.nativeEvent);
+          handleTerminalMouseMove(e);
+        }}
+        onMouseUpCapture={(e) => {
+          compensateXtermMouseCoordinates(e.nativeEvent);
+          handleTerminalMouseUp(e);
+        }}
+        onContextMenuCapture={(e) => compensateXtermMouseCoordinates(e.nativeEvent)}
+        onWheelCapture={(e) => compensateXtermMouseCoordinates(e.nativeEvent)}
         onContextMenu={handleContextMenu}
         className="relative flex-1 w-full h-full overflow-hidden bg-[#090d13]"
       >
@@ -863,6 +945,7 @@ export function TerminalView({
           <TerminalContextMenu
             x={contextMenu.x}
             y={contextMenu.y}
+            uiZoom={terminalZoom}
             hasSelection={contextMenu.hasSelection}
             onCopy={handleCopy}
             onPaste={handlePaste}

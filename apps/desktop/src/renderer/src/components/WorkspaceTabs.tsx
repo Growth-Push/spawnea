@@ -51,6 +51,7 @@ interface WorkspaceTabsProps {
   server?: Server;
   project?: Project;
   agent?: Agent;
+  uiZoom?: number;
   hasUncommittedChanges?: boolean;
   gitChangeCount?: number;
   gitAhead?: number;
@@ -115,6 +116,7 @@ export function WorkspaceTabs({
   server,
   project,
   agent,
+  uiZoom,
   hasUncommittedChanges = false,
   gitChangeCount = hasUncommittedChanges ? 1 : 0,
   gitAhead = 0,
@@ -613,6 +615,7 @@ export function WorkspaceTabs({
               <TerminalView
                 session={session}
                 agent={agent}
+                uiZoom={uiZoom}
                 clipboardBridgeAvailable={clipboardBridgeState.sessionId === session?.id && clipboardBridgeState.available}
                 onAttach={onAttach}
                 onDetach={onDetach}
@@ -661,6 +664,7 @@ export function WorkspaceTabs({
           <ArtifactGallery
             sessionId={session.id}
             artifacts={artifacts}
+            uiZoom={uiZoom}
             isLoading={isLoadingArtifacts}
             onRefresh={() => fetchArtifacts(session.id)}
           />
@@ -834,6 +838,7 @@ export function WorkspaceTabs({
         <ArtifactPreviewModal
           artifact={previewingArtifact}
           sessionId={session.id}
+          uiZoom={uiZoom}
           onClose={() => setPreviewingArtifact(null)}
           onDelete={async (id) => {
             if (window.spawneaApi?.deleteArtifact) {

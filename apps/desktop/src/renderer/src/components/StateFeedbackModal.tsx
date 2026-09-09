@@ -29,6 +29,7 @@ import {
 
 interface StateFeedbackModalProps {
   isOpen: boolean;
+  uiZoom?: number;
   session: Session | null;
   server?: Server;
   agent?: Agent;
@@ -88,6 +89,7 @@ const STATUS_OPTIONS: {
 
 export function StateFeedbackModal({
   isOpen,
+  uiZoom = 1,
   session,
   server: _server,
   agent,
@@ -232,6 +234,7 @@ export function StateFeedbackModal({
       }}
     >
       <div
+        style={{ maxHeight: `${90 / uiZoom}vh` }}
         className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
         role="dialog"
         aria-modal="true"

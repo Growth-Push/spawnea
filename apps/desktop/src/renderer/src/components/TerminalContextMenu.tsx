@@ -11,6 +11,7 @@ import {
 export interface TerminalContextMenuProps {
   x: number;
   y: number;
+  uiZoom?: number;
   hasSelection: boolean;
   onCopy: () => void;
   onPaste: () => void;
@@ -24,6 +25,7 @@ export interface TerminalContextMenuProps {
 export function TerminalContextMenu({
   x,
   y,
+  uiZoom = 1,
   hasSelection,
   onCopy,
   onPaste,
@@ -60,8 +62,8 @@ export function TerminalContextMenu({
   // Adjust positioning to avoid overflowing viewport
   const menuWidth = 240;
   const menuHeight = 220;
-  const screenW = window.innerWidth;
-  const screenH = window.innerHeight;
+  const screenW = window.innerWidth / uiZoom;
+  const screenH = window.innerHeight / uiZoom;
 
   const posX = x + menuWidth > screenW ? Math.max(10, screenW - menuWidth - 10) : x;
   const posY = y + menuHeight > screenH ? Math.max(10, screenH - menuHeight - 10) : y;

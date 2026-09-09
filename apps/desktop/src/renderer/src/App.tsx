@@ -37,6 +37,27 @@ import { ControlFinalizationModal } from './components/ControlFinalizationModal'
 import { spawneaSessionTabKey } from './product-storage';
 import { Terminal, Plus } from 'lucide-react';
 
+export const UI_ZOOM_STORAGE_KEY = 'spawnea:ui:zoom';
+export const UI_ZOOM_DEFAULT = 1;
+export const UI_ZOOM_MIN = 0.8;
+export const UI_ZOOM_MAX = 1.5;
+export const UI_ZOOM_STEP = 0.1;
+
+export function clampUiZoom(value: number): number {
+  return Math.min(UI_ZOOM_MAX, Math.max(UI_ZOOM_MIN, value));
+}
+
+function readStoredUiZoom(): number {
+  try {
+    const storedValue = localStorage.getItem(UI_ZOOM_STORAGE_KEY);
+    if (storedValue === null) return UI_ZOOM_DEFAULT;
+    const stored = Number(storedValue);
+    return Number.isFinite(stored) ? clampUiZoom(stored) : UI_ZOOM_DEFAULT;
+  } catch {
+    return UI_ZOOM_DEFAULT;
+  }
+}
+
 /**
  * Orders sessions hierarchically for keyboard cycling (Ctrl-Tab / Ctrl-Shift-Tab):
  * Root (father) session first, immediately followed by its children in order (child-1, child-2, ..., child-N).
@@ -93,6 +114,7 @@ export function App(): React.JSX.Element {
   const [servers, setServers] = useState<Server[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [uiZoom, setUiZoom] = useState(readStoredUiZoom);
   const [hostInfoMap, setHostInfoMap] = useState<Record<string, HostSystemInfo>>({});
   const [hostHealthMap, setHostHealthMap] = useState<Record<string, HostHealthResult>>({});
   const [gitDirtyBySessionId, setGitDirtyBySessionId] = useState<Record<string, boolean>>({});
@@ -962,6 +984,12 @@ export function App(): React.JSX.Element {
     } catch {}
   }, [isSidebarCollapsed]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(UI_ZOOM_STORAGE_KEY, String(uiZoom));
+    } catch {}
+  }, [uiZoom]);
+
   // Global keyboard navigation shortcuts:
   // - Quick Switcher: Ctrl+P / Cmd+P / Ctrl+K / Cmd+K
   // - Workspace Tabs: Alt+1..6
@@ -970,6 +998,25 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isCtrl = e.ctrlKey || e.metaKey;
+
+      // Global UI zoom: Ctrl/Cmd+plus, Ctrl/Cmd+minus, and Ctrl/Cmd+0 reset.
+      // Handle this before terminal and session shortcuts so zoom keys never
+      // reach the PTY or get interpreted as session navigation.
+      if (isCtrl && !e.altKey && (
+        e.key === '+' || (e.key === '=' && e.shiftKey) ||
+        e.key === '-' || (e.key === '_' && e.shiftKey) ||
+        e.key === '0'
+      )) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === '0') {
+          setUiZoom(UI_ZOOM_DEFAULT);
+        } else {
+          const direction = e.key === '+' || e.key === '=' ? 1 : -1;
+          setUiZoom((current) => clampUiZoom(current + direction * UI_ZOOM_STEP));
+        }
+        return;
+      }
 
       // 1. Quick Switcher: Ctrl+P / Cmd+P / Ctrl+K / Cmd+K
       if (isCtrl && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P' || e.key === 'k' || e.key === 'K')) {
@@ -1089,7 +1136,16 @@ export function App(): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-screen w-screen bg-[#0d1117] text-[#c9d1d9] overflow-hidden select-none font-sans">
+    <div
+      data-testid="spawnea-ui-root"
+      data-ui-zoom={uiZoom}
+      style={{
+        zoom: uiZoom,
+        width: `${100 / uiZoom}vw`,
+        height: `${100 / uiZoom}vh`,
+      }}
+      className="flex h-screen w-screen bg-[#0d1117] text-[#c9d1d9] overflow-hidden select-none font-sans"
+    >
       {/* Navigation Sidebar */}
       <Sidebar
         sessions={sessions}
@@ -1219,6 +1275,7 @@ export function App(): React.JSX.Element {
               server={activeServer}
               project={activeProject}
               agent={activeAgent}
+              uiZoom={uiZoom}
               hasUncommittedChanges={activeSession ? !gitUnavailableBySessionId[activeSession.id] && gitDirtyBySessionId[activeSession.id] : false}
               gitChangeCount={activeSession ? gitChangeCountBySessionId[activeSession.id] : 0}
               gitAhead={activeSession ? gitSyncBySessionId[activeSession.id]?.ahead : 0}
@@ -1238,6 +1295,7 @@ export function App(): React.JSX.Element {
       {/* Quick Switcher Modal (Ctrl+P / Ctrl+K / Cmd+P / Cmd+K) */}
       <QuickSwitcherModal
         isOpen={isQuickSwitcherOpen}
+        uiZoom={uiZoom}
         onClose={() => setIsQuickSwitcherOpen(false)}
         sessions={sessions}
         servers={servers}
@@ -1278,6 +1336,7 @@ export function App(): React.JSX.Element {
 
       <LocalDiscoveryModal
         isOpen={isLocalDiscoveryOpen}
+        uiZoom={uiZoom}
         catalog={catalog}
         onClose={() => setIsLocalDiscoveryOpen(false)}
         onApplied={handleLocalDiscoveryApplied}
@@ -1292,6 +1351,7 @@ export function App(): React.JSX.Element {
       {/* Adopt External Tmux Session Modal */}
       <AdoptSessionModal
         isOpen={isAdoptModalOpen}
+        uiZoom={uiZoom}
         onClose={() => setIsAdoptModalOpen(false)}
         onSubmit={handleAdoptSession}
         servers={servers}
@@ -1336,6 +1396,7 @@ export function App(): React.JSX.Element {
       {/* Finish / Integrate Managed Worktree Session Modal (Task 6.2.1) */}
       <FinishSessionModal
         isOpen={sessionToFinish !== null}
+        uiZoom={uiZoom}
         session={sessionToFinish}
         onClose={() => {
           setSessionToFinish(null);
@@ -1379,6 +1440,7 @@ export function App(): React.JSX.Element {
       {/* State Misclassification Feedback Modal (FG-4.2.5) */}
       <StateFeedbackModal
         isOpen={isFeedbackModalOpen}
+        uiZoom={uiZoom}
         session={activeSession}
         server={activeServer}
         agent={activeAgent}

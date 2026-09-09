@@ -9,6 +9,7 @@ import { AlertCircle, CheckCircle2, Loader2, Radar, ShieldCheck, X } from 'lucid
 
 interface LocalDiscoveryModalProps {
   isOpen: boolean;
+  uiZoom?: number;
   catalog: OperationalCatalog | null;
   onClose: () => void;
   onApplied: () => Promise<void>;
@@ -17,7 +18,7 @@ interface LocalDiscoveryModalProps {
 type HostDraft = LocalDiscoverySelection['hosts'][number] & { selected: boolean };
 type HarnessDraft = LocalDiscoverySelection['harnesses'][number] & { selected: boolean };
 
-export function LocalDiscoveryModal({ isOpen, catalog, onClose, onApplied }: LocalDiscoveryModalProps): React.JSX.Element | null {
+export function LocalDiscoveryModal({ isOpen, uiZoom = 1, catalog, onClose, onApplied }: LocalDiscoveryModalProps): React.JSX.Element | null {
   const [phase, setPhase] = useState<'intro' | 'selection' | 'preview'>('intro');
   const [scan, setScan] = useState<LocalDiscoveryScanResult | null>(null);
   const [hosts, setHosts] = useState<HostDraft[]>([]);
@@ -144,7 +145,10 @@ export function LocalDiscoveryModal({ isOpen, catalog, onClose, onApplied }: Loc
 
   return (
     <div role="dialog" aria-modal="true" aria-labelledby="local-discovery-title" className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div
+        style={{ maxHeight: `${90 / uiZoom}vh` }}
+        className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
+      >
         <div className="h-14 px-5 border-b border-[#30363d] flex items-center justify-between bg-[#12161c] shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-md bg-cyan-500/20 text-cyan-300 flex items-center justify-center"><Radar className="w-4 h-4" /></div>

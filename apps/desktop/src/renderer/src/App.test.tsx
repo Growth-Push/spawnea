@@ -1,7 +1,14 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { App, getHierarchicalSessionOrder } from './App';
+import {
+  App,
+  getHierarchicalSessionOrder,
+  UI_ZOOM_DEFAULT,
+  UI_ZOOM_MAX,
+  UI_ZOOM_MIN,
+  UI_ZOOM_STORAGE_KEY,
+} from './App';
 import { StatusBadge } from './components/StatusBadge';
 import type { Session, Server, Project, Agent, SessionStatus } from '@spawnea/domain';
 
@@ -2322,6 +2329,57 @@ describe('App Desktop Shell', () => {
 
     await waitFor(() => {
       expect(mockUnadopt).toHaveBeenCalledWith('sess-ext-1');
+    });
+  });
+
+  it('changes and persists the complete UI zoom with Ctrl-plus and Ctrl-minus', async () => {
+    window.spawneaApi = createMockSpawneaApi();
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('spawnea-ui-root')).toBeDefined();
+    });
+
+    const root = screen.getByTestId('spawnea-ui-root');
+    expect(root.getAttribute('data-ui-zoom')).toBe(String(UI_ZOOM_DEFAULT));
+
+    fireEvent.keyDown(window, { key: '+', ctrlKey: true });
+    expect(root.getAttribute('data-ui-zoom')).toBe('1.1');
+    expect(root.style.zoom).toBe('1.1');
+    expect(root.style.width).toBe(`${100 / 1.1}vw`);
+    expect(root.style.height).toBe(`${100 / 1.1}vh`);
+    expect(localStorage.getItem(UI_ZOOM_STORAGE_KEY)).toBe('1.1');
+
+    fireEvent.keyDown(window, { key: '-', ctrlKey: true });
+    expect(root.getAttribute('data-ui-zoom')).toBe('1');
+    expect(localStorage.getItem(UI_ZOOM_STORAGE_KEY)).toBe('1');
+
+    fireEvent.keyDown(window, { key: '_', ctrlKey: true, shiftKey: true });
+    expect(root.getAttribute('data-ui-zoom')).toBe(String(UI_ZOOM_DEFAULT - 0.1));
+
+    fireEvent.keyDown(window, { key: '0', ctrlKey: true });
+    expect(root.getAttribute('data-ui-zoom')).toBe(String(UI_ZOOM_DEFAULT));
+  });
+
+  it('keeps UI zoom within bounds and restores persisted zoom on mount', async () => {
+    localStorage.setItem(UI_ZOOM_STORAGE_KEY, String(UI_ZOOM_MAX));
+    window.spawneaApi = createMockSpawneaApi();
+    const { unmount } = render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('spawnea-ui-root').getAttribute('data-ui-zoom')).toBe(String(UI_ZOOM_MAX));
+    });
+
+    for (let index = 0; index < 5; index += 1) {
+      fireEvent.keyDown(window, { key: '+', ctrlKey: true });
+    }
+    expect(screen.getByTestId('spawnea-ui-root').getAttribute('data-ui-zoom')).toBe(String(UI_ZOOM_MAX));
+
+    unmount();
+    localStorage.setItem(UI_ZOOM_STORAGE_KEY, String(UI_ZOOM_MIN));
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('spawnea-ui-root').getAttribute('data-ui-zoom')).toBe(String(UI_ZOOM_MIN));
     });
   });
 });
