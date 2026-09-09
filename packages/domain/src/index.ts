@@ -215,6 +215,8 @@ export interface GitFileStatus {
 
 export interface GitStatusResult {
   isGitRepo: boolean;
+  unavailable?: boolean;
+  error?: string;
   branch: string;
   trackingBranch?: string;
   ahead: number;

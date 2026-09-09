@@ -98,6 +98,7 @@ export function App(): React.JSX.Element {
   const [gitDirtyBySessionId, setGitDirtyBySessionId] = useState<Record<string, boolean>>({});
   const [gitChangeCountBySessionId, setGitChangeCountBySessionId] = useState<Record<string, number>>({});
   const [gitSyncBySessionId, setGitSyncBySessionId] = useState<Record<string, { ahead: number; behind: number }>>({});
+  const [gitUnavailableBySessionId, setGitUnavailableBySessionId] = useState<Record<string, boolean>>({});
   const [gitRefreshNonce, setGitRefreshNonce] = useState(0);
   const [statusDetailsMap, setStatusDetailsMap] = useState<Record<string, import('@spawnea/domain').SessionStatusResult>>({});
   const [catalog, setCatalog] = useState<OperationalCatalog | null>(null);
@@ -127,6 +128,7 @@ export function App(): React.JSX.Element {
   const [startupError, setStartupError] = useState<string | null>(null);
   const [controlFinalizationRequests, setControlFinalizationRequests] = useState<ControlFinalizationRequest[]>([]);
   const gitRequestGeneration = useRef(0);
+  const activeGitRequests = useRef(new Map<string, Promise<GitStatusResult>>());
 
   const handleGitStatusChange = useCallback((sessionId: string, status: GitStatusResult) => {
     gitRequestGeneration.current += 1;
@@ -141,6 +143,10 @@ export function App(): React.JSX.Element {
     setGitSyncBySessionId((current) => ({
       ...current,
       [sessionId]: { ahead: status.ahead, behind: status.behind },
+    }));
+    setGitUnavailableBySessionId((current) => ({
+      ...current,
+      [sessionId]: Boolean(status.unavailable),
     }));
   }, []);
 
@@ -359,19 +365,46 @@ export function App(): React.JSX.Element {
       setGitDirtyBySessionId({});
       setGitChangeCountBySessionId({});
       setGitSyncBySessionId({});
+      setGitUnavailableBySessionId({});
       return;
     }
 
     const sessionIds = sessionIdsKey.split('\0');
     let cancelled = false;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    const gitStatusTimeoutMs = 6000;
+    const getBoundedGitStatus = async (sessionId: string) => {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let request = activeGitRequests.current.get(sessionId);
+      if (!request) {
+        request = getGitStatus(sessionId);
+        activeGitRequests.current.set(sessionId, request);
+        // A timed-out request remains registered until it settles. Git status is
+        // best effort: never duplicate a stuck host operation just to retry it.
+        void request.then(() => undefined, () => undefined).finally(() => {
+          if (activeGitRequests.current.get(sessionId) === request) {
+            activeGitRequests.current.delete(sessionId);
+          }
+        });
+      }
+      try {
+        return await Promise.race([
+          request,
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error(`Git status timed out after ${gitStatusTimeoutMs}ms`)), gitStatusTimeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+      }
+    };
 
     const refreshGitStatus = async (): Promise<void> => {
       const requestGeneration = ++gitRequestGeneration.current;
       const results = await Promise.allSettled(
         sessionIds.map(async (sessionId) => ({
           sessionId,
-          status: await getGitStatus(sessionId),
+          status: await getBoundedGitStatus(sessionId),
         }))
       );
 
@@ -381,44 +414,54 @@ export function App(): React.JSX.Element {
         return;
       }
 
-      setGitDirtyBySessionId((current) => {
+      setGitDirtyBySessionId(() => {
         const next: Record<string, boolean> = {};
         results.forEach((result, index) => {
           const sessionId = sessionIds[index];
           if (result.status === 'fulfilled') {
             next[sessionId] = result.value.status.isGitRepo && !result.value.status.isClean;
-          } else if (sessionId in current) {
-            next[sessionId] = current[sessionId];
+          } else {
+            next[sessionId] = false;
           }
         });
         return next;
       });
 
-      setGitChangeCountBySessionId((current) => {
+      setGitChangeCountBySessionId(() => {
         const next: Record<string, number> = {};
         results.forEach((result, index) => {
           const sessionId = sessionIds[index];
           if (result.status === 'fulfilled') {
-            next[sessionId] = result.value.status.isGitRepo ? result.value.status.totalChanges : 0;
-          } else if (sessionId in current) {
-            next[sessionId] = current[sessionId];
+            next[sessionId] = result.value.status.unavailable ? 0 : result.value.status.isGitRepo ? result.value.status.totalChanges : 0;
+          } else {
+            next[sessionId] = 0;
           }
         });
         return next;
       });
 
-      setGitSyncBySessionId((current) => {
+      setGitSyncBySessionId(() => {
         const next: Record<string, { ahead: number; behind: number }> = {};
         results.forEach((result, index) => {
           const sessionId = sessionIds[index];
           if (result.status === 'fulfilled') {
-            next[sessionId] = {
+            next[sessionId] = result.value.status.unavailable ? { ahead: 0, behind: 0 } : {
               ahead: result.value.status.ahead,
               behind: result.value.status.behind,
             };
-          } else if (sessionId in current) {
-            next[sessionId] = current[sessionId];
+          } else {
+            next[sessionId] = { ahead: 0, behind: 0 };
           }
+        });
+        return next;
+      });
+
+      setGitUnavailableBySessionId(() => {
+        const next: Record<string, boolean> = {};
+        results.forEach((result, index) => {
+          const sessionId = sessionIds[index];
+          next[sessionId] = result.status === 'rejected'
+            || (result.status === 'fulfilled' && Boolean(result.value.status.unavailable));
         });
         return next;
       });
@@ -1157,7 +1200,7 @@ export function App(): React.JSX.Element {
               project={activeProject}
               agent={activeAgent}
               hostInfo={activeSession ? hostInfoMap[activeSession.serverId] : undefined}
-              hasUncommittedChanges={activeSession ? gitDirtyBySessionId[activeSession.id] : false}
+              hasUncommittedChanges={activeSession ? !gitUnavailableBySessionId[activeSession.id] && gitDirtyBySessionId[activeSession.id] : false}
               gitChangeCount={activeSession ? gitChangeCountBySessionId[activeSession.id] : 0}
               onDetach={handleDetachSession}
               onStop={handleRequestStopSession}
@@ -1176,7 +1219,7 @@ export function App(): React.JSX.Element {
               server={activeServer}
               project={activeProject}
               agent={activeAgent}
-              hasUncommittedChanges={activeSession ? gitDirtyBySessionId[activeSession.id] : false}
+              hasUncommittedChanges={activeSession ? !gitUnavailableBySessionId[activeSession.id] && gitDirtyBySessionId[activeSession.id] : false}
               gitChangeCount={activeSession ? gitChangeCountBySessionId[activeSession.id] : 0}
               gitAhead={activeSession ? gitSyncBySessionId[activeSession.id]?.ahead : 0}
               gitBehind={activeSession ? gitSyncBySessionId[activeSession.id]?.behind : 0}

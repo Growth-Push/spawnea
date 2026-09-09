@@ -55,6 +55,20 @@ export function GitStatusView({
     );
   }
 
+  if (status?.unavailable) {
+    return (
+      <div className="p-4 bg-amber-950/20 border border-amber-800/40 rounded-lg text-xs text-amber-200 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>Git status is unavailable for this session.</span>
+        </div>
+        <button type="button" onClick={onRefresh} className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] text-zinc-200 rounded text-[11px] transition-colors cursor-pointer">
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   if (!status?.isGitRepo) {
     return (
       <div className="p-4 bg-[#161b22] border border-[#30363d] rounded-lg text-xs text-zinc-400 flex items-center gap-3">

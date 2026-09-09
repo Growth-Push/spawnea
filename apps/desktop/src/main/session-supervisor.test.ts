@@ -195,4 +195,87 @@ describe('SessionSupervisor', () => {
     supervisor.stopPolling();
     setIntervalSpy.mockRestore();
   });
+
+  it('limits concurrent session inspections and rotates the polling start point', async () => {
+    const sessions = await Promise.all(Array.from({ length: 5 }, (_, index) => sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: `Inspection fairness fixture ${index}`,
+    })));
+    let activeInspections = 0;
+    let peakInspections = 0;
+    const hasSessionCommands: string[] = [];
+    mockHost.customRules.push({
+      pattern: 'tmux has-session -t',
+      response: (command) => {
+        hasSessionCommands.push(command);
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    });
+    mockHost.customRules.push({
+      pattern: 'tmux list-panes -t',
+      response: async () => {
+        activeInspections += 1;
+        peakInspections = Math.max(peakInspections, activeInspections);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        activeInspections -= 1;
+        return { stdout: '9999:::claude:::1\n', stderr: '', exitCode: 0 };
+      },
+    });
+    const boundedSupervisor = new SessionSupervisor({
+      repositories: repos,
+      sessionManager,
+      contextStore,
+      ptyBroker,
+      maxConcurrentChecks: 2,
+    });
+
+    const firstPass = await boundedSupervisor.checkAllSessions();
+    const secondPass = await boundedSupervisor.checkAllSessions();
+
+    expect(firstPass.size).toBe(sessions.length);
+    expect(secondPass.size).toBe(sessions.length);
+    expect(peakInspections).toBeLessThanOrEqual(2);
+    expect(hasSessionCommands[0]).not.toBe(hasSessionCommands[sessions.length]);
+    expect(mockHost.executedCommands.filter(({ command }) => command.includes('tmux has-session')).length)
+      .toBeGreaterThanOrEqual(sessions.length * 2);
+  });
+
+  it('suppresses an in-flight inspection result after polling stops', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Stop polling cleanup fixture',
+    });
+    let inspectionStarted!: () => void;
+    const inspectionStartedPromise = new Promise<void>((resolve) => {
+      inspectionStarted = resolve;
+    });
+    let releaseInspection!: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+    const inspectionBlocked = new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+      releaseInspection = resolve;
+    });
+    mockHost.customRules.push({
+      pattern: 'tmux has-session -t',
+      response: async () => {
+        inspectionStarted();
+        return inspectionBlocked;
+      },
+    });
+
+    const check = supervisor.checkSession(session.id);
+    await inspectionStartedPromise;
+    supervisor.stopPolling();
+    releaseInspection({ stdout: '', stderr: '', exitCode: 0 });
+    await check;
+
+    expect(mockWebContents.send).not.toHaveBeenCalledWith(
+      'session:statusChanged',
+      session.id,
+      expect.anything(),
+      expect.anything()
+    );
+  });
 });

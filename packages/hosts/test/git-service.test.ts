@@ -87,7 +87,7 @@ describe('GitService', () => {
     });
   });
 
-  it('handles non-git directories gracefully without errors', async () => {
+  it('reports non-Git directories without marking them unavailable', async () => {
     mockHost.customRules.push({
       pattern: 'git rev-parse --is-inside-work-tree',
       response: { stdout: '', stderr: 'fatal: not a git repository', exitCode: 128 },
@@ -102,6 +102,19 @@ describe('GitService', () => {
     expect(status.staged).toEqual([]);
     expect(status.unstaged).toEqual([]);
     expect(status.untracked).toEqual([]);
+  });
+
+  it('reports Git command failures as unavailable instead of clean', async () => {
+    mockHost.customRules.push({
+      pattern: 'git rev-parse --is-inside-work-tree',
+      response: { stdout: '', stderr: 'permission denied', exitCode: 1 },
+    });
+
+    const status = await gitService.getGitStatus(mockHost, '/unavailable');
+
+    expect(status.unavailable).toBe(true);
+    expect(status.error).toBe('permission denied');
+    expect(status.isClean).toBe(false);
   });
 
   it('parses clean Git repository status with branch and tracking info', async () => {
@@ -137,6 +150,21 @@ describe('GitService', () => {
     expect(status.behind).toBe(1);
     expect(status.isClean).toBe(true);
     expect(status.totalChanges).toBe(0);
+  });
+
+  it('reports a later Git status failure as unavailable instead of clean', async () => {
+    mockHost.customRules.push(
+      { pattern: 'git rev-parse --is-inside-work-tree', response: { stdout: 'true\n', stderr: '', exitCode: 0 } },
+      { pattern: 'git branch --show-current', response: { stdout: 'main\n', stderr: '', exitCode: 0 } },
+      { pattern: 'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}', response: { stdout: '', stderr: '', exitCode: 1 } },
+      { pattern: 'git status --porcelain=v1 -uall', response: { stdout: '', stderr: 'status timed out', exitCode: 124 } },
+    );
+
+    const status = await gitService.getGitStatus(mockHost, '/repo');
+
+    expect(status.unavailable).toBe(true);
+    expect(status.isClean).toBe(false);
+    expect(status.error).toBe('status timed out');
   });
 
   it('correctly categorizes staged, unstaged, and untracked files', async () => {
