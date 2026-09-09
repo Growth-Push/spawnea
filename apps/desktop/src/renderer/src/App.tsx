@@ -128,6 +128,7 @@ export function App(): React.JSX.Element {
   const [startupError, setStartupError] = useState<string | null>(null);
   const [controlFinalizationRequests, setControlFinalizationRequests] = useState<ControlFinalizationRequest[]>([]);
   const gitRequestGeneration = useRef(0);
+  const activeGitRequests = useRef(new Map<string, Promise<GitStatusResult>>());
 
   const handleGitStatusChange = useCallback((sessionId: string, status: GitStatusResult) => {
     gitRequestGeneration.current += 1;
@@ -372,19 +373,17 @@ export function App(): React.JSX.Element {
     let cancelled = false;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
     const gitStatusTimeoutMs = 6000;
-    const activeGitRequests = new Map<string, Promise<GitStatusResult>>();
-
     const getBoundedGitStatus = async (sessionId: string) => {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      let request = activeGitRequests.get(sessionId);
+      let request = activeGitRequests.current.get(sessionId);
       if (!request) {
         request = getGitStatus(sessionId);
-        activeGitRequests.set(sessionId, request);
+        activeGitRequests.current.set(sessionId, request);
         // A timed-out request remains registered until it settles. Git status is
         // best effort: never duplicate a stuck host operation just to retry it.
         void request.then(() => undefined, () => undefined).finally(() => {
-          if (activeGitRequests.get(sessionId) === request) {
-            activeGitRequests.delete(sessionId);
+          if (activeGitRequests.current.get(sessionId) === request) {
+            activeGitRequests.current.delete(sessionId);
           }
         });
       }

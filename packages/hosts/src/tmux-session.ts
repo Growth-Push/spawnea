@@ -50,6 +50,9 @@ export class TmuxManager {
    */
   async hasSession(host: HostAdapter, sessionName: string): Promise<boolean> {
     const result = await host.execute(`tmux has-session -t ${escapeShellArg(sessionName)}`, { timeoutMs: 5000 });
+    if (result.exitCode === 124) {
+      throw new Error(`tmux has-session timed out for session '${sessionName}'`);
+    }
     return result.exitCode === 0;
   }
 

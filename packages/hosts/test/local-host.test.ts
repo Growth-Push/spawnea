@@ -32,8 +32,8 @@ describe('LocalHostAdapter', () => {
       { timeoutMs: 50 }
     );
 
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain('Command failed');
+    expect(result.exitCode).toBe(124);
+    expect(result.truncated).toBe(false);
   });
 
   it('opens a local PTY stream and receives data', async () => {

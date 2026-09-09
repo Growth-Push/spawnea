@@ -103,7 +103,7 @@ export class LocalHostAdapter implements HostAdapter {
       const maxOutputBytes = options?.maxOutputBytes ?? 10 * 1024 * 1024;
       const stdoutDecoder = new StringDecoder('utf8');
       const stderrDecoder = new StringDecoder('utf8');
-      const child = spawn(process.env.SHELL || '/bin/sh', ['-c', command], {
+      const child = spawn('/bin/sh', ['-c', command], {
         cwd: options?.cwd,
         env: options?.env ? { ...process.env, ...options.env } : process.env,
         detached: true,
@@ -131,16 +131,17 @@ export class LocalHostAdapter implements HostAdapter {
       };
       const appendOutput = (chunk: Buffer, target: 'stdout' | 'stderr') => {
         if (outputExceeded) return;
-        if (outputBytes + chunk.length > maxOutputBytes) {
+        const remaining = maxOutputBytes - outputBytes;
+        const fittingChunk = chunk.length > remaining ? chunk.subarray(0, Math.max(0, remaining)) : chunk;
+        outputBytes += fittingChunk.length;
+        const value = target === 'stdout' ? stdoutDecoder.write(fittingChunk) : stderrDecoder.write(fittingChunk);
+        if (target === 'stdout') stdout += value;
+        else stderr += value;
+        if (fittingChunk.length < chunk.length) {
           outputExceeded = true;
           stderr += `Command output exceeded ${maxOutputBytes} bytes`;
           killProcessGroup();
-          return;
         }
-        outputBytes += chunk.length;
-        const value = target === 'stdout' ? stdoutDecoder.write(chunk) : stderrDecoder.write(chunk);
-        if (target === 'stdout') stdout += value;
-        else stderr += value;
       };
       child.stdout?.on('data', (chunk: Buffer) => appendOutput(chunk, 'stdout'));
       child.stderr?.on('data', (chunk: Buffer) => appendOutput(chunk, 'stderr'));

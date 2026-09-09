@@ -588,19 +588,22 @@ export class GitService {
       // 1. Verify that the directory is a Git repository
       const checkRepo = await this.executeStatus(host, 'git rev-parse --is-inside-work-tree', cwd);
       if (checkRepo.exitCode !== 0) {
-        return {
-          isGitRepo: false,
-          unavailable: true,
-          error: checkRepo.stderr.trim() || `Git repository check failed with exit code ${checkRepo.exitCode}`,
-          branch: '',
-          ahead: 0,
-          behind: 0,
-          isClean: false,
-          staged: [],
-          unstaged: [],
-          untracked: [],
-          totalChanges: 0,
-        };
+        if (/not a git repository|must be run in a work tree/i.test(checkRepo.stderr)) {
+          return {
+            isGitRepo: false,
+            branch: '',
+            ahead: 0,
+            behind: 0,
+            isClean: true,
+            staged: [],
+            unstaged: [],
+            untracked: [],
+            totalChanges: 0,
+          };
+        }
+        return this.unavailableStatus(
+          checkRepo.stderr.trim() || `Git repository check failed with exit code ${checkRepo.exitCode}`
+        );
       }
       if (!checkRepo.stdout.trim().includes('true')) {
         return {

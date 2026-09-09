@@ -87,7 +87,7 @@ describe('GitService', () => {
     });
   });
 
-  it('reports Git command failures as unavailable instead of clean', async () => {
+  it('reports non-Git directories without marking them unavailable', async () => {
     mockHost.customRules.push({
       pattern: 'git rev-parse --is-inside-work-tree',
       response: { stdout: '', stderr: 'fatal: not a git repository', exitCode: 128 },
@@ -96,14 +96,25 @@ describe('GitService', () => {
     const status = await gitService.getGitStatus(mockHost, '/non-git-folder');
 
     expect(status.isGitRepo).toBe(false);
-    expect(status.unavailable).toBe(true);
-    expect(status.error).toBe('fatal: not a git repository');
     expect(status.branch).toBe('');
-    expect(status.isClean).toBe(false);
+    expect(status.isClean).toBe(true);
     expect(status.totalChanges).toBe(0);
     expect(status.staged).toEqual([]);
     expect(status.unstaged).toEqual([]);
     expect(status.untracked).toEqual([]);
+  });
+
+  it('reports Git command failures as unavailable instead of clean', async () => {
+    mockHost.customRules.push({
+      pattern: 'git rev-parse --is-inside-work-tree',
+      response: { stdout: '', stderr: 'permission denied', exitCode: 1 },
+    });
+
+    const status = await gitService.getGitStatus(mockHost, '/unavailable');
+
+    expect(status.unavailable).toBe(true);
+    expect(status.error).toBe('permission denied');
+    expect(status.isClean).toBe(false);
   });
 
   it('parses clean Git repository status with branch and tracking info', async () => {

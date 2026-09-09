@@ -205,6 +205,14 @@ describe('SessionSupervisor', () => {
     })));
     let activeInspections = 0;
     let peakInspections = 0;
+    const hasSessionCommands: string[] = [];
+    mockHost.customRules.push({
+      pattern: 'tmux has-session -t',
+      response: (command) => {
+        hasSessionCommands.push(command);
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    });
     mockHost.customRules.push({
       pattern: 'tmux list-panes -t',
       response: async () => {
@@ -229,6 +237,7 @@ describe('SessionSupervisor', () => {
     expect(firstPass.size).toBe(sessions.length);
     expect(secondPass.size).toBe(sessions.length);
     expect(peakInspections).toBeLessThanOrEqual(2);
+    expect(hasSessionCommands[0]).not.toBe(hasSessionCommands[sessions.length]);
     expect(mockHost.executedCommands.filter(({ command }) => command.includes('tmux has-session')).length)
       .toBeGreaterThanOrEqual(sessions.length * 2);
   });
@@ -240,14 +249,24 @@ describe('SessionSupervisor', () => {
       agentId: 'dev-workstation:claude',
       task: 'Stop polling cleanup fixture',
     });
+    let inspectionStarted!: () => void;
+    const inspectionStartedPromise = new Promise<void>((resolve) => {
+      inspectionStarted = resolve;
+    });
     let releaseInspection!: (result: { stdout: string; stderr: string; exitCode: number }) => void;
     const inspectionBlocked = new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
       releaseInspection = resolve;
     });
-    mockHost.customRules.push({ pattern: 'tmux has-session -t', response: inspectionBlocked });
+    mockHost.customRules.push({
+      pattern: 'tmux has-session -t',
+      response: async () => {
+        inspectionStarted();
+        return inspectionBlocked;
+      },
+    });
 
     const check = supervisor.checkSession(session.id);
-    await Promise.resolve();
+    await inspectionStartedPromise;
     supervisor.stopPolling();
     releaseInspection({ stdout: '', stderr: '', exitCode: 0 });
     await check;
