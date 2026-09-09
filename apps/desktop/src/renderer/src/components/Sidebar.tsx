@@ -720,8 +720,8 @@ export function Sidebar({
   }, [denseFocusedSessionId, denseHoveredSessionId, isDenseLayout, visibleSessions]);
 
   const shortcutLabels = new Map<string, string>();
-  rootSessions.slice(0, 10).forEach((s, idx) => {
-    const num = idx === 9 ? 0 : idx + 1;
+  rootSessions.slice(0, 9).forEach((s, idx) => {
+    const num = idx + 1;
     shortcutLabels.set(s.id, `Ctrl-${num}`);
   });
 

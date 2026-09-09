@@ -23,6 +23,7 @@ import {
 export interface ArtifactPreviewModalProps {
   artifact: Artifact | null;
   sessionId: string;
+  uiZoom?: number;
   onClose: () => void;
   onDelete?: (artifactId: string) => void;
 }
@@ -30,6 +31,7 @@ export interface ArtifactPreviewModalProps {
 export function ArtifactPreviewModal({
   artifact,
   sessionId,
+  uiZoom = 1,
   onClose,
   onDelete,
 }: ArtifactPreviewModalProps): React.JSX.Element | null {
@@ -170,7 +172,10 @@ export function ArtifactPreviewModal({
         }
       }}
     >
-      <div className="w-full max-w-5xl h-[85vh] flex flex-col rounded-xl border border-[#30363d] bg-[#0d1117] shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      <div
+        style={{ height: `${85 / uiZoom}vh` }}
+        className="w-full max-w-5xl h-[85vh] flex flex-col rounded-xl border border-[#30363d] bg-[#0d1117] shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+      >
         {/* Modal Header */}
         <div className="px-5 py-3 bg-[#161b22] border-b border-[#30363d] flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">

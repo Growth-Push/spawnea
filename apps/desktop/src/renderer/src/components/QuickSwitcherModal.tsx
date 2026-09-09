@@ -42,6 +42,7 @@ export interface QuickSwitcherItem {
 
 interface QuickSwitcherModalProps {
   isOpen: boolean;
+  uiZoom?: number;
   onClose: () => void;
   sessions: Session[];
   servers: Server[];
@@ -64,6 +65,7 @@ interface QuickSwitcherModalProps {
 
 export function QuickSwitcherModal({
   isOpen,
+  uiZoom = 1,
   onClose,
   sessions,
   servers,
@@ -491,7 +493,10 @@ export function QuickSwitcherModal({
         }
       }}
     >
-      <div className="w-full max-w-2xl bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[75vh] ring-1 ring-emerald-500/20">
+      <div
+        style={{ maxHeight: `min(75vh, calc(${100 / uiZoom}vh - 5rem))` }}
+        className="w-full max-w-2xl bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[75vh] ring-1 ring-emerald-500/20"
+      >
         {/* Search Input Header */}
         <div className="p-3 border-b border-[#30363d] bg-[#0d1117] flex items-center gap-3 shrink-0">
           <Search className="w-5 h-5 text-emerald-400 shrink-0 ml-1" />

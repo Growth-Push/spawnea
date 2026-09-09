@@ -27,6 +27,7 @@ import {
 export interface ArtifactGalleryProps {
   sessionId: string;
   artifacts: Artifact[];
+  uiZoom?: number;
   isLoading?: boolean;
   onRefresh: () => void;
   onUploadFile?: (file: File) => Promise<void>;
@@ -40,6 +41,7 @@ type SortField = 'date_desc' | 'date_asc' | 'size_desc' | 'name_asc';
 export function ArtifactGallery({
   sessionId,
   artifacts,
+  uiZoom = 1,
   isLoading = false,
   onRefresh,
   onUploadFile,
@@ -261,8 +263,8 @@ export function ArtifactGallery({
     e.preventDefault();
     e.stopPropagation();
     setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
+      x: e.clientX / uiZoom,
+      y: e.clientY / uiZoom,
       artifact: art,
     });
   };
@@ -647,6 +649,7 @@ export function ArtifactGallery({
         <ArtifactContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
+          uiZoom={uiZoom}
           artifact={contextMenu.artifact}
           isHidden={hiddenArtifactIds.has(contextMenu.artifact.id)}
           onToggleHide={() => toggleHide(contextMenu.artifact.id)}
@@ -685,6 +688,7 @@ export function ArtifactGallery({
         <ArtifactPreviewModal
           artifact={selectedArtifact}
           sessionId={sessionId}
+          uiZoom={uiZoom}
           onClose={() => setSelectedArtifact(null)}
           onDelete={async (id) => {
             if (onDeleteArtifact) {

@@ -14,6 +14,7 @@ import {
 export interface ArtifactContextMenuProps {
   x: number;
   y: number;
+  uiZoom?: number;
   artifact: Artifact;
   isHidden: boolean;
   onToggleHide: () => void;
@@ -29,6 +30,7 @@ export interface ArtifactContextMenuProps {
 export function ArtifactContextMenu({
   x,
   y,
+  uiZoom = 1,
   artifact,
   isHidden,
   onToggleHide,
@@ -66,8 +68,8 @@ export function ArtifactContextMenu({
   // Adjust positioning to avoid overflowing viewport
   const menuWidth = 260;
   const menuHeight = 270;
-  const screenW = window.innerWidth;
-  const screenH = window.innerHeight;
+  const screenW = window.innerWidth / uiZoom;
+  const screenH = window.innerHeight / uiZoom;
 
   const posX = x + menuWidth > screenW ? Math.max(10, screenW - menuWidth - 10) : x;
   const posY = y + menuHeight > screenH ? Math.max(10, screenH - menuHeight - 10) : y;

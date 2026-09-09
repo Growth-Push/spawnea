@@ -23,6 +23,7 @@ import {
 
 interface AdoptSessionModalProps {
   isOpen: boolean;
+  uiZoom?: number;
   onClose: () => void;
   onSubmit: (input: AdoptSessionInput) => Promise<void>;
   servers: Server[];
@@ -33,6 +34,7 @@ interface AdoptSessionModalProps {
 
 export function AdoptSessionModal({
   isOpen,
+  uiZoom = 1,
   onClose,
   onSubmit,
   servers,
@@ -216,7 +218,10 @@ export function AdoptSessionModal({
       }}
       className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
     >
-      <div className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div
+        style={{ maxHeight: `${90 / uiZoom}vh` }}
+        className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh]"
+      >
         {/* Modal Header */}
         <div className="h-14 px-5 border-b border-[#30363d] flex items-center justify-between bg-[#12161c] shrink-0">
           <div className="flex items-center gap-2">
