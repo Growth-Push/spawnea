@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import {
@@ -10,7 +10,7 @@ import {
   UI_ZOOM_STORAGE_KEY,
 } from './App';
 import { StatusBadge } from './components/StatusBadge';
-import type { Session, Server, Project, Agent, SessionStatus } from '@spawnea/domain';
+import type { Session, Server, Project, Agent, SessionStatus, GitStatusResult } from '@spawnea/domain';
 
 // Polyfill window.matchMedia and ResizeObserver for jsdom
 if (typeof window !== 'undefined') {
@@ -779,6 +779,55 @@ describe('App Desktop Shell', () => {
       expect(screen.queryByTestId('contextbar-worktree-badge')).toBeNull();
       expect(screen.queryByTestId('workspace-worktree-badge')).toBeNull();
     });
+  });
+
+  it('publishes healthy Git status after a stalled request times out without duplicating the stalled call', async () => {
+    vi.useFakeTimers();
+    const stalledSession = { ...mockSessions[0], id: 'sess-stalled-git', name: 'Stalled Git session' };
+    const healthySession = { ...mockSessions[1], id: 'sess-healthy-git', name: 'Healthy Git session' };
+    const neverSettles = new Promise<never>(() => undefined);
+    const getGitStatus = vi.fn((sessionId: string): Promise<GitStatusResult> => {
+      if (sessionId === stalledSession.id) return neverSettles;
+      return Promise.resolve({
+        isGitRepo: true,
+        branch: healthySession.branch,
+        ahead: 0,
+        behind: 0,
+        isClean: false,
+        staged: [],
+        unstaged: [{ path: 'src/healthy.ts', status: 'modified', staged: false, statusCode: 'M' as const }],
+        untracked: [],
+        totalChanges: 1,
+      });
+    });
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue([stalledSession, healthySession]),
+      getGitStatus,
+    });
+
+    const view = render(<App />);
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(getGitStatus).toHaveBeenCalledWith(stalledSession.id);
+      expect(getGitStatus).toHaveBeenCalledWith(healthySession.id);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.getByTestId(`session-git-dirty-indicator-${healthySession.id}`)).toBeDefined();
+      expect(screen.queryByTestId(`session-git-dirty-indicator-${stalledSession.id}`)).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(getGitStatus.mock.calls.filter(([sessionId]) => sessionId === stalledSession.id)).toHaveLength(1);
+      expect(getGitStatus.mock.calls.filter(([sessionId]) => sessionId === healthySession.id)).toHaveLength(2);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('opens CreateSessionModal, fills form, and launches new session', async () => {

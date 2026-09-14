@@ -242,6 +242,77 @@ describe('SessionSupervisor', () => {
       .toBeGreaterThanOrEqual(sessions.length * 2);
   });
 
+  it('updates a healthy session while another inspection is stalled and retries the stalled session', async () => {
+    const [stalledSession, healthySession] = await Promise.all([
+      sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Stalled inspection fixture',
+      }),
+      sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Healthy inspection fixture',
+      }),
+    ]);
+    let releaseStalledInspection!: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+    const stalledInspection = new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+      releaseStalledInspection = resolve;
+    });
+    let stalledAttempts = 0;
+    mockHost.customRules.push({
+      pattern: 'tmux has-session -t',
+      response: (command) => {
+        if (command.includes(stalledSession.tmuxSessionName) && stalledAttempts++ === 0) {
+          return stalledInspection;
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    });
+    mockHost.customRules.push({
+      pattern: 'tmux list-panes -t',
+      response: { stdout: '9999:::claude:::1\n', stderr: '', exitCode: 0 },
+    });
+    const boundedSupervisor = new SessionSupervisor({
+      repositories: repos,
+      sessionManager,
+      contextStore,
+      ptyBroker,
+      maxConcurrentChecks: 2,
+    });
+    const healthyUpdate = new Promise<void>((resolve) => {
+      boundedSupervisor.onStatusChange((sessionId) => {
+        if (sessionId === healthySession.id) resolve();
+      });
+    });
+
+    const startedAt = performance.now();
+    const firstPass = boundedSupervisor.checkAllSessions();
+    await healthyUpdate;
+    const healthyLatencyMs = performance.now() - startedAt;
+
+    console.info('Task 12 controlled supervision measurement', {
+      sessionCount: 2,
+      maxConcurrentChecks: 2,
+      healthyUpdateLatencyMs: Math.round(healthyLatencyMs),
+    });
+    expect(healthyLatencyMs).toBeLessThan(5_000);
+    expect(stalledAttempts).toBe(1);
+
+    releaseStalledInspection({ stdout: '', stderr: 'timed out', exitCode: 124 });
+    await firstPass;
+    await expect(boundedSupervisor.checkSession(stalledSession.id)).resolves.toMatchObject({
+      status: 'error',
+      source: 'process_exit',
+    });
+    expect(stalledAttempts).toBe(2);
+
+    boundedSupervisor.stopPolling();
+    expect(mockHost.executedCommands.some(({ command }) => command.includes('tmux kill-session'))).toBe(false);
+  }, 10_000);
+
   it('suppresses an in-flight inspection result after polling stops', async () => {
     const session = await sessionManager.createSession({
       serverId: 'dev-workstation',

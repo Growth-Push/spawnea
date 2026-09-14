@@ -370,18 +370,36 @@ export class SSHHostAdapter implements HostAdapter {
       let timeoutId: NodeJS.Timeout | null = null;
       let commandStream: import('ssh2').ClientChannel | null = null;
       let settled = false;
+      let onStdoutData: ((data: Buffer) => void) | null = null;
+      let onStderrData: ((data: Buffer) => void) | null = null;
+      let onClose: ((exitCode: number) => void) | null = null;
+      let onError: ((error: Error) => void) | null = null;
 
-      const cleanup = (): void => {
+      const cleanup = (retainTerminalHandlers = false): void => {
         if (timeoutId) {
           clearTimeout(timeoutId);
           timeoutId = null;
         }
+        if (commandStream) {
+          if (onStdoutData) commandStream.removeListener('data', onStdoutData);
+          if (onStderrData) commandStream.stderr.removeListener('data', onStderrData);
+          if (!retainTerminalHandlers) {
+            if (onClose) commandStream.removeListener('close', onClose);
+            if (onError) commandStream.removeListener('error', onError);
+          }
+        }
+        onStdoutData = null;
+        onStderrData = null;
+        if (!retainTerminalHandlers) {
+          onClose = null;
+          onError = null;
+        }
       };
 
-      const fail = (error: Error): void => {
+      const fail = (error: Error, retainTerminalHandlers = false): void => {
         if (settled) return;
         settled = true;
-        cleanup();
+        cleanup(retainTerminalHandlers);
         reject(error);
       };
 
@@ -389,14 +407,15 @@ export class SSHHostAdapter implements HostAdapter {
         timeoutId = setTimeout(() => {
           if (settled) return;
           const error = new Error(`Command timed out after ${options.timeoutMs}ms`);
-          if (commandStream) {
+          const streamToClose = commandStream;
+          fail(error, Boolean(streamToClose));
+          if (streamToClose) {
             try {
-              commandStream.close();
+              streamToClose.close();
             } catch {
               // The channel may already be closing.
             }
           }
-          fail(error);
         }, options.timeoutMs);
       }
 
@@ -418,6 +437,30 @@ export class SSHHostAdapter implements HostAdapter {
         }
 
         commandStream = stream;
+
+        onClose = (exitCode: number) => {
+          if (settled) {
+            cleanup();
+            return;
+          }
+          settled = true;
+          cleanup();
+          resolve({
+            stdout,
+            stderr,
+            exitCode: truncated ? 1 : typeof exitCode === 'number' ? exitCode : 0,
+            truncated,
+          });
+        };
+
+        onError = (streamErr: Error) => {
+          if (settled) return;
+          fail(streamErr, true);
+        };
+
+        stream.on('close', onClose);
+        stream.on('error', onError);
+
         if (settled) {
           try {
             stream.close();
@@ -434,7 +477,7 @@ export class SSHHostAdapter implements HostAdapter {
         let stderrBytes = 0;
         let truncated = false;
 
-        stream.on('data', (data: Buffer) => {
+        onStdoutData = (data: Buffer) => {
           if (stdoutBytes >= maxOutputBytes) {
             truncated = true;
             return;
@@ -444,9 +487,9 @@ export class SSHHostAdapter implements HostAdapter {
           truncated ||= data.byteLength > remaining;
           stdout += chunk.toString('utf8');
           stdoutBytes += chunk.byteLength;
-        });
+        };
 
-        stream.stderr.on('data', (data: Buffer) => {
+        onStderrData = (data: Buffer) => {
           if (stderrBytes >= maxOutputBytes) {
             truncated = true;
             return;
@@ -456,23 +499,10 @@ export class SSHHostAdapter implements HostAdapter {
           truncated ||= data.byteLength > remaining;
           stderr += chunk.toString('utf8');
           stderrBytes += chunk.byteLength;
-        });
+        };
 
-        stream.on('close', (exitCode: number) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resolve({
-            stdout,
-            stderr,
-            exitCode: truncated ? 1 : typeof exitCode === 'number' ? exitCode : 0,
-            truncated,
-          });
-        });
-
-        stream.on('error', (streamErr: Error) => {
-          fail(streamErr);
-        });
+        stream.on('data', onStdoutData);
+        stream.stderr.on('data', onStderrData);
       });
     });
   }
