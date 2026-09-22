@@ -321,6 +321,39 @@ describe('AgentControlService', () => {
     expect(sessionManager.createSession).not.toHaveBeenCalled();
   });
 
+  it('exposes and accepts generated default shell on enabled local host in bootstrap mode', async () => {
+    await repositories.servers.save({ id: 'local-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+    await repositories.projects.save({
+      id: 'local-project', serverId: 'local-1', name: 'Local project', rootPath: '/repo', baseBranch: 'main',
+    });
+    // Generated shell harness for local host
+    await repositories.agents.save({
+      id: 'local-1:shell', name: 'Interactive Shell (Local)', harness: 'shell', command: 'bash',
+    });
+    service = new AgentControlService({
+      repositories,
+      sessionManager: sessionManager as unknown as SessionManager,
+      logger: createLogger('AgentControlServiceTest'),
+      getActiveCatalog: localCatalog,
+    });
+
+    const bootstrap = service.createBootstrapControl();
+    const state = await bootstrap.getState();
+    expect(state.harnesses).toContainEqual({ id: 'local-1:shell', name: 'Interactive Shell (Local)' });
+
+    await expect(bootstrap.createSession({
+      clientRequestId: 'bootstrap-shell-root',
+      serverId: 'local-1',
+      projectId: 'local-project',
+      agentId: 'local-1:shell',
+      task: 'Start local shell',
+    })).resolves.toMatchObject({
+      sessionId: 'created-1',
+      sessionCreated: true,
+      session: expect.objectContaining({ status: 'working' }),
+    });
+  });
+
   it('creates one local root idempotently and rejects remote bootstrap targets', async () => {
     await repositories.servers.save({ id: 'local-1', name: 'Local', host: '127.0.0.1', sshPort: 22, enabled: true });
     await repositories.projects.save({

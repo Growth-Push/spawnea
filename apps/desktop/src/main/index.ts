@@ -279,6 +279,19 @@ async function syncCatalogToRepositories(catalog: import('@spawnea/domain').Oper
         argsTemplate: harness.args,
       });
     }
+
+    // Always provide a default shell harness at the end if not explicitly defined
+    if (!host.harnesses['shell']) {
+      const shellAgentId = `${host.id}:shell`;
+      activeAgentIds.add(shellAgentId);
+      await repos.agents.save({
+        id: shellAgentId,
+        name: `Interactive Shell (${host.name})`,
+        harness: 'shell',
+        command: host.ssh ? 'sh' : (process.env.SHELL || 'sh'),
+        argsTemplate: [],
+      });
+    }
   }
 
   // Remove stale servers, projects, and agents that no longer exist in the catalog

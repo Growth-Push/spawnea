@@ -54,12 +54,20 @@ export function CreateChildSessionModal({
   const availableAgentsForHost = useMemo(() => {
     if (!parentSession) return agents;
     const targetHostId = parentSession.serverId;
-    return agents.filter((a) => {
-      if (!a.id.includes(':')) {
-        return true;
-      }
-      return a.id.startsWith(`${targetHostId}:`);
-    });
+    return agents
+      .filter((a) => {
+        if (!a.id.includes(':')) {
+          return true;
+        }
+        return a.id.startsWith(`${targetHostId}:`);
+      })
+      .sort((a, b) => {
+        const aIsShell = a.harness === 'shell' || a.id.endsWith(':shell') || a.id === 'agent-shell';
+        const bIsShell = b.harness === 'shell' || b.id.endsWith(':shell') || b.id === 'agent-shell';
+        if (aIsShell && !bIsShell) return 1;
+        if (!aIsShell && bIsShell) return -1;
+        return 0;
+      });
   }, [agents, parentSession]);
 
   // Reconcile agentId if available agents update while modal is open

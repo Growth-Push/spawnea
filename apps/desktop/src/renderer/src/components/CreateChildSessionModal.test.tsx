@@ -273,4 +273,47 @@ describe('CreateChildSessionModal', () => {
     const agentOptionValues = Array.from(agentSelect.options).map((opt) => opt.value);
     expect(agentOptionValues).toEqual(['srv-1:claude', 'srv-1:codex']);
   });
+
+  it('orders harnesses so that interactive shell is always in the last position', () => {
+    const agentsWithShell: Agent[] = [
+      {
+        id: 'srv-1:shell',
+        name: 'Interactive Shell (Local Host)',
+        command: 'bash',
+        harness: 'shell',
+        createdAt: new Date(),
+      },
+      {
+        id: 'srv-1:claude',
+        name: 'Claude Code (Local Host)',
+        command: 'claude',
+        harness: 'claude',
+        createdAt: new Date(),
+      },
+      {
+        id: 'srv-1:codex',
+        name: 'Codex (Local Host)',
+        command: 'codex',
+        harness: 'codex',
+        createdAt: new Date(),
+      },
+    ];
+
+    render(
+      <CreateChildSessionModal
+        isOpen={true}
+        parentSession={mockParentSession}
+        agents={agentsWithShell}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+
+    const agentSelect = screen.getByTestId('child-session-agent-select') as HTMLSelectElement;
+    const agentOptionValues = Array.from(agentSelect.options).map((opt) => opt.value);
+
+    // Shell must be the last element
+    expect(agentOptionValues[agentOptionValues.length - 1]).toBe('srv-1:shell');
+    expect(agentOptionValues).toEqual(['srv-1:claude', 'srv-1:codex', 'srv-1:shell']);
+  });
 });

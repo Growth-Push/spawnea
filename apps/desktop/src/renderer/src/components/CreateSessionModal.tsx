@@ -228,9 +228,15 @@ export function CreateSessionModal({
   }, [projects, serverId]);
 
   const availableAgents = useMemo(() => {
-    return agents.filter(
-      (a) => !serverId || !a.id.includes(':') || a.id.startsWith(`${serverId}:`)
-    );
+    return agents
+      .filter((a) => !serverId || !a.id.includes(':') || a.id.startsWith(`${serverId}:`))
+      .sort((a, b) => {
+        const aIsShell = a.harness === 'shell' || a.id.endsWith(':shell') || a.id === 'agent-shell';
+        const bIsShell = b.harness === 'shell' || b.id.endsWith(':shell') || b.id === 'agent-shell';
+        if (aIsShell && !bIsShell) return 1;
+        if (!aIsShell && bIsShell) return -1;
+        return 0;
+      });
   }, [agents, serverId]);
 
   useEffect(() => {

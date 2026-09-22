@@ -679,7 +679,14 @@ export class SessionManager {
         ? options.baseBranch?.trim() || configuredBaseBranch || undefined
         : configuredBaseBranch || options.baseBranch?.trim() || undefined;
 
-      const harnessCommand = catHarness?.command || dbAgent?.command || 'bash';
+      const dbServer = await this.repos.servers.findById(options.serverId);
+      const isConfirmedLocalHost =
+        host instanceof LocalHostAdapter ||
+        (catalogHost ? !catalogHost.ssh : false) ||
+        (dbServer ? isLoopbackHost(dbServer.host) && !dbServer.sshConfigAlias && !dbServer.sshUser && dbServer.sshPort === 22 : false);
+      const isLocalHost = !(host instanceof SSHHostAdapter) && isConfirmedLocalHost;
+      const defaultShell = isLocalHost ? (process.env.SHELL || 'sh') : 'sh';
+      const harnessCommand = catHarness?.command || dbAgent?.command || defaultShell;
       const harnessArgs = this.harnessLaunchRegistry.withModel(
         harnessCommand,
         catHarness?.id || dbAgent?.harness,
