@@ -42,6 +42,11 @@ type ZoomAdjustedMouseEvent = MouseEvent & {
   spawneaCoordinatesCompensated?: boolean;
 };
 
+const textEncoder = new TextEncoder();
+export function utf8ByteLength(str: string): number {
+  return textEncoder.encode(str).length;
+}
+
 export function decodeOsc52Clipboard(data: string): string | null {
   const separatorIndex = data.indexOf(';');
   if (separatorIndex < 0) return null;
@@ -121,11 +126,13 @@ export function TerminalView({
   const terminalInstanceRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const activeChannelIdRef = useRef<string | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
   const cleanupFnsRef = useRef<(() => void)[]>([]);
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const resizeTimerRef = useRef<NodeJS.Timeout | null>(null);
   const retryCountRef = useRef<number>(0);
   const isConnectingRef = useRef<boolean>(false);
+  const connectionGenerationRef = useRef(0);
   const leftMouseDownRef = useRef<boolean>(false);
   const mouseSelectionGestureRef = useRef<boolean>(false);
   const clipboardBeforeMouseDragReadRef = useRef<Promise<string | null> | null>(null);
@@ -247,6 +254,8 @@ export function TerminalView({
               const term = terminalInstanceRef.current;
               if (term) {
                 activeChannelIdRef.current = data.ptyChannelId;
+                activeSessionIdRef.current = data.sessionId;
+                window.spawneaApi.readyPty?.(data.ptyChannelId);
                 setPtyChannelId(data.ptyChannelId);
                 setConnectionStatus('connected');
                 term.options.disableStdin = false;
@@ -282,6 +291,7 @@ export function TerminalView({
 
   // Clean up any existing listeners, active streams, and pending timers
   const cleanupActiveConnection = useCallback(() => {
+    connectionGenerationRef.current += 1;
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
@@ -301,7 +311,11 @@ export function TerminalView({
       }
     }
     cleanupFnsRef.current = [];
+    if (activeChannelIdRef.current && activeSessionIdRef.current) {
+      void window.spawneaApi?.detachSession?.(activeSessionIdRef.current);
+    }
     activeChannelIdRef.current = null;
+    activeSessionIdRef.current = null;
     setPtyChannelId(null);
     isConnectingRef.current = false;
   }, []);
@@ -322,6 +336,7 @@ export function TerminalView({
         retryTimeoutRef.current = null;
       }
       isConnectingRef.current = true;
+      const generation = connectionGenerationRef.current;
 
       setConnectionStatus('connecting');
       setErrorMessage(null);
@@ -334,7 +349,15 @@ export function TerminalView({
             term.rows
           );
 
+          if (generation !== connectionGenerationRef.current) {
+            if (activeChannelIdRef.current !== channelId) {
+              void window.spawneaApi.detachSession?.(currentSession.id);
+            }
+            return;
+          }
+
           activeChannelIdRef.current = channelId;
+          activeSessionIdRef.current = currentSession.id;
           setPtyChannelId(channelId);
           setConnectionStatus('connected');
           retryCountRef.current = 0;
@@ -349,18 +372,30 @@ export function TerminalView({
             term.focus();
           }, 50);
 
-          // 1. Hook up PTY output streaming
+          // 1. Hook up PTY output streaming with backpressure acknowledgment
           const unData = window.spawneaApi.onPtyData((cid, data) => {
-            if (cid === channelId) {
-              term.write(data);
+            if (cid === activeChannelIdRef.current) {
+              const byteLen = utf8ByteLength(data);
+              term.write(data, () => {
+                if (window.spawneaApi?.ackPty) {
+                  window.spawneaApi.ackPty(cid, byteLen);
+                }
+              });
             }
           });
           cleanupFnsRef.current.push(unData);
 
+          // Signal to main process that renderer has registered onPtyData and is ready to acknowledge output
+          if (window.spawneaApi?.readyPty) {
+            window.spawneaApi.readyPty(channelId);
+          }
+
           // 2. Hook up PTY exit notification
           const unExit = window.spawneaApi.onPtyExit((cid, code) => {
-            if (cid === channelId) {
+            if (cid === activeChannelIdRef.current) {
               term.writeln(`\r\n\x1b[33m[Spawnea Persistent Session Detached (exit code ${code})]\x1b[0m`);
+              activeChannelIdRef.current = null;
+              activeSessionIdRef.current = null;
               cleanupActiveConnection();
               setConnectionStatus('disconnected');
               term.options.disableStdin = true;

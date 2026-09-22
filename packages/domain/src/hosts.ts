@@ -26,6 +26,8 @@ export interface PtyStream {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   close(): void;
+  pause?(): void;
+  resume?(): void;
 }
 
 export interface HostTestResult {

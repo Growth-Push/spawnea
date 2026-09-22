@@ -552,6 +552,16 @@ function registerIpcHandlers(
     broker.resize(channelId, cols, rows);
   });
 
+  ipcMain.on('pty:ready', (_event, channelId: string) => {
+    broker.ready(channelId);
+  });
+
+  ipcMain.on('pty:ack', (_event, channelId: string, bytes: number) => {
+    const validBytes =
+      typeof bytes === 'number' && Number.isSafeInteger(bytes) && bytes > 0 ? bytes : 0;
+    broker.ack(channelId, validBytes);
+  });
+
   // Session Context Data Handlers (Files & Git)
   ipcMain.handle('session:getFiles', async (_event, sessionId: string, subPath?: string) => {
     return sessManager.listFiles(sessionId, subPath);

@@ -72,6 +72,8 @@ describe('SessionSupervisor', () => {
     mockWebContents = {
       isDestroyed: () => false,
       send: vi.fn(),
+      on: vi.fn(),
+      removeListener: vi.fn(),
     } as unknown as WebContents;
 
     supervisor.setWebContentsGetter(() => mockWebContents);
