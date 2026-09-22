@@ -249,6 +249,12 @@ export const api = {
     ipcRenderer.on('pty:exit', handler);
     return () => ipcRenderer.removeListener('pty:exit', handler);
   },
+  ackPty: (channelId: string, bytes: number): void => {
+    ipcRenderer.send('pty:ack', channelId, bytes);
+  },
+  readyPty: (channelId: string): void => {
+    ipcRenderer.send('pty:ready', channelId);
+  },
 
   // Attention & Status Supervision Events
   setActiveSession: (sessionId: string | null): void => {

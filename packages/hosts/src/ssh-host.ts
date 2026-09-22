@@ -604,6 +604,30 @@ export class SSHHostAdapter implements HostAdapter {
                 // Ignore
               }
             },
+            pause() {
+              try {
+                stream.pause();
+              } catch {
+                // Ignore
+              }
+              try {
+                stream.stderr?.pause?.();
+              } catch {
+                // Ignore
+              }
+            },
+            resume() {
+              try {
+                stream.resume();
+              } catch {
+                // Ignore
+              }
+              try {
+                stream.stderr?.resume?.();
+              } catch {
+                // Ignore
+              }
+            },
           };
 
           resolve(ptyStream);

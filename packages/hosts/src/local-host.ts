@@ -244,6 +244,20 @@ export class LocalHostAdapter implements HostAdapter {
           // ignore
         }
       },
+      pause(): void {
+        try {
+          ptyProcess.pause();
+        } catch {
+          // ignore if process exited
+        }
+      },
+      resume(): void {
+        try {
+          ptyProcess.resume();
+        } catch {
+          // ignore if process exited
+        }
+      },
     };
   }
 

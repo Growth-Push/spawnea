@@ -31,6 +31,8 @@ flowchart LR
 3. **SSH Transport**: Remote sessions stream PTY data over SSH channels using [`ssh2`](https://github.com/mscdex/ssh2).
 4. **Window Resizing**: Dimension changes in `@xterm/xterm` are passed over IPC to the Main process, which sends `SIGWINCH` or tmux resize commands to keep the terminal buffer in sync.
 
+PTY output arriving before the renderer signals readiness is held in a bounded per-channel buffer. The broker pauses the PTY stream at its high-water mark, flushes the buffered data in order when the renderer is ready, and resumes after xterm acknowledges enough rendered bytes. Disposing the terminal view or destroying its renderer closes the PTY attachment and releases its buffer; the tmux session continues running.
+
 ---
 
 ## Clipboard and OSC 52 Handling
