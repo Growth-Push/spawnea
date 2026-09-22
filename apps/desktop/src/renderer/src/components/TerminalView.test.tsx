@@ -39,7 +39,9 @@ vi.mock('@xterm/xterm', () => {
         }),
       };
       buffer = { active: { getLine: vi.fn().mockReturnValue(undefined) } };
-      write = vi.fn();
+      write = vi.fn((_data: string, cb?: () => void) => {
+        if (typeof cb === 'function') cb();
+      });
       paste = vi.fn();
       getSelection = vi.fn(() => xtermMockState.selectionText);
       hasSelection = vi.fn().mockReturnValue(false);
@@ -177,6 +179,8 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
       deleteSession: vi.fn().mockResolvedValue(true),
       writePty: vi.fn(),
       resizePty: vi.fn(),
+      ackPty: vi.fn(),
+      readyPty: vi.fn(),
       onPtyData: vi.fn().mockReturnValue(() => {}),
       onPtyExit: vi.fn().mockReturnValue(() => {}),
       onStatusChanged: vi.fn().mockReturnValue(() => {}),
@@ -474,5 +478,46 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
     expect(screen.queryByTestId('reconnection-banner')).toBeNull();
     expect(screen.getByText('Connection restored successfully')).toBeDefined();
     expect(screen.getByTestId('terminal-toast')).toBeDefined();
+    expect(window.spawneaApi.readyPty).toHaveBeenCalledWith('pty-recon-recovered-1');
+  });
+
+  it('acknowledges rendered PTY chunks to the broker for flow control', async () => {
+    let ptyDataListener: ((cid: string, data: string) => void) | null = null;
+    (window.spawneaApi.onPtyData as any).mockImplementation((cb: (cid: string, data: string) => void) => {
+      ptyDataListener = cb;
+      return () => {
+        ptyDataListener = null;
+      };
+    });
+
+    render(<TerminalView session={mockSession} />);
+
+    await waitFor(() => {
+      expect(window.spawneaApi.attachSession).toHaveBeenCalled();
+    });
+
+    expect(ptyDataListener).toBeDefined();
+    expect(window.spawneaApi.readyPty).toHaveBeenCalledWith('pty-recon-1');
+
+    // Simulate incoming PTY data with multibyte UTF-8 characters (rocket emoji: 4 bytes)
+    act(() => {
+      ptyDataListener?.('pty-recon-1', '🚀');
+    });
+
+    // 🚀 is 2 JavaScript string chars, but 4 UTF-8 bytes
+    expect(window.spawneaApi.ackPty).toHaveBeenCalledWith('pty-recon-1', 4);
+
+    act(() => {
+      sessionReconnectedListener?.({ sessionId: mockSession.id, ptyChannelId: 'pty-recon-recovered-1' });
+      ptyDataListener?.('pty-recon-recovered-1', '🚀');
+    });
+    expect(window.spawneaApi.ackPty).toHaveBeenCalledWith('pty-recon-recovered-1', 4);
+  });
+
+  it('detaches the active PTY when the terminal unmounts', async () => {
+    const view = render(<TerminalView session={mockSession} />);
+    await waitFor(() => expect(window.spawneaApi.readyPty).toHaveBeenCalledWith('pty-recon-1'));
+    view.unmount();
+    expect(window.spawneaApi.detachSession).toHaveBeenCalledWith(mockSession.id);
   });
 });

@@ -324,6 +324,8 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
     onArtifactCreated: vi.fn().mockReturnValue(() => {}),
     writePty: vi.fn(),
     resizePty: vi.fn(),
+    ackPty: vi.fn(),
+    readyPty: vi.fn(),
     onPtyData: vi.fn().mockReturnValue(() => {}),
     onPtyExit: vi.fn().mockReturnValue(() => {}),
     onStatusChanged: vi.fn().mockReturnValue(() => {}),

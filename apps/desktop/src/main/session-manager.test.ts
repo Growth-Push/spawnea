@@ -887,7 +887,7 @@ hosts:
       task: 'Detachable Task',
     });
 
-    const mockWebContents = { send: () => {} } as any;
+    const mockWebContents = { send: () => {}, on: () => {}, removeListener: () => {} } as any;
     const { ptyChannelId } = await sessionManager.attachSession(session.id, mockWebContents);
     expect(ptyChannelId).toBe(`pty-${session.id}`);
 
@@ -1126,7 +1126,7 @@ hosts:
     const initialSessionCount = mockHost.sessions.size;
 
     // Reconnect / Attach
-    const mockWebContents = { send: () => {} } as any;
+    const mockWebContents = { send: () => {}, on: () => {}, removeListener: () => {} } as any;
     const { ptyChannelId } = await sessionManager.attachSession(session.id, mockWebContents);
     expect(ptyChannelId).toBe(`pty-${session.id}`);
 
@@ -1493,6 +1493,8 @@ up 1 day, 5 hours
     const mockWebContents = {
       send: vi.fn(),
       isDestroyed: vi.fn().mockReturnValue(false),
+      on: vi.fn(),
+      removeListener: vi.fn(),
     } as unknown as import('electron').WebContents;
 
     sessionManager.setWebContentsGetter(() => mockWebContents);
