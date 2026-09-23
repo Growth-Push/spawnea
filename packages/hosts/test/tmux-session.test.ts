@@ -76,6 +76,17 @@ describe('TmuxManager', () => {
     await expect(new TmuxManager().killSession(host, 'last-session')).resolves.toBe(true);
   });
 
+  it.each([
+    { sessions: 'another-session', expected: true },
+    { sessions: 'last-session\nanother-session', expected: false },
+  ])('checks the session list after tmux reports no current target', async ({ sessions, expected }) => {
+    const host = new MockHostAdapter('host-1');
+    host.customRules.push({ pattern: 'tmux kill-session', response: { stdout: '', stderr: '', exitCode: 0 } });
+    host.customRules.push({ pattern: 'tmux has-session', response: { stdout: '', stderr: 'no current target', exitCode: 1 } });
+    host.customRules.push({ pattern: 'tmux list-sessions', response: { stdout: `${sessions}\n`, stderr: '', exitCode: 0 } });
+    await expect(new TmuxManager().killSession(host, 'last-session')).resolves.toBe(expected);
+  });
+
   it('rejects tmux server exit when the kill did not succeed', async () => {
     const host = new MockHostAdapter('host-1');
     host.customRules.push({ pattern: 'tmux kill-session', response: { stdout: '', stderr: 'failed', exitCode: 1 } });

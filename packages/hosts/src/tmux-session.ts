@@ -363,6 +363,12 @@ export class TmuxManager {
     if (verification.exitCode === 1 && /^(can't find session(?:\b|:)|no server running on |error connecting to .+ \(No such file or directory\))/m.test(verification.stderr.trim())) {
       return true;
     }
+    if (verification.exitCode === 1 && verification.stderr.trim() === 'no current target') {
+      const remainingSessions = await host.execute('LC_ALL=C tmux list-sessions -F "#{session_name}"');
+      const listedNames = remainingSessions.stdout.split('\n').map((name) => name.trim()).filter(Boolean);
+      if (remainingSessions.exitCode === 0) return !listedNames.includes(sessionName);
+      if (remainingSessions.exitCode === 1 && /^no server running on /m.test(remainingSessions.stderr.trim())) return true;
+    }
     if (killResult.exitCode === 0 && verification.exitCode === 1 && verification.stderr.trim() === 'server exited unexpectedly') {
       return true;
     }
