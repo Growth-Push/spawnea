@@ -143,6 +143,7 @@ const mockSessions: Session[] = [
 
 function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Window['spawneaApi'] {
   return {
+    quitForReleaseSmoke: vi.fn().mockResolvedValue(true),
     writeClipboardText: vi.fn().mockResolvedValue(undefined),
     listSessions: vi.fn().mockResolvedValue(mockSessions),
     reconcileSessions: vi.fn().mockResolvedValue(mockSessions),
@@ -468,7 +469,7 @@ describe('App Desktop Shell', () => {
     });
   });
 
-  it('does not request host telemetry automatically for a credential-backed host', async () => {
+  it('does not request telemetry for an active credential-backed host', async () => {
     const credentialServer: Server = {
       ...mockServers[0],
       id: 'secure',
@@ -479,7 +480,10 @@ describe('App Desktop Shell', () => {
     const getHostHealth = vi.fn().mockResolvedValue({});
     const checkHostHealth = vi.fn().mockResolvedValue({});
     window.spawneaApi = createMockSpawneaApi({
-      listSessions: vi.fn().mockResolvedValue([]),
+      listSessions: vi.fn().mockResolvedValue([{
+        ...mockSessions[0],
+        serverId: 'secure',
+      }]),
       listServers: vi.fn().mockResolvedValue([credentialServer]),
       listProjects: vi.fn().mockResolvedValue([]),
       listAgents: vi.fn().mockResolvedValue([]),
@@ -510,6 +514,69 @@ describe('App Desktop Shell', () => {
     await waitFor(() => expect(getHostHealth).toHaveBeenCalledTimes(1));
     expect(getHostSystemInfo).not.toHaveBeenCalled();
     expect(checkHostHealth).not.toHaveBeenCalled();
+  });
+
+  it('requests host telemetry only for the active session host', async () => {
+    const getHostSystemInfo = vi.fn().mockResolvedValue(null);
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue([mockSessions[0]]),
+      listServers: vi.fn().mockResolvedValue(mockServers),
+      listProjects: vi.fn().mockResolvedValue(mockProjects),
+      listAgents: vi.fn().mockResolvedValue(mockAgents),
+      getHostSystemInfo,
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(getHostSystemInfo).toHaveBeenCalledWith('srv-1', false));
+    expect(getHostSystemInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it('requests telemetry for every host with a session', async () => {
+    const getHostSystemInfo = vi.fn().mockResolvedValue(null);
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue(mockSessions),
+      listServers: vi.fn().mockResolvedValue([
+        ...mockServers,
+        { ...mockServers[0], id: 'unused-host', name: 'Unused host' },
+      ]),
+      getHostSystemInfo,
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(getHostSystemInfo).toHaveBeenCalledTimes(2));
+    expect(getHostSystemInfo).toHaveBeenCalledWith('srv-1', false);
+    expect(getHostSystemInfo).toHaveBeenCalledWith('srv-2', false);
+    expect(getHostSystemInfo).not.toHaveBeenCalledWith('unused-host', false);
+  });
+
+  it('does not force automatic telemetry after refresh with no sessions', async () => {
+    let loadedSessions: Session[] = [];
+    let refreshControlData: (() => void) | undefined;
+    const getHostSystemInfo = vi.fn().mockResolvedValue(null);
+    const listSessions = vi.fn().mockImplementation(async () => loadedSessions);
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions,
+      reconcileSessions: vi.fn().mockResolvedValue([]),
+      getHostSystemInfo,
+      onControlDataChanged: vi.fn((callback) => {
+        refreshControlData = callback;
+        return () => {};
+      }),
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (0)')).toBeDefined());
+
+    fireEvent.click(screen.getByTestId('sidebar-actions-menu-button'));
+    fireEvent.click(screen.getByTestId('sidebar-refresh-sessions-button'));
+    await waitFor(() => expect(listSessions).toHaveBeenCalled());
+
+    loadedSessions = [mockSessions[0]];
+    await act(async () => { refreshControlData?.(); });
+    await waitFor(() => expect(getHostSystemInfo).toHaveBeenCalledWith('srv-1', false));
+    expect(getHostSystemInfo).not.toHaveBeenCalledWith('srv-1', true);
   });
 
   it('edits a session title inline and updates every renderer surface', async () => {
@@ -1513,7 +1580,7 @@ describe('App Desktop Shell', () => {
 
     // Session 1: host is Linux/Ubuntu, harness is claude -> should render provider-icon-claude and os-icon
     expect(screen.getAllByTestId('provider-icon-claude').length).toBeGreaterThan(0);
-    expect(screen.getAllByTestId('os-icon-ubuntu').length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getAllByTestId('os-icon-ubuntu').length).toBeGreaterThan(0));
 
     // Branch and path should be displayed
     expect(screen.getAllByText('feat/jwt-auth').length).toBeGreaterThan(0);
@@ -1594,16 +1661,19 @@ describe('App Desktop Shell', () => {
     });
   });
 
-  it('triggers session reconciliation when clicking the sidebar refresh button (FG-2.4.2)', async () => {
+  it('refreshes telemetry for every session host when reconciling sessions (FG-2.4.2)', async () => {
     const reconcileMock = vi.fn().mockResolvedValue(mockSessions);
+    const getHostSystemInfo = vi.fn().mockResolvedValue(null);
     window.spawneaApi = createMockSpawneaApi({
       reconcileSessions: reconcileMock,
+      getHostSystemInfo,
     });
 
     render(<App />);
 
     await waitFor(() => {
       expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+      expect(getHostSystemInfo).toHaveBeenCalledWith('srv-1', false);
     });
 
     // Open the sidebar actions menu and refresh sessions
@@ -1613,6 +1683,8 @@ describe('App Desktop Shell', () => {
 
     await waitFor(() => {
       expect(reconcileMock).toHaveBeenCalled();
+      expect(getHostSystemInfo).toHaveBeenCalledWith('srv-1', true);
+      expect(getHostSystemInfo).toHaveBeenCalledWith('srv-2', true);
     });
   });
 

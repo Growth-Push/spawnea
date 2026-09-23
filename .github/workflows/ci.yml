@@ -10,7 +10,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -29,7 +29,7 @@ jobs:
           cache: pnpm
 
       - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends tmux
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends tmux xvfb
 
       - name: Install Gitleaks
         env:
@@ -65,8 +65,20 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Smoke test
+      - name: Run bootstrap-only Electron smoke
         run: pnpm smoke
+
+      - name: Generate package notices
+        run: pnpm license:notices
+
+      - name: Rebuild Linux Electron native modules
+        run: pnpm --filter @spawnea/desktop exec electron-rebuild -f --only better-sqlite3,node-pty --arch=x64
+
+      - name: Build Linux x64 AppImage
+        run: pnpm --filter @spawnea/desktop exec electron-vite build && pnpm --filter @spawnea/desktop exec electron-builder --config electron-builder.yml --publish never --linux AppImage --x64
+
+      - name: Run packaged Linux desktop smoke
+        run: xvfb-run -a pnpm --filter @spawnea/desktop smoke:release
 
       - name: Audit dependencies
         run: pnpm audit --audit-level=high

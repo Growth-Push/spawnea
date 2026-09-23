@@ -1223,6 +1223,10 @@ up 1 day, 5 hours
     mockHost.customRules = [];
     const info2 = await sessionManager.getHostSystemInfo('dev-workstation');
     expect(info2).toEqual(info1);
+
+    const probeCount = mockHost.executedCommands.filter(({ command }) => command.includes('===UNAME===')).length;
+    await sessionManager.getHostSystemInfo('dev-workstation', true);
+    expect(mockHost.executedCommands.filter(({ command }) => command.includes('===UNAME==='))).toHaveLength(probeCount + 1);
   });
 
   it('lists files and reads file content for an active session (FG-5.1, FG-5.2)', async () => {

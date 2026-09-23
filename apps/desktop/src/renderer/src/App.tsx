@@ -116,6 +116,8 @@ export function App(): React.JSX.Element {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [uiZoom, setUiZoom] = useState(readStoredUiZoom);
   const [hostInfoMap, setHostInfoMap] = useState<Record<string, HostSystemInfo>>({});
+  const [hostTelemetryRefreshNonce, setHostTelemetryRefreshNonce] = useState(0);
+  const hostTelemetryRefreshNonceRef = useRef(0);
   const [hostHealthMap, setHostHealthMap] = useState<Record<string, HostHealthResult>>({});
   const [gitDirtyBySessionId, setGitDirtyBySessionId] = useState<Record<string, boolean>>({});
   const [gitChangeCountBySessionId, setGitChangeCountBySessionId] = useState<Record<string, number>>({});
@@ -246,22 +248,6 @@ export function App(): React.JSX.Element {
         setProjects(loadedProjects);
         setAgents(loadedAgents);
         setControlFinalizationRequests(pendingControlRequests);
-
-        if (window.spawneaApi.getHostSystemInfo) {
-          loadedServers.forEach(async (srv) => {
-            const credentialBacked = srv.host === 'credential-backed'
-              || catalogState?.catalog?.hosts[srv.id]?.ssh?.target === '1Password-backed';
-            if (credentialBacked) return;
-            try {
-              const info = await window.spawneaApi.getHostSystemInfo(srv.id);
-              if (info) {
-                setHostInfoMap((prev) => ({ ...prev, [srv.id]: info }));
-              }
-            } catch {
-              // ignore
-            }
-          });
-        }
 
         if (window.spawneaApi.getHostHealth) {
           try {
@@ -963,6 +949,7 @@ export function App(): React.JSX.Element {
         await loadData();
       }
       setGitRefreshNonce((current) => current + 1);
+      setHostTelemetryRefreshNonce((current) => current + 1);
     } catch (err) {
       console.error('Failed to refresh/reconcile data:', err);
     } finally {
@@ -1114,6 +1101,31 @@ export function App(): React.JSX.Element {
   const activeServer = activeSession ? servers.find((s) => s.id === activeSession.serverId) : undefined;
   const activeProject = activeSession ? projects.find((p) => p.id === activeSession.projectId) : undefined;
   const activeAgent = activeSession ? agents.find((a) => a.id === activeSession.agentId) : undefined;
+  const sessionServerIdsKey = [...new Set(sessions.map((session) => session.serverId))].sort().join('|');
+
+  useEffect(() => {
+    const forceRefresh = hostTelemetryRefreshNonce !== hostTelemetryRefreshNonceRef.current;
+    hostTelemetryRefreshNonceRef.current = hostTelemetryRefreshNonce;
+    if (!sessionServerIdsKey || !window.spawneaApi?.getHostSystemInfo) return;
+
+    let cancelled = false;
+    for (const serverId of sessionServerIdsKey.split('|')) {
+      const server = servers.find((candidate) => candidate.id === serverId);
+      const credentialBacked = server?.host === 'credential-backed'
+        || catalog?.hosts[serverId]?.ssh?.target === '1Password-backed';
+      if (credentialBacked) continue;
+
+      window.spawneaApi.getHostSystemInfo(serverId, forceRefresh).then((info) => {
+        if (!cancelled && info) {
+          setHostInfoMap((prev) => ({ ...prev, [serverId]: info }));
+        }
+      }).catch(() => {
+        // Host telemetry is best effort and must not block active sessions.
+      });
+    }
+    return () => { cancelled = true; };
+  }, [sessionServerIdsKey, servers, catalog, hostTelemetryRefreshNonce]);
+
   const effectiveLogFilePath = new URLSearchParams(window.location.search).get('spawneaLogFile')
     ?? 'user-data/logs/spawnea.log';
 

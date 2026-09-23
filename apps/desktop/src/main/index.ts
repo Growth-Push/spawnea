@@ -3,7 +3,7 @@ import { join, resolve, dirname } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdtempSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm as rmAsync, writeFile } from 'node:fs/promises';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
 import {
   createLogger,
@@ -334,6 +334,17 @@ function registerIpcHandlers(
   discoveryService: LocalDiscoveryService,
   controlService: AgentControlService
 ): void {
+  if (process.env.SPAWNEA_RELEASE_SMOKE === '1') {
+    ipcMain.handle('app:quitForReleaseSmoke', (event) => {
+      if (event.sender !== mainWindowRef?.webContents) {
+        throw new Error('Release smoke quit can only be requested by the Spawnea window');
+      }
+      // Give the IPC response time to reach the smoke runner before quitting.
+      setTimeout(() => app.quit(), 100);
+      return true;
+    });
+  }
+
   // Operational Catalog Handlers
   ipcMain.handle('catalog:get', async () => sanitizeCatalogStateForRenderer(catManager.getState()));
   ipcMain.handle('catalog:reload', async () => {
@@ -384,7 +395,9 @@ function registerIpcHandlers(
     }
     return sessManager.checkAllHostsHealth({ includeCredentialBacked: true });
   });
-  ipcMain.handle('hosts:getSystemInfo', async (_event, id: string) => sessManager.getHostSystemInfo(id));
+  ipcMain.handle('hosts:getSystemInfo', async (_event, id: string, forceRefresh = false) =>
+    sessManager.getHostSystemInfo(id, forceRefresh === true)
+  );
   ipcMain.handle('hosts:getConnectionState', async (_event, serverId: string) => sessManager.getHostConnectionState(serverId));
   ipcMain.handle('hosts:getConnectionEndpoint', async (_event, serverId: string) =>
     sessManager.getHostConnectionEndpoint(serverId)
@@ -1078,6 +1091,9 @@ app.whenReady().then(async () => {
       logger.info('Smoke test completed successfully, exiting process');
       setTimeout(async () => {
         await shutdownApplication();
+        if (smokeUserDataPath) {
+          await rmAsync(smokeUserDataPath, { recursive: true, force: true });
+        }
         app.exit(0);
       }, 200);
       return;
@@ -1098,6 +1114,9 @@ app.whenReady().then(async () => {
     logger.error('Failed to initialize main process application services', { error });
     if (process.env.SPAWNEA_SMOKE_TEST === '1' || process.argv.includes('--smoke-test')) {
       await shutdownApplication();
+      if (smokeUserDataPath) {
+        await rmAsync(smokeUserDataPath, { recursive: true, force: true });
+      }
       process.exit(1);
     }
   }

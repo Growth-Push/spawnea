@@ -41,7 +41,13 @@ import type {
   ControlGetTurnResult,
 } from '@spawnea/domain';
 
+const releaseSmokeApi = process.env.SPAWNEA_RELEASE_SMOKE === '1'
+  ? { quitForReleaseSmoke: (): Promise<boolean> => ipcRenderer.invoke('app:quitForReleaseSmoke') }
+  : {};
+
 export const api = {
+  ...releaseSmokeApi,
+
   // Operational Catalog
   getCatalog: (): Promise<CatalogState> => ipcRenderer.invoke('catalog:get'),
   reloadCatalog: (): Promise<CatalogReloadResult> => ipcRenderer.invoke('catalog:reload'),
@@ -60,7 +66,8 @@ export const api = {
   testServer: (id: string): Promise<HostTestResult> => ipcRenderer.invoke('servers:test', id),
   getHostHealth: (id?: string): Promise<Record<string, HostHealthResult>> => ipcRenderer.invoke('hosts:getHealth', id),
   checkHostHealth: (id?: string): Promise<Record<string, HostHealthResult>> => ipcRenderer.invoke('hosts:checkHealth', id),
-  getHostSystemInfo: (id: string): Promise<HostSystemInfo | null> => ipcRenderer.invoke('hosts:getSystemInfo', id),
+  getHostSystemInfo: (id: string, forceRefresh = false): Promise<HostSystemInfo | null> =>
+    ipcRenderer.invoke('hosts:getSystemInfo', id, forceRefresh),
   getHostConnectionState: (id: string): Promise<HostConnectionState> => ipcRenderer.invoke('hosts:getConnectionState', id),
   getHostConnectionEndpoint: (id: string): Promise<HostConnectionEndpoint | null> =>
     ipcRenderer.invoke('hosts:getConnectionEndpoint', id),
