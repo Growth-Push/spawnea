@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
-import { LocalHostAdapter, MockHostAdapter, OnePasswordResolver } from '@spawnea/hosts';
+import { LocalHostAdapter, MockHostAdapter, OnePasswordResolver, SSHHostAdapter } from '@spawnea/hosts';
 import {
   createCatalogProjectPathLocator,
   createCatalogWorktreePathLocator,
@@ -2052,6 +2052,101 @@ up 1 day, 5 hours
       expect(await repos.sessions.findById(child.id)).not.toBeNull();
       expect(await (sessionManager as any).tmuxManager.hasSession(mockHost, child.tmuxSessionName)).toBe(true);
       merge.mockRestore();
+    });
+  });
+
+  describe('Default shell harness support', () => {
+    it('creates a session with the default interactive shell harness and falls back to host shell', async () => {
+      // Save default shell agent for host
+      await repos.agents.save({
+        id: 'dev-workstation:shell',
+        name: 'Interactive Shell (Development Workstation)',
+        harness: 'shell',
+        command: 'bash',
+        argsTemplate: [],
+      });
+
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:shell',
+        task: 'Interactive terminal session',
+      });
+
+      expect(session).toBeDefined();
+      expect(session.agentId).toBe('dev-workstation:shell');
+      expect(session.status).toBe('working');
+
+      const context = await contextStore.load(session.id);
+      expect(context).not.toBeNull();
+      expect(context?.harness.id).toBe('dev-workstation:shell');
+      expect(context?.harness.name).toBe('Interactive Shell (Development Workstation)');
+      expect(context?.harness.command).toBe('bash');
+
+      // Verify tmux persistent session was created
+      const tmuxCommand = mockHost.executedCommands.find(({ command }) =>
+        command.includes('tmux new-session') && command.includes(session.tmuxSessionName)
+      );
+      expect(tmuxCommand).toBeDefined();
+    });
+
+    it('falls back to POSIX sh for a remote SSH-backed server loaded only from repos.servers', async () => {
+      // Create server in DB only (not in catalog)
+      await repos.servers.save({
+        id: 'remote-db-only',
+        name: 'Remote DB-only Server',
+        host: 'remote.example.test',
+        sshPort: 22,
+        enabled: true,
+      });
+
+      await repos.projects.save({
+        id: 'remote-db-only:my-proj',
+        serverId: 'remote-db-only',
+        name: 'Remote Project',
+        rootPath: '/remote/workspace/proj',
+      });
+
+      // Default shell agent in DB with no command specified or empty
+      await repos.agents.save({
+        id: 'remote-db-only:shell',
+        name: 'Interactive Shell (Remote DB-only Server)',
+        harness: 'shell',
+        command: '',
+      });
+
+      const sshManager = new SessionManager({
+        repositories: repos,
+        catalogManager: catManager,
+        contextStore,
+        ptyBroker,
+      });
+      expect(await sshManager.getHostAdapter('remote-db-only')).toBeInstanceOf(SSHHostAdapter);
+      await sshManager.dispose();
+
+      const remoteMockHost = new MockHostAdapter('remote-db-only', ['/remote/workspace/proj']);
+      // Point sessionManager to return remoteMockHost for remote-db-only
+      const prevFactory = (sessionManager as any).customHostFactory;
+      (sessionManager as any).customHostFactory = async (serverId: string) => {
+        if (serverId === 'remote-db-only') return remoteMockHost;
+        return prevFactory ? prevFactory(serverId) : mockHost;
+      };
+
+      const session = await sessionManager.createSession({
+        serverId: 'remote-db-only',
+        projectId: 'remote-db-only:my-proj',
+        agentId: 'remote-db-only:shell',
+        task: 'Remote terminal task',
+      });
+
+      expect(session).toBeDefined();
+      const context = await contextStore.load(session.id);
+      expect(context?.harness.command).toBe('sh');
+
+      const tmuxCommand = remoteMockHost.executedCommands.find(({ command }) =>
+        command.includes('tmux new-session')
+      );
+      expect(tmuxCommand).toBeDefined();
     });
   });
 });

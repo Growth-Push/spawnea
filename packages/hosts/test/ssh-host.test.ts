@@ -1,4 +1,8 @@
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Client } from 'ssh2';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SSHHostAdapter } from '../src/ssh-host.js';
 
@@ -51,5 +55,36 @@ describe('SSHHostAdapter execution', () => {
     expect(stream.listenerCount('close')).toBe(0);
     expect(stream.listenerCount('error')).toBe(0);
     expect(stream.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not use IdentityAgent for automatic health probes when agent auth is disabled', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'spawnea-ssh-health-'));
+    const configPath = join(tempDir, 'ssh_config');
+    writeFileSync(configPath, 'Host health-probe\n  HostName health-probe.example.test\n  IdentityAgent /tmp/onepassword-agent.sock\n');
+    let capturedConfig: import('ssh2').ConnectConfig | undefined;
+    const connect = vi.spyOn(Client.prototype, 'connect').mockImplementation(function (this: Client, config) {
+      capturedConfig = config;
+      queueMicrotask(() => this.emit('ready'));
+      return this;
+    });
+    const end = vi.spyOn(Client.prototype, 'end').mockImplementation(function (this: Client) {
+      this.emit('close');
+      return this;
+    });
+    const adapter = new SSHHostAdapter({
+      serverId: 'health-probe',
+      target: 'health-probe',
+      configPath,
+    });
+
+    try {
+      await adapter.connect({ allowAgentAuth: false });
+      expect(capturedConfig).not.toHaveProperty('agent');
+      await adapter.disconnect();
+    } finally {
+      connect.mockRestore();
+      end.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

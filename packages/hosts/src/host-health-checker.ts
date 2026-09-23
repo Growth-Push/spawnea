@@ -134,7 +134,7 @@ export class HostHealthChecker {
       const adapterPromise = this.getHostAdapter(hostId);
 
       // 2. Bound entire connection and probe with timeoutMs
-      const testPromise = adapterPromise.then((adapter) => adapter.testConnection());
+      const testPromise = adapterPromise.then((adapter) => adapter.testConnection({ allowAgentAuth: false }));
 
       let timeoutTimer: NodeJS.Timeout | null = null;
       const timeoutPromise = new Promise<never>((_, reject) => {

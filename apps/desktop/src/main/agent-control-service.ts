@@ -599,7 +599,11 @@ export class AgentControlService {
     if (!harnessId.startsWith(prefix)) return false;
     const catalogHost = this.getActiveCatalog?.()?.hosts[hostId];
     if (!catalogHost?.enabled || catalogHost.ssh) return false;
-    return catalogHost.harnesses[harnessId.slice(prefix.length)]?.enabled === true;
+    const rawHarnessId = harnessId.slice(prefix.length);
+    if (rawHarnessId === 'shell' && !catalogHost.harnesses['shell']) {
+      return true;
+    }
+    return catalogHost.harnesses[rawHarnessId]?.enabled === true;
   }
 
   private isBootstrapProjectAvailable(projectId: string, hostId: string): boolean {

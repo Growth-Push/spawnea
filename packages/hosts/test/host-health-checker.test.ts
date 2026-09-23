@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { HostHealthChecker } from '../src/host-health-checker.js';
 import { MockHostAdapter } from '../src/mock-host.js';
 import type { HostAdapter, HostTestResult } from '@spawnea/domain';
@@ -7,6 +7,7 @@ describe('HostHealthChecker', () => {
   it('checks health of a single healthy host', async () => {
     const hostMap = new Map<string, HostAdapter>();
     const mockLocal = new MockHostAdapter('local-host');
+    const testConnection = vi.spyOn(mockLocal, 'testConnection');
     hostMap.set('local-host', mockLocal);
 
     const checker = new HostHealthChecker({
@@ -25,6 +26,7 @@ describe('HostHealthChecker', () => {
     expect(result.latencyMs).toBeDefined();
     expect(result.error).toBeUndefined();
     expect(checker.getCachedHealth('local-host')).toEqual(result);
+    expect(testConnection).toHaveBeenCalledWith({ allowAgentAuth: false });
   });
 
   it('marks failing host as unreachable', async () => {
