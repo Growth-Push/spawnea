@@ -13,7 +13,7 @@ const appData = join(root, 'user-data');
 const runtime = join(root, 'runtime');
 const project = join(root, 'project');
 const shimDir = join(root, 'bin');
-const tmuxTmpDir = join(root, 'tmux');
+let tmuxTmpDir = join(root, 'tmux');
 const controlRuntimeFile = join(runtime, 'control-runtime.json');
 const configPath = join(appData, 'config.yaml');
 const socketName = `release-smoke-${process.pid}`;
@@ -239,7 +239,7 @@ async function connectToRenderer(port) {
 async function startApp(env) {
   const port = await freePort();
   const args = [`--remote-debugging-port=${port}`];
-  if (platform === 'linux') args.push('--ozone-platform-hint=auto');
+  if (platform === 'linux') args.push('--ozone-platform-hint=auto', '--no-sandbox');
   appProcess = spawn(appExecutable, args, {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -270,12 +270,21 @@ async function startApp(env) {
 }
 
 async function closeApp({ allowForcedTermination = false } = {}) {
+  let quitRequestError;
   if (devToolsClient) {
-    await devToolsClient.callApi('quitForReleaseSmoke');
-    devToolsClient.close();
-    devToolsClient = undefined;
+    try {
+      await devToolsClient.callApi('quitForReleaseSmoke');
+    } catch (error) {
+      quitRequestError = error;
+    } finally {
+      devToolsClient.close();
+      devToolsClient = undefined;
+    }
   }
-  if (!appProcess) return;
+  if (!appProcess) {
+    if (quitRequestError && !allowForcedTermination) throw quitRequestError;
+    return;
+  }
   const closingProcess = appProcess;
   const exited = () => closingProcess.exitCode !== null || closingProcess.signalCode !== null;
   let forcedSignal;
@@ -297,6 +306,7 @@ async function closeApp({ allowForcedTermination = false } = {}) {
   if (forcedSignal && !allowForcedTermination) {
     throw new Error(`Packaged Spawnea did not shut down cleanly; it required ${forcedSignal}`);
   }
+  if (quitRequestError && !allowForcedTermination) throw quitRequestError;
 }
 
 async function findAppExecutable() {
@@ -351,6 +361,8 @@ async function initializeFixture() {
   if (platform !== 'win32') {
     controlSocketDir = await mkdtemp(join('/tmp', 'spw-'));
     controlSocket = join(controlSocketDir, 'control.sock');
+    tmuxTmpDir = join(controlSocketDir, 't');
+    await mkdir(tmuxTmpDir);
   } else {
     controlSocketDir = runtime;
     controlSocket = join(runtime, 'control.sock');
@@ -511,7 +523,7 @@ async function cleanup() {
     const uninstaller = join(installedDirectory, 'Uninstall Spawnea.exe');
     try {
       await access(uninstaller);
-      run(uninstaller, ['/S'], { cwd: installedDirectory });
+      run(uninstaller, ['/S', `_?=${installedDirectory}`], { cwd: installedDirectory });
     } catch (error) {
       windowsUninstallError = error;
     }

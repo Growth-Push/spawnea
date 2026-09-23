@@ -516,6 +516,51 @@ describe('App Desktop Shell', () => {
     expect(checkHostHealth).not.toHaveBeenCalled();
   });
 
+  it('waits for credential-backed host classification before requesting telemetry', async () => {
+    let resolveCatalog: ((value: Awaited<ReturnType<NonNullable<Window['spawneaApi']['getCatalog']>>>) => void) | undefined;
+    const catalogPromise = new Promise<Awaited<ReturnType<NonNullable<Window['spawneaApi']['getCatalog']>>>>((resolve) => {
+      resolveCatalog = resolve;
+    });
+    const getHostSystemInfo = vi.fn().mockResolvedValue(null);
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue([{ ...mockSessions[0], serverId: 'credential-user-host' }]),
+      listServers: vi.fn().mockResolvedValue([{
+        ...mockServers[0],
+        id: 'credential-user-host',
+        host: 'build-box',
+      }]),
+      getCatalog: vi.fn().mockReturnValue(catalogPromise),
+      getHostSystemInfo,
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(window.spawneaApi?.getCatalog).toHaveBeenCalledTimes(1));
+    expect(getHostSystemInfo).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveCatalog?.({
+        catalog: {
+          version: 1,
+          hosts: {
+            'credential-user-host': {
+              id: 'credential-user-host',
+              name: 'Build box',
+              enabled: true,
+              ssh: { target: '1Password-backed' },
+              projects: {},
+              harnesses: {},
+            },
+          },
+        },
+        filePath: '/config/spawnea.yaml',
+        errors: null,
+      });
+    });
+
+    expect(getHostSystemInfo).not.toHaveBeenCalled();
+  });
+
   it('requests host telemetry only for the active session host', async () => {
     const getHostSystemInfo = vi.fn().mockResolvedValue(null);
     window.spawneaApi = createMockSpawneaApi({
