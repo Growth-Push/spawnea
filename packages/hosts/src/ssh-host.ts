@@ -121,7 +121,7 @@ export class SSHHostAdapter implements HostAdapter {
     return this.connected && this.client !== null;
   }
 
-  async connect(): Promise<void> {
+  async connect(options: { allowAgentAuth?: boolean } = {}): Promise<void> {
     if (this.isConnected()) {
       return;
     }
@@ -130,14 +130,14 @@ export class SSHHostAdapter implements HostAdapter {
       return this.connectingPromise;
     }
 
-    this.connectingPromise = this.establishConnection().catch((error) => {
+    this.connectingPromise = this.establishConnection(options.allowAgentAuth !== false).catch((error) => {
       this.connectingPromise = null;
       throw error;
     });
     return this.connectingPromise;
   }
 
-  private async establishConnection(): Promise<void> {
+  private async establishConnection(allowAgentAuth: boolean): Promise<void> {
     const supplied = this.connectionOptionsProvider
       ? await this.connectionOptionsProvider()
       : {
@@ -232,7 +232,7 @@ export class SSHHostAdapter implements HostAdapter {
       // Honor the selected host's OpenSSH IdentityAgent, including a local
       // 1Password agent socket, when the desktop process did not inherit
       // SSH_AUTH_SOCK from its launcher environment.
-      const identityAgent = resolved.identityAgent === 'none'
+      const identityAgent = !allowAgentAuth || resolved.identityAgent === 'none'
         ? undefined
         : resolved.identityAgent || process.env.SSH_AUTH_SOCK;
       if (identityAgent) {
@@ -322,10 +322,10 @@ export class SSHHostAdapter implements HostAdapter {
     return this.supervisor.retryNow(this.serverId, () => this.reconnect());
   }
 
-  async testConnection(): Promise<HostTestResult> {
+  async testConnection(options: { allowAgentAuth?: boolean } = {}): Promise<HostTestResult> {
     const startTime = Date.now();
     try {
-      await this.connect();
+      await this.connect(options);
       const result = await this.execute('echo __SPAWNEA_OK__', { timeoutMs: 5000 });
       const latencyMs = Date.now() - startTime;
 

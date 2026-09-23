@@ -117,10 +117,10 @@ export function isLoopbackHost(hostname: string): boolean {
 
 export interface HostAdapter {
   readonly serverId: string;
-  connect(): Promise<void>;
+  connect(options?: { allowAgentAuth?: boolean }): Promise<void>;
   disconnect(): Promise<void>;
   isConnected(): boolean;
-  testConnection(): Promise<HostTestResult>;
+  testConnection(options?: { allowAgentAuth?: boolean }): Promise<HostTestResult>;
   execute(command: string, options?: ExecOptions): Promise<ExecResult>;
   openPty(command: string, options: PtyOptions): Promise<PtyStream>;
   listFiles(dirPath: string): Promise<import('./index.js').FileEntry[]>;
