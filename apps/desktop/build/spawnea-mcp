@@ -14,4 +14,7 @@ if [ ! -x "$electron_binary" ]; then
   exit 1
 fi
 
-exec "$electron_binary" --spawnea-mcp "$@"
+case "$(uname -s)" in
+  Linux) exec "$electron_binary" --no-sandbox --spawnea-mcp "$@" ;;
+  *) exec "$electron_binary" --spawnea-mcp "$@" ;;
+esac
