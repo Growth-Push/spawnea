@@ -69,6 +69,20 @@ describe('TmuxManager', () => {
     await expect(new TmuxManager().killSession(host, 'uncertain')).rejects.toThrow('Failed to verify termination');
   });
 
+  it('accepts tmux server exit after a successful last-session kill', async () => {
+    const host = new MockHostAdapter('host-1');
+    host.customRules.push({ pattern: 'tmux kill-session', response: { stdout: '', stderr: '', exitCode: 0 } });
+    host.customRules.push({ pattern: 'tmux has-session', response: { stdout: '', stderr: 'server exited unexpectedly', exitCode: 1 } });
+    await expect(new TmuxManager().killSession(host, 'last-session')).resolves.toBe(true);
+  });
+
+  it('rejects tmux server exit when the kill did not succeed', async () => {
+    const host = new MockHostAdapter('host-1');
+    host.customRules.push({ pattern: 'tmux kill-session', response: { stdout: '', stderr: 'failed', exitCode: 1 } });
+    host.customRules.push({ pattern: 'tmux has-session', response: { stdout: '', stderr: 'server exited unexpectedly', exitCode: 1 } });
+    await expect(new TmuxManager().killSession(host, 'last-session')).rejects.toThrow('Failed to verify termination');
+  });
+
   it('creates a persistent tmux session and sends the harness command (FG-2.2.6, FG-2.2.7)', async () => {
     const host = new MockHostAdapter('host-1');
     const entries: LogEntry[] = [];
