@@ -178,6 +178,40 @@ class DevToolsClient {
     return result.result.value;
   }
 
+  async callPageFunction(functionDeclaration, args = []) {
+    const windowResult = await this.send('Runtime.evaluate', {
+      expression: 'window',
+      returnByValue: false,
+    });
+    if (windowResult.exceptionDetails) {
+      throw new Error(windowResult.exceptionDetails.exception?.description || windowResult.exceptionDetails.text);
+    }
+    const result = await this.send('Runtime.callFunctionOn', {
+      objectId: windowResult.result.objectId,
+      functionDeclaration,
+      arguments: args.map((value) => ({ value })),
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: true,
+    });
+    if (result.exceptionDetails) {
+      throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+    }
+    try {
+      return result.result.value;
+    } finally {
+      await this.send('Runtime.releaseObject', { objectId: windowResult.result.objectId });
+    }
+  }
+
+  async callApi(methodName, args = []) {
+    assert.ok(['attachSession', 'listSessions', 'quitForReleaseSmoke', 'readyPty', 'writePty'].includes(methodName), 'Unsupported release smoke API method');
+    return this.callPageFunction(
+      'function (name, values) { return this.spawneaApi[name](...values); }',
+      [methodName, args],
+    );
+  }
+
   close() {
     if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
       this.socket.close();
@@ -237,7 +271,7 @@ async function startApp(env) {
 
 async function closeApp({ allowForcedTermination = false } = {}) {
   if (devToolsClient) {
-    await devToolsClient.evaluate('window.spawneaApi.quitForReleaseSmoke()');
+    await devToolsClient.callApi('quitForReleaseSmoke');
     devToolsClient.close();
     devToolsClient = undefined;
   }
@@ -393,7 +427,7 @@ async function createAndExerciseSession(client, marker) {
 }
 
 async function attachAndExerciseSession(client, sessionId, marker) {
-  const setup = await client.evaluate(`(async () => {
+  await client.evaluate(`(() => {
     const api = window.spawneaApi;
     window.__spawneaReleaseSmokeOutput = '';
     window.__spawneaReleaseSmokeUnsubscribe?.();
@@ -402,20 +436,19 @@ async function attachAndExerciseSession(client, sessionId, marker) {
       window.__spawneaReleaseSmokeOutput = (window.__spawneaReleaseSmokeOutput + data).slice(-4096);
       api.ackPty(channelId, new TextEncoder().encode(data).length);
     });
-    const attached = await api.attachSession(${JSON.stringify(sessionId)}, 80, 24);
-    window.__spawneaReleaseSmokeChannel = attached.ptyChannelId;
-    api.readyPty(attached.ptyChannelId);
-    return attached.ptyChannelId;
   })()`);
-  assert.ok(setup, 'The disposable session should attach through preload IPC');
+  const setup = await client.callApi('attachSession', [sessionId, 80, 24]);
+  assert.ok(setup?.ptyChannelId, 'The disposable session should attach through preload IPC');
+  await client.callPageFunction('function (channelId) { this.__spawneaReleaseSmokeChannel = channelId; }', [setup.ptyChannelId]);
+  await client.callApi('readyPty', [setup.ptyChannelId]);
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
   const disableEchoCommand = 'stty -echo\r';
-  await client.evaluate(`window.spawneaApi.writePty(window.__spawneaReleaseSmokeChannel, ${JSON.stringify(disableEchoCommand)}); true`);
+  await client.callApi('writePty', [setup.ptyChannelId, disableEchoCommand]);
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
   const splitAt = Math.ceil(marker.length / 2);
   const command = `printf '%s\\n' ${shellQuote(marker.slice(0, splitAt))}${shellQuote(marker.slice(splitAt))}\r`;
   assert.ok(!command.includes(marker), 'The terminal input must not contain the complete output marker');
-  await client.evaluate(`window.spawneaApi.writePty(window.__spawneaReleaseSmokeChannel, ${JSON.stringify(command)}); true`);
+  await client.callApi('writePty', [setup.ptyChannelId, command]);
   let output;
   try {
     output = await waitFor(async () => {
@@ -519,7 +552,8 @@ try {
 
     console.log('Restarting the packaged Spawnea process');
     client = await startApp(env);
-    const restored = await client.evaluate(`(async () => (await window.spawneaApi.listSessions()).some((session) => session.id === ${JSON.stringify(smokeSession.sessionId)}))()`);
+    const restoredSessions = await client.callApi('listSessions');
+    const restored = restoredSessions.some((session) => session.id === smokeSession.sessionId);
     assert.equal(restored, true, 'Restarting the packaged app should recover the saved session');
     await attachAndExerciseSession(client, smokeSession.sessionId, `spawnea-release-restart-${process.pid}`);
     logResult('tmux-session-reconnect-after-restart', 'passed');
