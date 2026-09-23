@@ -116,6 +116,8 @@ export function App(): React.JSX.Element {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [uiZoom, setUiZoom] = useState(readStoredUiZoom);
   const [hostInfoMap, setHostInfoMap] = useState<Record<string, HostSystemInfo>>({});
+  const [hostTelemetryRefreshNonce, setHostTelemetryRefreshNonce] = useState(0);
+  const hostTelemetryRefreshNonceRef = useRef(0);
   const [hostHealthMap, setHostHealthMap] = useState<Record<string, HostHealthResult>>({});
   const [gitDirtyBySessionId, setGitDirtyBySessionId] = useState<Record<string, boolean>>({});
   const [gitChangeCountBySessionId, setGitChangeCountBySessionId] = useState<Record<string, number>>({});
@@ -124,6 +126,7 @@ export function App(): React.JSX.Element {
   const [gitRefreshNonce, setGitRefreshNonce] = useState(0);
   const [statusDetailsMap, setStatusDetailsMap] = useState<Record<string, import('@spawnea/domain').SessionStatusResult>>({});
   const [catalog, setCatalog] = useState<OperationalCatalog | null>(null);
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [catalogPath, setCatalogPath] = useState<string | undefined>(undefined);
   const [catalogErrors, setCatalogErrors] = useState<CatalogValidationError[] | null>(null);
   const [isReloadingCatalog, setIsReloadingCatalog] = useState(false);
@@ -247,22 +250,6 @@ export function App(): React.JSX.Element {
         setAgents(loadedAgents);
         setControlFinalizationRequests(pendingControlRequests);
 
-        if (window.spawneaApi.getHostSystemInfo) {
-          loadedServers.forEach(async (srv) => {
-            const credentialBacked = srv.host === 'credential-backed'
-              || catalogState?.catalog?.hosts[srv.id]?.ssh?.target === '1Password-backed';
-            if (credentialBacked) return;
-            try {
-              const info = await window.spawneaApi.getHostSystemInfo(srv.id);
-              if (info) {
-                setHostInfoMap((prev) => ({ ...prev, [srv.id]: info }));
-              }
-            } catch {
-              // ignore
-            }
-          });
-        }
-
         if (window.spawneaApi.getHostHealth) {
           try {
             const initialHealth = await window.spawneaApi.getHostHealth();
@@ -278,6 +265,7 @@ export function App(): React.JSX.Element {
           setCatalog(catalogState.catalog);
           setCatalogPath(catalogState.filePath);
           setCatalogErrors(catalogState.errors);
+          setCatalogLoaded(!catalogState.errors || Boolean(catalogState.catalog));
         }
 
         setActiveSessionId((current) => {
@@ -573,6 +561,7 @@ export function App(): React.JSX.Element {
     }
 
     setCatalog(result.catalog);
+    setCatalogLoaded(true);
     setCatalogPath(result.filePath);
     setCatalogErrors(null);
     const [loadedServers, loadedProjects, loadedAgents] = await Promise.all([
@@ -904,6 +893,7 @@ export function App(): React.JSX.Element {
     setProjects(loadedProjects);
     setAgents(loadedAgents);
     setCatalog(catalogState.catalog);
+    setCatalogLoaded(!catalogState.errors || Boolean(catalogState.catalog));
     setCatalogPath(catalogState.filePath);
     setCatalogErrors(catalogState.errors);
     setReloadNotice('Confirmed discovery changes were written to the catalog.');
@@ -918,6 +908,7 @@ export function App(): React.JSX.Element {
         if (result.catalog) {
           setCatalog(result.catalog);
         }
+        if (result.success || result.catalog) setCatalogLoaded(true);
         setCatalogPath(result.filePath);
         setCatalogErrors(result.errors);
         // Refresh server/project/agent lists
@@ -963,6 +954,7 @@ export function App(): React.JSX.Element {
         await loadData();
       }
       setGitRefreshNonce((current) => current + 1);
+      setHostTelemetryRefreshNonce((current) => current + 1);
     } catch (err) {
       console.error('Failed to refresh/reconcile data:', err);
     } finally {
@@ -1114,6 +1106,45 @@ export function App(): React.JSX.Element {
   const activeServer = activeSession ? servers.find((s) => s.id === activeSession.serverId) : undefined;
   const activeProject = activeSession ? projects.find((p) => p.id === activeSession.projectId) : undefined;
   const activeAgent = activeSession ? agents.find((a) => a.id === activeSession.agentId) : undefined;
+  const sessionServerIdsKey = [...new Set(sessions.map((session) => session.serverId))].sort().join('|');
+
+  useEffect(() => {
+    const forceRefresh = hostTelemetryRefreshNonce !== hostTelemetryRefreshNonceRef.current;
+    if (!sessionServerIdsKey) {
+      hostTelemetryRefreshNonceRef.current = hostTelemetryRefreshNonce;
+      return;
+    }
+    if (!catalogLoaded || !window.spawneaApi?.getHostSystemInfo) return;
+
+    let cancelled = false;
+    const hostInfoRequests = sessionServerIdsKey.split('|').map(async (serverId) => {
+      const server = servers.find((candidate) => candidate.id === serverId);
+      const credentialBacked = server?.host === 'credential-backed'
+        || catalog?.hosts[serverId]?.ssh?.target === '1Password-backed';
+      if (credentialBacked) return null;
+
+      try {
+        const info = await window.spawneaApi.getHostSystemInfo(serverId, forceRefresh);
+        return info ? { serverId, info } : null;
+      } catch {
+        // Host telemetry is best effort and must not block active sessions.
+        return null;
+      }
+    });
+    void Promise.all(hostInfoRequests).then((results) => {
+      if (cancelled) return;
+      const availableInfo = results.filter((result): result is NonNullable<typeof result> => result !== null);
+      if (availableInfo.length > 0) {
+        setHostInfoMap((prev) => ({
+          ...prev,
+          ...Object.fromEntries(availableInfo.map(({ serverId, info }) => [serverId, info])),
+        }));
+      }
+      hostTelemetryRefreshNonceRef.current = hostTelemetryRefreshNonce;
+    });
+    return () => { cancelled = true; };
+  }, [sessionServerIdsKey, servers, catalog, catalogLoaded, hostTelemetryRefreshNonce]);
+
   const effectiveLogFilePath = new URLSearchParams(window.location.search).get('spawneaLogFile')
     ?? 'user-data/logs/spawnea.log';
 

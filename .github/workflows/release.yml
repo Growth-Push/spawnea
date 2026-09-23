@@ -110,6 +110,25 @@ jobs:
       - name: Package application
         run: pnpm license:notices && pnpm --filter @spawnea/desktop exec electron-rebuild -f --only better-sqlite3,node-pty --arch=${{ matrix.arch }} && pnpm --filter @spawnea/desktop exec electron-vite build && pnpm --filter @spawnea/desktop exec electron-builder --config electron-builder.yml --publish never ${{ matrix.builder_args }}
 
+      - name: Install Unix desktop smoke prerequisites
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            if ! command -v tmux >/dev/null 2>&1; then brew install tmux; fi
+          else
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends tmux xvfb
+          fi
+
+      - name: Run packaged desktop smoke on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm --filter @spawnea/desktop smoke:release
+
+      - name: Run packaged desktop smoke on macOS and Windows
+        if: runner.os != 'Linux'
+        run: pnpm --filter @spawnea/desktop smoke:release
+
       - name: Generate checksums
         shell: bash
         run: |

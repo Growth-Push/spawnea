@@ -51,6 +51,16 @@ before `electron-builder` runs.
 6. The workflow creates a draft GitHub Release and attaches all successful artifacts.
 7. A human reviewer checks the artifact list, checksums, installation behavior, and release notes before publishing the draft manually.
 
+## Desktop smoke coverage
+
+`pnpm smoke` is a bootstrap-only check. It initializes main-process services and exits before creating a window, so it does not prove that the renderer or preload works.
+
+`pnpm --filter @spawnea/desktop smoke:release` runs against the platform package in `release/` with a private temporary catalog, user-data directory, logs, MCP runtime, project repository, and tmux socket. It launches the packaged app, verifies the renderer/preload IPC round trip, creates and attaches a disposable local session, sends bounded terminal input and checks its output, closes and restarts Spawnea, and reattaches to the surviving tmux session. On Linux and macOS it also launches the packaged MCP helper and calls the bootstrap state tool. Windows reports the local tmux adapter and MCP transport as unsupported.
+
+Pull request CI packages and launches the Linux x64 AppImage in a virtual X display, including the local session lifecycle and packaged MCP helper checks. Tag release jobs repeat the package launch smoke on each native artifact runner before checksums or draft-release upload. The Linux CI smoke does not claim Wayland-specific validation; run the desktop through the local project Electron binary with native Wayland flags for that check. Platform results are emitted as `RESULT` lines so passed, failed, and explicitly unsupported checks are visible in workflow logs.
+
+The smoke script only cleans its generated temporary directories and uniquely named tmux server. It never reads the user's catalog or user-data directory.
+
 The workflow has read-only repository permissions by default. Only the final draft-release job receives `contents: write`, and the workflow is tag-only rather than pull-request triggered. No release credentials are exposed to pull requests or untrusted code.
 
 ## Installing a future release
