@@ -47,13 +47,23 @@ export interface ControlErrorRecord {
   occurredAt: string;
 }
 
+export interface ControlHarnessView {
+  id: string;
+  agentId: string;
+  name: string;
+  harness: string;
+  kind: string;
+  command: string;
+}
+
 export interface ControlStateSnapshot {
   apiVersion: SpawneaControlApiVersion;
   ui: ControlUiState;
   sessions: ControlSessionView[];
   hosts: Array<{ id: string; name: string; enabled: boolean }>;
   projects: Array<{ id: string; name: string; hostId: string; rootPath: string; baseBranch?: string }>;
-  harnesses: Array<{ id: string; name: string; command: string }>;
+  harnesses: ControlHarnessView[];
+  availableHarnesses?: ControlHarnessView[];
   recentErrors: ControlErrorRecord[];
 }
 
@@ -192,6 +202,13 @@ export interface ControlCreateChildSessionResult {
   displayName: string;
   workspace: ChildSessionWorkspaceMode;
   workspaceMode: ChildSessionWorkspaceMode;
+  agentId: string;
+  harness: {
+    id: string;
+    name: string;
+    command?: string;
+    kind?: string;
+  };
   status: SessionStatus;
   initialStatus: SessionStatus;
   startupStatus: 'starting' | 'ready' | 'needs_human' | 'failed' | 'unknown';

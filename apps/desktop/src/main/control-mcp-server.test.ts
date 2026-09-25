@@ -523,4 +523,118 @@ describe('Spawnea MCP v1 contract', () => {
       maxBytes: 16_384,
     });
   });
+
+  it('discovers AGY and Shell harnesses and returns selected harness on child creation via MCP', async () => {
+    const mockState = {
+      apiVersion: 'v1' as const,
+      ui: { activeSessionId: 'root-1', activeTab: 'terminal' as const },
+      sessions: [
+        {
+          id: 'root-1',
+          name: 'Root Codex',
+          task: 'Orchestration',
+          host: { id: 'local-1', name: 'Local Host' },
+          project: { id: 'proj-1', name: 'Spawnea' },
+          harness: { id: 'local-1:codex', name: 'Codex CLI', command: 'codex' },
+          worktree: { managed: true, path: '/repo', branch: 'main', baseBranch: 'main' },
+          tmuxSessionName: 'spawnea-root-1',
+          status: 'working' as const,
+          creationSource: 'mcp' as const,
+          active: true,
+          createdAt: '2026-09-06T10:00:00.000Z',
+          lastActivityAt: '2026-09-06T10:00:00.000Z',
+        },
+      ],
+      hosts: [{ id: 'local-1', name: 'Local Host', enabled: true }],
+      projects: [{ id: 'proj-1', name: 'Spawnea', hostId: 'local-1', rootPath: '/repo', baseBranch: 'main' }],
+      harnesses: [
+        { id: 'local-1:codex', agentId: 'local-1:codex', name: 'Codex CLI', harness: 'codex', kind: 'codex', command: 'codex' },
+        { id: 'local-1:agy', agentId: 'local-1:agy', name: 'AGY Reviewer', harness: 'agy', kind: 'agy', command: 'agy' },
+        { id: 'local-1:shell', agentId: 'local-1:shell', name: 'Interactive Shell', harness: 'shell', kind: 'shell', command: 'bash' },
+      ],
+      availableHarnesses: [
+        { id: 'local-1:codex', agentId: 'local-1:codex', name: 'Codex CLI', harness: 'codex', kind: 'codex', command: 'codex' },
+        { id: 'local-1:agy', agentId: 'local-1:agy', name: 'AGY Reviewer', harness: 'agy', kind: 'agy', command: 'agy' },
+        { id: 'local-1:shell', agentId: 'local-1:shell', name: 'Interactive Shell', harness: 'shell', kind: 'shell', command: 'bash' },
+      ],
+      recentErrors: [],
+    };
+
+    const getState = vi.fn().mockResolvedValue(mockState);
+    const createChildSession = vi.fn().mockImplementation(async (req) => ({
+      apiVersion: 'v1' as const,
+      sessionCreated: true as const,
+      parentSessionId: req.parentSession,
+      childAlias: 'child-1',
+      sessionId: 'child-sess-1',
+      childSessionId: 'child-sess-1',
+      name: req.name || req.task,
+      displayName: req.name || req.task,
+      workspace: req.workspace,
+      workspaceMode: req.workspace,
+      agentId: req.agentId,
+      harness: {
+        id: req.agentId,
+        name: req.agentId.includes('shell') ? 'Interactive Shell' : 'AGY Reviewer',
+        command: req.agentId.includes('shell') ? 'bash' : 'agy',
+        kind: req.agentId.includes('shell') ? 'shell' : 'agy',
+      },
+      status: 'starting' as const,
+      initialStatus: 'starting' as const,
+      startupStatus: 'starting' as const,
+      promptStatus: 'not_requested' as const,
+      replayed: false,
+      parentBranch: 'main',
+      parentWasDirty: false,
+      excludedParentChanges: false,
+    }));
+
+    const client = await connect({ getState, createChildSession } as Partial<AgentControlService>);
+
+    // Step 1: Call spawnea_get_state to discover available harnesses
+    const stateResult = await client.callTool({ name: 'spawnea_get_state', arguments: {} });
+    const content = stateResult.structuredContent as typeof mockState;
+    expect(content.harnesses).toHaveLength(3);
+    const discoveredIds = content.harnesses.map((h) => h.id);
+    expect(discoveredIds).toContain('local-1:agy');
+    expect(discoveredIds).toContain('local-1:shell');
+
+    // Step 2: Launch Shell child
+    const shellResult = await client.callTool({
+      name: 'spawnea_create_child_session',
+      arguments: {
+        parentSession: 'root-1',
+        task: 'Run test suite',
+        agentId: 'local-1:shell',
+        workspace: 'same-project',
+      },
+    });
+    expect(shellResult.structuredContent).toMatchObject({
+      sessionId: 'child-sess-1',
+      agentId: 'local-1:shell',
+      harness: {
+        id: 'local-1:shell',
+        kind: 'shell',
+      },
+    });
+
+    // Step 3: Launch AGY child
+    const agyResult = await client.callTool({
+      name: 'spawnea_create_child_session',
+      arguments: {
+        parentSession: 'root-1',
+        task: 'Review PR',
+        agentId: 'local-1:agy',
+        workspace: 'same-project',
+      },
+    });
+    expect(agyResult.structuredContent).toMatchObject({
+      sessionId: 'child-sess-1',
+      agentId: 'local-1:agy',
+      harness: {
+        id: 'local-1:agy',
+        kind: 'agy',
+      },
+    });
+  });
 });

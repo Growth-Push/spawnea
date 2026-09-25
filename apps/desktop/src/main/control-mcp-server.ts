@@ -82,7 +82,7 @@ function registerScopedTools(
       'spawnea_get_state',
       {
         title: 'Get Spawnea state',
-        description: 'List current sessions, hosts, projects, harnesses, worktrees, statuses, active session/tab, and recent control errors.',
+        description: 'List current active sessions (with their running harnesses) and discover authorized launchable harnesses, hosts, projects, worktrees, active session/tab, and recent control errors.',
         inputSchema: z.object({}),
         annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       },
@@ -162,7 +162,7 @@ function registerScopedTools(
     'spawnea_create_child_session',
     {
       title: 'Create a child session',
-      description: 'Create one authorized direct child on a configured host/project with an optional harness model and initial prompt. Multiline prompts are submitted through the harness-specific launch/delivery contract.',
+      description: "Create one authorized direct child on a configured host/project. Pass agentId to select a specific configured harness discovered from spawnea_get_state (e.g. 'local:codex', 'local:shell'); display titles are not accepted. If omitted, agentId defaults to the parent harness. An unavailable agentId fails explicitly. Multiline prompts are submitted through the harness-specific launch/delivery contract.",
       inputSchema: z.object({
         clientRequestId: z.string().min(1).max(120).optional(),
         parentSession: z.string().min(1).max(200),
