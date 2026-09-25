@@ -152,16 +152,34 @@ No arguments. Returns:
     "task": "Fix retry handling",
     "host": { "id": "local", "name": "Local workstation" },
     "project": { "id": "spawnea", "name": "Spawnea" },
-    "harness": { "id": "codex", "name": "Codex", "command": "codex" },
+    "harness": { "id": "local:codex", "name": "Codex CLI", "command": "codex" },
     "worktree": { "managed": true, "path": "/repo/worktrees/retries", "branch": "spawnea/retries", "baseBranch": "main" },
     "creationSource": "mcp",
     "status": "working",
     "active": true,
     "activeTab": "diff"
   }],
-  "hosts": [], "projects": [], "harnesses": [], "recentErrors": []
+  "hosts": [{ "id": "local", "name": "Local workstation", "enabled": true }],
+  "projects": [{ "id": "local:spawnea", "name": "Spawnea", "hostId": "local", "rootPath": "/repo", "baseBranch": "main" }],
+  "harnesses": [
+    { "id": "local:codex", "agentId": "local:codex", "name": "Codex CLI", "harness": "codex", "kind": "codex", "command": "codex" },
+    { "id": "local:agy", "agentId": "local:agy", "name": "Antigravity Reviewer", "harness": "agy", "kind": "agy", "command": "agy" },
+    { "id": "local:shell", "agentId": "local:shell", "name": "Interactive Shell (Local)", "harness": "shell", "kind": "shell", "command": "bash" }
+  ],
+  "availableHarnesses": [
+    { "id": "local:codex", "agentId": "local:codex", "name": "Codex CLI", "harness": "codex", "kind": "codex", "command": "codex" },
+    { "id": "local:agy", "agentId": "local:agy", "name": "Antigravity Reviewer", "harness": "agy", "kind": "agy", "command": "agy" },
+    { "id": "local:shell", "agentId": "local:shell", "name": "Interactive Shell (Local)", "harness": "shell", "kind": "shell", "command": "bash" }
+  ],
+  "recentErrors": []
 }
 ```
+
+Discovery semantics:
+- `sessions` lists the active sessions in the authenticated root's scope and the specific harness each running session is executing.
+- `harnesses` (and alias `availableHarnesses`) lists all authorized, enabled launchable harnesses configured for the root host. Available choices remain stable across child creation and deletion.
+- Each harness entry includes `id` / `agentId` (the stable identifier to pass to `spawnea_create_child_session`), `name` (human-readable title), `harness` / `kind` (launch category: `'codex'`, `'agy'`, `'hermes'`, `'shell'`, etc.), and `command`. Callers can use `kind: "shell"` to distinguish plain interactive shells from AI agent harnesses.
+- Disabled catalog harnesses and private operational data (credentials, secret tokens, private launch arguments, environment variables) are never returned.
 
 ### `spawnea_inspect_worktree`
 
@@ -299,12 +317,44 @@ Input:
   "model": "gpt-5",
   "task": "Investigate regression in test suite",
   "workspace": "same-project",
-  "agentId": "agent-id",
+  "agentId": "local:codex",
   "initialPrompt": "Review the current changes"
 }
 ```
 
-Creates a direct child session under an existing root parent session. Optional `serverId`, `projectId`, and `model` default to the parent server, project, and harness configuration. `model` must use the supported model identifier format. A different-host child requires both `serverId` and `projectId` plus `workspace: "new-worktree"`; invalid combinations are rejected. `workspace` must be either `"same-project"` (runs directly in parent's working directory) or `"new-worktree"` (creates an isolated managed git worktree). Enforces a strict 2-level cap: child sessions cannot spawn grandchildren. An optional `clientRequestId` makes exact retries idempotent. When `initialPrompt` is present, Spawnea waits for the session to leave `starting` for a bounded period and reports `promptStatus`, `turnId`, and any prompt error separately from successful session creation.
+Creates a direct child session under an existing root parent session.
+
+Harness selection and verification:
+- `agentId`: Optional. Specifies the exact launch harness. Callers must pass a stable `agentId` discovered via `spawnea_get_state` (such as `local:codex`, `local:agy`, or `local:shell`). Display titles (e.g. `"Codex"`) are not accepted.
+- When `agentId` is omitted, the child automatically inherits the parent session's harness.
+- If a requested `agentId` is missing or disabled in the target host's configuration, child creation fails explicitly (`Harness '<agentId>' is not available on host '<host>'`). Spawnea never silently substitutes Codex or another harness.
+- The creation response reports `sessionCreated: true`, `sessionId`, `childAlias`, `agentId`, and `harness: { id, name, command, kind }`, allowing callers to independently verify the launched harness.
+
+Optional `serverId`, `projectId`, and `model` default to the parent server, project, and harness configuration. `model` must use the supported model identifier format. A different-host child requires both `serverId` and `projectId` plus `workspace: "new-worktree"`; invalid combinations are rejected. `workspace` must be either `"same-project"` (runs directly in parent's working directory) or `"new-worktree"` (creates an isolated managed git worktree). Enforces a strict 2-level cap: child sessions cannot spawn grandchildren. An optional `clientRequestId` makes exact retries idempotent. When `initialPrompt` is present, Spawnea waits for the session to leave `starting` for a bounded period and reports `promptStatus`, `turnId`, and any prompt error separately from successful session creation.
+
+#### Plain shell configuration
+
+To configure an explicit plain shell harness (such as for test runners or CodeRabbit tools) in `config/spawnea.yaml`:
+
+```yaml
+hosts:
+  local:
+    name: Local Workstation
+    enabled: true
+    harnesses:
+      codex:
+        name: Codex CLI
+        command: codex
+        args: []
+        enabled: true
+      shell:
+        name: Interactive Shell
+        command: bash
+        args: []
+        enabled: true
+```
+
+Spawnea also automatically provides a default interactive shell (`<hostId>:shell`) for enabled hosts if no custom shell entry is configured.
 
 ### `spawnea_list_sessions`
 

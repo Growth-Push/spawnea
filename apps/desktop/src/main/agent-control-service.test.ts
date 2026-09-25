@@ -14,6 +14,7 @@ describe('AgentControlService', () => {
     renameSession: ReturnType<typeof vi.fn>;
     inspectManagedWorktree: ReturnType<typeof vi.fn>;
     finishSession: ReturnType<typeof vi.fn>;
+    closeSharedChildSession: ReturnType<typeof vi.fn>;
     createChildSession: ReturnType<typeof vi.fn>;
     sendPrompt: ReturnType<typeof vi.fn>;
     captureSessionTerminal: ReturnType<typeof vi.fn>;
@@ -97,16 +98,21 @@ describe('AgentControlService', () => {
         state: 'active', currentBranch: 'spawnea/existing', message: 'Ready',
       }),
       finishSession: vi.fn().mockResolvedValue({ action: 'integrate', removed: true }),
+      closeSharedChildSession: vi.fn().mockResolvedValue({ action: 'close', removed: true, workspacePreserved: true }),
       createChildSession: vi.fn(async (input, source) => {
         createdCount += 1;
-        return session(`child-${createdCount}`, {
+        const parent = input.parentSessionId ? await repositories.sessions.findById(input.parentSessionId) : null;
+        const childSession = session(`child-${createdCount}`, {
           task: input.task,
           name: input.name || input.task,
           parentSessionId: input.parentSessionId,
           childAlias: `child-${createdCount}`,
           status: 'starting',
           creationSource: source,
+          agentId: input.agentId || parent?.agentId || 'agent-1',
         });
+        await repositories.sessions.save(childSession);
+        return childSession;
       }),
       sendPrompt: vi.fn(async (_sessionId: string, _prompt: string) => ({
         delivered: true,
@@ -820,6 +826,498 @@ describe('AgentControlService', () => {
 
       expect(navResult.activeSessionId).toBe('child-sess-id');
       expect(navResult.activeTab).toBe('terminal');
+    });
+
+    describe('Scoped Harness Discovery and Selection', () => {
+      it('discovers authorized AGY, Hermes profiles, and configured shell from a Codex-only root', async () => {
+        await repositories.servers.save({
+          id: 'local-test',
+          name: 'Local Test Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+        await repositories.projects.save({
+          id: 'local-test:proj',
+          serverId: 'local-test',
+          name: 'Project',
+          rootPath: '/repo',
+          baseBranch: 'main',
+        });
+        await repositories.agents.save({
+          id: 'local-test:codex',
+          name: 'Codex CLI',
+          harness: 'codex',
+          command: 'codex',
+          argsTemplate: ['--private-arg'],
+          envVars: { SECRET_TOKEN: 'hidden' },
+        });
+        await repositories.agents.save({
+          id: 'local-test:agy',
+          name: 'Antigravity Reviewer',
+          harness: 'agy',
+          command: 'agy',
+        });
+        await repositories.agents.save({
+          id: 'local-test:hermes-profile',
+          name: 'Hermes Profile',
+          harness: 'hermes',
+          command: 'hermes',
+        });
+        await repositories.agents.save({
+          id: 'local-test:shell',
+          name: 'Interactive Shell (Local Test)',
+          harness: 'shell',
+          command: 'bash',
+        });
+        await repositories.agents.save({
+          id: 'local-test:disabled-harness',
+          name: 'Disabled Agent',
+          harness: 'disabled',
+          command: 'disabled',
+        });
+        await repositories.agents.save({
+          id: 'remote-host:agent-foo',
+          name: 'Remote Foo',
+          harness: 'codex',
+          command: 'codex',
+        });
+
+        const testCatalog = (): OperationalCatalog => ({
+          version: 1,
+          hosts: {
+            'local-test': {
+              id: 'local-test',
+              name: 'Local Test Host',
+              enabled: true,
+              projects: { proj: { id: 'proj', name: 'Project', path: '/repo', enabled: true } },
+              harnesses: {
+                codex: { id: 'codex', name: 'Codex CLI', command: 'codex', args: [], enabled: true },
+                agy: { id: 'agy', name: 'Antigravity Reviewer', command: 'agy', args: [], enabled: true },
+                'hermes-profile': { id: 'hermes-profile', name: 'Hermes Profile', command: 'hermes', args: [], enabled: true },
+                'disabled-harness': { id: 'disabled-harness', name: 'Disabled Agent', command: 'disabled', args: [], enabled: false },
+              },
+            },
+          },
+        });
+
+        const testService = new AgentControlService({
+          repositories,
+          sessionManager: sessionManager as unknown as SessionManager,
+          logger: createLogger('ScopedHarnessTest'),
+          getActiveCatalog: testCatalog,
+        });
+
+        await repositories.sessions.save(
+          session('codex-root', {
+            serverId: 'local-test',
+            projectId: 'local-test:proj',
+            agentId: 'local-test:codex',
+            status: 'working',
+          })
+        );
+
+        const scoped = await testService.createScopedControl('codex-root');
+        const state = await scoped.getState();
+
+        const harnessIds = state.harnesses.map((h) => h.id);
+        expect(harnessIds).toContain('local-test:codex');
+        expect(harnessIds).toContain('local-test:agy');
+        expect(harnessIds).toContain('local-test:hermes-profile');
+        expect(harnessIds).toContain('local-test:shell');
+
+        expect(harnessIds).not.toContain('local-test:disabled-harness');
+        expect(harnessIds).not.toContain('remote-host:agent-foo');
+
+        const shellHarness = state.harnesses.find((h) => h.id === 'local-test:shell');
+        expect(shellHarness).toMatchObject({
+          id: 'local-test:shell',
+          agentId: 'local-test:shell',
+          name: 'Interactive Shell (Local Test)',
+          harness: 'shell',
+          kind: 'shell',
+          command: 'bash',
+        });
+
+        const agyHarness = state.harnesses.find((h) => h.id === 'local-test:agy');
+        expect(agyHarness).toMatchObject({
+          id: 'local-test:agy',
+          agentId: 'local-test:agy',
+          name: 'Antigravity Reviewer',
+          harness: 'agy',
+          kind: 'agy',
+          command: 'agy',
+        });
+
+        expect(state.availableHarnesses).toEqual(state.harnesses);
+
+        const rawJson = JSON.stringify(state);
+        expect(rawJson).not.toContain('SECRET_TOKEN');
+        expect(rawJson).not.toContain('hidden');
+        expect(rawJson).not.toContain('--private-arg');
+      });
+
+      it('keeps available choices stable across child session creation and removal', async () => {
+        await repositories.servers.save({
+          id: 'local-stable',
+          name: 'Local Stable Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+        await repositories.projects.save({
+          id: 'local-stable:proj',
+          serverId: 'local-stable',
+          name: 'Project',
+          rootPath: '/repo',
+        });
+        await repositories.agents.save({
+          id: 'local-stable:codex',
+          name: 'Codex',
+          harness: 'codex',
+          command: 'codex',
+        });
+        await repositories.agents.save({
+          id: 'local-stable:agy',
+          name: 'AGY',
+          harness: 'agy',
+          command: 'agy',
+        });
+        await repositories.agents.save({
+          id: 'local-stable:shell',
+          name: 'Shell',
+          harness: 'shell',
+          command: 'sh',
+        });
+
+        await repositories.sessions.save(
+          session('stable-root', {
+            serverId: 'local-stable',
+            projectId: 'local-stable:proj',
+            agentId: 'local-stable:codex',
+            status: 'working',
+          })
+        );
+
+        const scoped = await service.createScopedControl('stable-root');
+        const initial = await scoped.getState();
+        const initialHarnessIds = initial.harnesses.map((h) => h.id).sort();
+
+        const childResult = await scoped.createChildSession({
+          parentSession: 'stable-root',
+          task: 'Review task',
+          agentId: 'local-stable:agy',
+          workspace: 'same-project',
+        });
+
+        const whileActive = await scoped.getState();
+        expect(whileActive.harnesses.map((h) => h.id).sort()).toEqual(initialHarnessIds);
+
+        await scoped.closeSharedChildSession(childResult.sessionId);
+        await repositories.sessions.delete(childResult.sessionId);
+
+        const afterClose = await scoped.getState();
+        expect(afterClose.harnesses.map((h) => h.id).sort()).toEqual(initialHarnessIds);
+      });
+
+      it('reports actual selected harness identity in creation response', async () => {
+        await repositories.servers.save({
+          id: 'local-ident',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+        await repositories.projects.save({
+          id: 'local-ident:proj',
+          serverId: 'local-ident',
+          name: 'Project',
+          rootPath: '/repo',
+        });
+        await repositories.agents.save({
+          id: 'local-ident:codex',
+          name: 'Codex CLI',
+          harness: 'codex',
+          command: 'codex',
+        });
+        await repositories.agents.save({
+          id: 'local-ident:shell',
+          name: 'Interactive Shell',
+          harness: 'shell',
+          command: 'bash',
+        });
+        await repositories.agents.save({
+          id: 'local-ident:agy',
+          name: 'AGY Reviewer',
+          harness: 'agy',
+          command: 'agy',
+        });
+
+        await repositories.sessions.save(
+          session('ident-root', {
+            serverId: 'local-ident',
+            projectId: 'local-ident:proj',
+            agentId: 'local-ident:codex',
+            status: 'working',
+          })
+        );
+
+        const scoped = await service.createScopedControl('ident-root');
+
+        const shellChild = await scoped.createChildSession({
+          parentSession: 'ident-root',
+          task: 'Run unit tests in shell',
+          agentId: 'local-ident:shell',
+          workspace: 'same-project',
+        });
+
+        expect(shellChild.agentId).toBe('local-ident:shell');
+        expect(shellChild.harness).toEqual({
+          id: 'local-ident:shell',
+          name: 'Interactive Shell',
+          command: 'bash',
+          kind: 'shell',
+        });
+
+        const agyChild = await scoped.createChildSession({
+          parentSession: 'ident-root',
+          task: 'Code review',
+          agentId: 'local-ident:agy',
+          workspace: 'same-project',
+        });
+
+        expect(agyChild.agentId).toBe('local-ident:agy');
+        expect(agyChild.harness).toEqual({
+          id: 'local-ident:agy',
+          name: 'AGY Reviewer',
+          command: 'agy',
+          kind: 'agy',
+        });
+
+        const defaultChild = await scoped.createChildSession({
+          parentSession: 'ident-root',
+          task: 'Default task',
+          workspace: 'same-project',
+        });
+
+        expect(defaultChild.agentId).toBe('local-ident:codex');
+        expect(defaultChild.harness).toEqual({
+          id: 'local-ident:codex',
+          name: 'Codex CLI',
+          command: 'codex',
+          kind: 'codex',
+        });
+      });
+
+      it('rejects unavailable or disabled harness creation requests explicitly without fallback', async () => {
+        await repositories.servers.save({
+          id: 'local-val',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+        await repositories.projects.save({
+          id: 'local-val:proj',
+          serverId: 'local-val',
+          name: 'Project',
+          rootPath: '/repo',
+        });
+        await repositories.agents.save({
+          id: 'local-val:codex',
+          name: 'Codex',
+          harness: 'codex',
+          command: 'codex',
+        });
+        await repositories.agents.save({
+          id: 'local-val:disabled-agent',
+          name: 'Disabled Agent',
+          harness: 'disabled',
+          command: 'disabled',
+        });
+
+        const catalogWithDisabled = (): OperationalCatalog => ({
+          version: 1,
+          hosts: {
+            'local-val': {
+              id: 'local-val',
+              name: 'Local Host',
+              enabled: true,
+              projects: { proj: { id: 'proj', name: 'Project', path: '/repo', enabled: true } },
+              harnesses: {
+                codex: { id: 'codex', name: 'Codex', command: 'codex', args: [], enabled: true },
+                'disabled-agent': { id: 'disabled-agent', name: 'Disabled Agent', command: 'disabled', args: [], enabled: false },
+              },
+            },
+          },
+        });
+
+        const testService = new AgentControlService({
+          repositories,
+          sessionManager: sessionManager as unknown as SessionManager,
+          logger: createLogger('HarnessValidationTest'),
+          getActiveCatalog: catalogWithDisabled,
+        });
+
+        await repositories.sessions.save(
+          session('val-root', {
+            serverId: 'local-val',
+            projectId: 'local-val:proj',
+            agentId: 'local-val:codex',
+            status: 'working',
+          })
+        );
+
+        const scoped = await testService.createScopedControl('val-root');
+
+        await expect(
+          scoped.createChildSession({
+            parentSession: 'val-root',
+            task: 'Must fail',
+            agentId: 'local-val:disabled-agent',
+            workspace: 'same-project',
+          })
+        ).rejects.toThrow("Harness 'local-val:disabled-agent' is not available on host 'local-val'");
+
+        await expect(
+          scoped.createChildSession({
+            parentSession: 'val-root',
+            task: 'Must fail',
+            agentId: 'local-val:nonexistent',
+            workspace: 'same-project',
+          })
+        ).rejects.toThrow("Harness 'local-val:nonexistent' is not available on host 'local-val'");
+
+        await repositories.sessions.save(
+          session('val-disabled-root', {
+            serverId: 'local-val',
+            projectId: 'local-val:proj',
+            agentId: 'local-val:disabled-agent',
+            status: 'working',
+          })
+        );
+        const scopedDisabled = await testService.createScopedControl('val-disabled-root');
+        await expect(
+          scopedDisabled.createChildSession({
+            parentSession: 'val-disabled-root',
+            task: 'Must fail inheriting disabled harness',
+            workspace: 'same-project',
+          })
+        ).rejects.toThrow("Harness 'local-val:disabled-agent' is not available on host 'local-val'");
+
+        await repositories.servers.save({
+          id: 'remote-val',
+          name: 'Remote Host',
+          host: 'remote',
+          sshPort: 22,
+          enabled: true,
+        });
+        await repositories.projects.save({
+          id: 'remote-val:proj',
+          serverId: 'remote-val',
+          name: 'Remote Project',
+          rootPath: '/remote-repo',
+        });
+        await expect(
+          scoped.createChildSession({
+            parentSession: 'val-root',
+            serverId: 'remote-val',
+            projectId: 'remote-val:proj',
+            task: 'Must fail cross-host inheritance',
+            workspace: 'new-worktree',
+          })
+        ).rejects.toThrow("Harness 'local-val:codex' is not available on host 'remote-val'");
+
+        await repositories.agents.save({
+          id: 'ghost-host:codex',
+          name: 'Codex',
+          harness: 'codex',
+          command: 'codex',
+        });
+        await expect(
+          scoped.createChildSession({
+            parentSession: 'val-root',
+            serverId: 'ghost-host',
+            projectId: 'ghost-host:proj',
+            agentId: 'ghost-host:codex',
+            task: 'Must fail on uncataloged host',
+            workspace: 'new-worktree',
+          })
+        ).rejects.toThrow("Harness 'ghost-host:codex' is not available on host 'ghost-host'");
+      });
+
+      it('allows unqualified seed agent fallback when catalog host omits it', async () => {
+        const catalogWithoutSeed = vi.fn().mockReturnValue({
+          hosts: {
+            'local-val': {
+              id: 'local-val',
+              name: 'Local Host',
+              enabled: true,
+              projects: { proj: { id: 'proj', name: 'Project', path: '/repo', enabled: true } },
+              harnesses: {
+                codex: { id: 'codex', name: 'Codex', command: 'codex', args: [], enabled: true },
+              },
+            },
+          },
+        });
+
+        const testService = new AgentControlService({
+          repositories,
+          sessionManager: sessionManager as unknown as SessionManager,
+          logger: createLogger('HarnessValidationTest'),
+          getActiveCatalog: catalogWithoutSeed,
+        });
+
+        await repositories.servers.save({
+          id: 'local-val',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.projects.save({
+          id: 'local-val:proj',
+          serverId: 'local-val',
+          name: 'Project',
+          rootPath: '/repo',
+        });
+
+        await repositories.agents.save({
+          id: 'local-val:codex',
+          name: 'Codex',
+          harness: 'codex',
+          command: 'codex',
+        });
+
+        await repositories.sessions.save(
+          session('val-root', {
+            serverId: 'local-val',
+            projectId: 'local-val:proj',
+            agentId: 'local-val:codex',
+            status: 'working',
+          })
+        );
+
+        await repositories.agents.save({
+          id: 'seed-agent',
+          name: 'Seed Agent',
+          harness: 'codex',
+          command: 'codex',
+        });
+
+        const scoped = await testService.createScopedControl('val-root');
+
+        const result = await scoped.createChildSession({
+          parentSession: 'val-root',
+          agentId: 'seed-agent',
+          task: 'Seed fallback subtask',
+          workspace: 'same-project',
+        });
+
+        expect(result.sessionCreated).toBe(true);
+        expect(result.agentId).toBe('seed-agent');
+      });
     });
   });
 });

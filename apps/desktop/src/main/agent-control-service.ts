@@ -17,6 +17,7 @@ import {
   type ControlNavigationResult,
   type ControlRenameSessionRequest,
   type ControlRenameSessionResult,
+  type ControlHarnessView,
   type ControlSessionView,
   type ControlStateSnapshot,
   type ControlUiState,
@@ -37,6 +38,7 @@ import {
   type GitStatusResult,
   type GitDiffResult,
   type Artifact,
+  type Agent,
   type Logger,
   type OperationalCatalog,
   type Server,
@@ -252,18 +254,23 @@ export class AgentControlService {
         return this.sessionManager.preflightIntegration(sessionId);
       },
       getState: async () => {
+        const root = await validateRoot();
         const state = await this.getState();
         const sessions = state.sessions.filter((item) => item.id === rootSessionId || item.parentSessionId === rootSessionId);
         const hostIds = new Set(sessions.map((item) => item.host?.id));
         const projectIds = new Set(sessions.map((item) => item.project?.id));
-        const harnessIds = new Set(sessions.map((item) => item.harness?.id));
+        const allAgents = await this.repos.agents.findAll();
+        const availableHarnesses: ControlHarnessView[] = allAgents
+          .filter((agent) => this.isHarnessAvailableForHost(agent.id, root.serverId))
+          .map((agent) => this.toHarnessView(agent));
         return {
           ...state,
           ui: state.ui.activeSessionId && sessions.some((item) => item.id === state.ui.activeSessionId) ? state.ui : { ...state.ui, activeSessionId: null },
           sessions,
           hosts: state.hosts.filter((item) => hostIds.has(item.id)),
           projects: state.projects.filter((item) => projectIds.has(item.id)),
-          harnesses: state.harnesses.filter((item) => harnessIds.has(item.id)),
+          harnesses: availableHarnesses,
+          availableHarnesses,
           recentErrors: [],
         };
       },
@@ -283,6 +290,7 @@ export class AgentControlService {
         return this.createChildSession(request);
       },
       listSessions: async () => {
+        await validateRoot();
         const state = await this.getState();
         return { apiVersion: state.apiVersion, sessions: state.sessions.filter((item) => item.id === rootSessionId || item.parentSessionId === rootSessionId) };
       },
@@ -508,25 +516,30 @@ export class AgentControlService {
       harnesses: new Map(harnesses.map((item) => [item.id, item])),
     };
 
-    return {
-      apiVersion: SPAWNEA_CONTROL_API_VERSION,
-      ui: { ...this.uiState },
-      sessions: await Promise.all(sessions.map((session) => this.toSessionView(session, related))),
-      hosts: hosts.map((host) => ({ id: host.id, name: host.name, enabled: host.enabled })),
-      projects: projects.map((project) => ({
-        id: project.id,
-        name: project.name,
-        hostId: project.serverId,
-        rootPath: project.rootPath,
-        baseBranch: project.baseBranch,
-      })),
-      harnesses: harnesses.map((harness) => ({
-        id: harness.id,
-        name: harness.name,
-        command: harness.command,
-      })),
-      recentErrors: this.recentErrors.map((item) => ({ ...item })),
-    };
+      const availableHarnesses = harnesses
+        .filter((harness) => {
+          if (!harness.id.includes(':')) return true;
+          const [hostId] = harness.id.split(':');
+          return this.isHarnessAvailableForHost(harness.id, hostId);
+        })
+        .map((harness) => this.toHarnessView(harness));
+
+      return {
+        apiVersion: SPAWNEA_CONTROL_API_VERSION,
+        ui: { ...this.uiState },
+        sessions: await Promise.all(sessions.map((session) => this.toSessionView(session, related))),
+        hosts: hosts.map((host) => ({ id: host.id, name: host.name, enabled: host.enabled })),
+        projects: projects.map((project) => ({
+          id: project.id,
+          name: project.name,
+          hostId: project.serverId,
+          rootPath: project.rootPath,
+          baseBranch: project.baseBranch,
+        })),
+        harnesses: availableHarnesses,
+        availableHarnesses,
+        recentErrors: this.recentErrors.map((item) => ({ ...item })),
+      };
   }
 
   async inspectWorktree(sessionId: string): Promise<ControlWorktreeInspectionResult> {
@@ -593,17 +606,47 @@ export class AgentControlService {
     };
   }
 
-  private isBootstrapHarnessAvailable(harnessId: string, hostId: string): boolean {
-    if (!harnessId.includes(':')) return true;
-    const prefix = `${hostId}:`;
-    if (!harnessId.startsWith(prefix)) return false;
-    const catalogHost = this.getActiveCatalog?.()?.hosts[hostId];
-    if (!catalogHost?.enabled || catalogHost.ssh) return false;
-    const rawHarnessId = harnessId.slice(prefix.length);
-    if (rawHarnessId === 'shell' && !catalogHost.harnesses['shell']) {
-      return true;
+  private toHarnessView(agent: Agent): ControlHarnessView {
+    const isShell = agent.harness === 'shell' || agent.id.endsWith(':shell') || agent.id === 'agent-shell';
+    return {
+      id: agent.id,
+      agentId: agent.id,
+      name: agent.name,
+      harness: agent.harness,
+      kind: isShell ? 'shell' : agent.harness,
+      command: agent.command,
+    };
+  }
+
+  private isHarnessAvailableForHost(harnessId: string, hostId: string): boolean {
+    const catalog = this.getActiveCatalog?.();
+    if (catalog) {
+      const catalogHost = catalog.hosts[hostId];
+      if (!catalogHost || catalogHost.enabled === false) return false;
+      const prefix = `${hostId}:`;
+      if (harnessId.startsWith(prefix)) {
+        const rawHarnessId = harnessId.slice(prefix.length);
+        if (rawHarnessId === 'shell' && !catalogHost.harnesses['shell']) {
+          return true;
+        }
+        return catalogHost.harnesses[rawHarnessId]?.enabled === true;
+      }
+      if (!harnessId.includes(':')) {
+        const catalogHarness = catalogHost.harnesses[harnessId];
+        return catalogHarness ? catalogHarness.enabled === true : true;
+      }
+      return false;
     }
-    return catalogHost.harnesses[rawHarnessId]?.enabled === true;
+    if (harnessId.includes(':')) {
+      return harnessId.startsWith(`${hostId}:`);
+    }
+    return true;
+  }
+
+  private isBootstrapHarnessAvailable(harnessId: string, hostId: string): boolean {
+    const catalogHost = this.getActiveCatalog?.()?.hosts[hostId];
+    if (catalogHost && (catalogHost.enabled === false || catalogHost.ssh)) return false;
+    return this.isHarnessAvailableForHost(harnessId, hostId);
   }
 
   private isBootstrapProjectAvailable(projectId: string, hostId: string): boolean {
@@ -787,6 +830,12 @@ export class AgentControlService {
       if (parent.parentSessionId) {
         throw new Error('A child session cannot be used as a parent session');
       }
+      const targetServerId = request.serverId ?? parent.serverId;
+      const effectiveAgentId = request.agentId ?? parent.agentId;
+      const agent = await this.repos.agents.findById(effectiveAgentId);
+      if (!agent || !this.isHarnessAvailableForHost(effectiveAgentId, targetServerId)) {
+        throw new Error(`Harness '${effectiveAgentId}' is not available on host '${targetServerId}'`);
+      }
       const parentStatus = await this.sessionManager.getGitStatus(parent.id).catch(() => undefined);
 
       const child = await this.sessionManager.createChildSession(
@@ -826,6 +875,7 @@ export class AgentControlService {
       }
       const currentChild = await this.repos.sessions.findById(child.id);
       const reportedChild = currentChild ?? child;
+      const launchedAgent = await this.repos.agents.findById(reportedChild.agentId);
       const result: ControlCreateChildSessionResult = {
         apiVersion: SPAWNEA_CONTROL_API_VERSION,
         sessionCreated: true,
@@ -837,6 +887,13 @@ export class AgentControlService {
         displayName: child.name,
         workspace: request.workspace,
         workspaceMode: request.workspace,
+        agentId: reportedChild.agentId,
+        harness: {
+          id: reportedChild.agentId,
+          name: launchedAgent?.name ?? reportedChild.agentId,
+          command: launchedAgent?.command,
+          kind: launchedAgent ? this.toHarnessView(launchedAgent).kind : undefined,
+        },
         status: reportedChild.status,
         initialStatus: reportedChild.status,
         startupStatus: reportedChild.status === 'starting'
