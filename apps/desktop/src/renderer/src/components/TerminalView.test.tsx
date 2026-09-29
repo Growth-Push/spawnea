@@ -472,6 +472,16 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
     timer.mockRestore();
   });
 
+  it('does not repeat an existing manual reconnect instruction', async () => {
+    window.spawneaApi.attachSession = vi.fn().mockRejectedValue(
+      new Error('SSH authentication failed. Reconnect manually to retry.')
+    );
+    render(<TerminalView session={mockSession} />);
+
+    const overlay = await screen.findByTestId('terminal-error-overlay');
+    expect(overlay.textContent?.match(/Reconnect manually to retry\./g)).toHaveLength(1);
+  });
+
   it('keeps a session reconnectable when a 1Password reference is not found', async () => {
     const onStatusChange = vi.fn();
     const onForgetLocally = vi.fn();

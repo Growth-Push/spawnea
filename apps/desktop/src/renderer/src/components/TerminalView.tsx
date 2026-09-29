@@ -425,7 +425,9 @@ export function TerminalView({
           term.options.disableStdin = true;
 
           if (isNonRetryableAuthenticationFailure(msg)) {
-            setErrorMessage(`${msg} Reconnect manually to retry.`);
+            setErrorMessage(msg.includes('Reconnect manually to retry.')
+              ? msg
+              : `${msg} Reconnect manually to retry.`);
             term.writeln(`\r\n\x1b[31m[Spawnea Connection Error: ${msg}]\x1b[0m`);
             return;
           }
