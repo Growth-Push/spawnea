@@ -43,6 +43,15 @@ export class SecretResolutionError extends Error {
   }
 }
 
+/** Errors that require a new user action before another connection attempt. */
+export function isNonRetryableAuthenticationFailure(error: unknown): boolean {
+  if (error instanceof SecretResolutionError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('Could not resolve credential-backed field')
+    || message.includes('1Password SSH authentication failed')
+    || message.includes('SSH authentication failed');
+}
+
 export interface CatalogPathLocator {
   kind: 'project' | 'worktree';
   hostId: string;

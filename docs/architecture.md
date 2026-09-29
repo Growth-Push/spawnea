@@ -478,6 +478,15 @@ sequenceDiagram
 
 ### Session removal safety
 
+When 1Password credential resolution or SSH authentication fails, automatic
+terminal and host reconnection stop. A manual reconnect clears only the
+selected host's in-process credential failure gate and makes one new attempt.
+Explicit session creation also retries the selected project's credentials.
+Project-path reads used by Files and Git remain recoverable on a later read.
+"Forget locally" removes metadata and context without contacting the host, but
+refuses sessions with children or a shared worktree. Remote tmux processes and
+worktrees may remain. Normal Delete requires verified remote termination.
+
 `SessionManager` uses a shared host/path ownership check for managed-worktree
 finalization and deletion. Close and integration refuse to mutate a workspace
 referenced by another session, including an unmanaged same-project child.

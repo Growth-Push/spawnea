@@ -412,6 +412,7 @@ hosts:
     });
 
     const resolver = new OnePasswordResolver();
+    const allowManualRetry = vi.spyOn(resolver, 'allowManualRetry');
     const release = vi.fn();
     const resolveString = vi.spyOn(resolver, 'resolveString').mockImplementation(async (value, _field, kind) => {
       if (kind === 'project_path' && value === projectReference) {
@@ -428,6 +429,8 @@ hosts:
       throw new Error('Unexpected secret field resolution');
     });
     const secureHost = new MockHostAdapter('secure', [resolvedProjectPath]);
+    const allowManualAuthenticationRetry = vi.fn();
+    Object.assign(secureHost, { allowManualAuthenticationRetry });
 
     await sessionManager.dispose();
     sessionManager = new SessionManager({
@@ -447,6 +450,9 @@ hosts:
       task: 'Credential safe session',
       useWorktree: false,
     });
+    expect(allowManualRetry).toHaveBeenCalledWith(targetReference, 'hosts.secure.ssh.target');
+    expect(allowManualRetry).toHaveBeenCalledWith(projectReference, 'hosts.secure.projects.app.path');
+    expect(allowManualAuthenticationRetry).toHaveBeenCalledTimes(1);
     const context = await contextStore.load(session.id);
     const persisted = await repos.sessions.findById(session.id);
     const serializedPersistence = JSON.stringify({ context, persisted });
@@ -1184,6 +1190,74 @@ hosts:
     // Verify context file removed from disk
     const ctx = await contextStore.load(session.id);
     expect(ctx).toBeNull();
+  });
+
+  it('forgets local session metadata without stopping an unreachable remote tmux session', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Remote session to forget',
+    });
+    const kill = vi.spyOn(mockHost, 'execute');
+
+    expect(await sessionManager.forgetSessionLocally(session.id)).toBe(true);
+    expect(await repos.sessions.findById(session.id)).toBeNull();
+    expect(await contextStore.load(session.id)).toBeNull();
+    expect(mockHost.sessions.has(session.tmuxSessionName)).toBe(true);
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('refuses to forget a child that shares a managed worktree with its parent', async () => {
+    await enableManagedWorktrees();
+    const parent = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Managed parent',
+      useWorktree: true,
+    });
+    const child = await sessionManager.createChildSession({
+      parentSessionId: parent.id,
+      task: 'Shared child',
+      workspace: 'same-project',
+    });
+    expect(child.worktreePath).toBe(parent.worktreePath);
+
+    await expect(sessionManager.forgetSessionLocally(child.id)).rejects.toThrow('shares a worktree');
+    expect(await repos.sessions.findById(child.id)).not.toBeNull();
+    expect(await contextStore.load(child.id)).not.toBeNull();
+    expect(mockHost.sessions.has(child.tmuxSessionName)).toBe(true);
+  });
+
+  it('restores the context if forgetting the local database record fails', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Local failure recovery',
+    });
+    const originalContext = await contextStore.load(session.id);
+    vi.spyOn(repos.sessions, 'delete').mockRejectedValueOnce(new Error('SQLite unavailable'));
+
+    await expect(sessionManager.forgetSessionLocally(session.id)).rejects.toThrow('SQLite unavailable');
+    expect(await repos.sessions.findById(session.id)).not.toBeNull();
+    expect(await contextStore.load(session.id)).toEqual(originalContext);
+    expect(mockHost.sessions.has(session.tmuxSessionName)).toBe(true);
+  });
+
+  it('reports the database failure if context restoration also fails', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Double local failure',
+    });
+    vi.spyOn(repos.sessions, 'delete').mockRejectedValueOnce(new Error('SQLite unavailable'));
+    vi.spyOn(contextStore, 'save').mockRejectedValueOnce(new Error('Context storage unavailable'));
+
+    await expect(sessionManager.forgetSessionLocally(session.id)).rejects.toThrow('SQLite unavailable');
+    expect(await repos.sessions.findById(session.id)).not.toBeNull();
   });
 
   it('probes host system telemetry and caches result in memory for subsequent tabs/sessions', async () => {

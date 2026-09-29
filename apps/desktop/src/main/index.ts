@@ -545,6 +545,10 @@ function registerIpcHandlers(
     return sessManager.deleteSession(sessionId, childAction);
   });
 
+  ipcMain.handle('sessions:forgetLocal', async (_event, sessionId: string) => {
+    return sessManager.forgetSessionLocally(sessionId);
+  });
+
   ipcMain.handle('sessions:sendPrompt', async (event, sessionId: string, prompt: unknown) => {
     if (!mainWindowRef || mainWindowRef.isDestroyed() || event.sender !== mainWindowRef.webContents) {
       throw new Error('Unauthorized sessions:sendPrompt sender');

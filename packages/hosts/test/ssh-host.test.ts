@@ -87,4 +87,70 @@ describe('SSHHostAdapter execution', () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('waits for manual retry after 1Password SSH agent authentication is declined', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'spawnea-ssh-auth-'));
+    const configPath = join(tempDir, 'ssh_config');
+    writeFileSync(configPath, 'Host secure-host\n  HostName secure.example.test\n  IdentityAgent /tmp/1password-agent.sock\n');
+    const connect = vi.spyOn(Client.prototype, 'connect').mockImplementation(function (this: Client) {
+      queueMicrotask(() => this.emit('error', new Error('All configured authentication methods failed')));
+      return this;
+    });
+    const adapter = new SSHHostAdapter({ serverId: 'secure-host', target: 'secure-host', configPath });
+
+    try {
+      await expect(adapter.connect()).rejects.toThrow('1Password SSH authentication failed');
+      await expect(adapter.connect()).rejects.toThrow('1Password SSH authentication failed');
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(adapter.getConnectionState().status).toBe('disconnected');
+
+      expect(await adapter.retryNow()).toBe(false);
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(adapter.getConnectionState().status).toBe('disconnected');
+    } finally {
+      connect.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not retry an authentication failure when the agent socket has an arbitrary name', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'spawnea-ssh-auth-'));
+    const configPath = join(tempDir, 'ssh_config');
+    writeFileSync(configPath, 'Host secure-host\n  HostName secure.example.test\n  IdentityAgent /tmp/custom-agent.sock\n');
+    const connect = vi.spyOn(Client.prototype, 'connect').mockImplementation(function (this: Client) {
+      queueMicrotask(() => this.emit('error', new Error('All configured authentication methods failed')));
+      return this;
+    });
+    const adapter = new SSHHostAdapter({ serverId: 'secure-host', target: 'secure-host', configPath });
+
+    try {
+      await expect(adapter.connect()).rejects.toThrow('SSH authentication failed');
+      await expect(adapter.connect()).rejects.toThrow('SSH authentication failed');
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(adapter.getConnectionState().status).toBe('disconnected');
+      expect(await adapter.retryNow()).toBe(false);
+      expect(connect).toHaveBeenCalledTimes(2);
+    } finally {
+      connect.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows a fresh connection after explicit session creation clears authentication failure', async () => {
+    const connect = vi.spyOn(Client.prototype, 'connect').mockImplementation(function (this: Client) {
+      queueMicrotask(() => this.emit('error', new Error('All configured authentication methods failed')));
+      return this;
+    });
+    const adapter = new SSHHostAdapter({ serverId: 'secure-host', target: 'secure.example.test' });
+    try {
+      await expect(adapter.connect()).rejects.toThrow('SSH authentication failed');
+      await expect(adapter.connect()).rejects.toThrow('SSH authentication failed');
+      expect(connect).toHaveBeenCalledTimes(1);
+      adapter.allowManualAuthenticationRetry();
+      await expect(adapter.connect()).rejects.toThrow('SSH authentication failed');
+      expect(connect).toHaveBeenCalledTimes(2);
+    } finally {
+      connect.mockRestore();
+    }
+  });
 });

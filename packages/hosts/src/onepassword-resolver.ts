@@ -27,6 +27,7 @@ export interface OnePasswordResolverOptions {
 const CONTROL_CHARACTER_REGEX = /[\x00-\x1f\x7f]/;
 
 export class OnePasswordResolver {
+  private readonly blockedReferences = new Map<string, SecretResolutionError>();
   private readonly executablePath: string;
   private readonly timeoutMs: number;
   private readonly maxOutputBytes: number;
@@ -39,6 +40,14 @@ export class OnePasswordResolver {
     this.spawnProcess = options.spawnProcess ?? spawn;
   }
 
+  public allowManualRetry(reference: SecretReference, fieldPath: string): void {
+    this.blockedReferences.delete(this.failureKey(reference, fieldPath));
+  }
+
+  private failureKey(reference: SecretReference, fieldPath: string): string {
+    return `${fieldPath}\0${reference}`;
+  }
+
   public async resolveString(
     value: string,
     fieldPath: string,
@@ -47,7 +56,7 @@ export class OnePasswordResolver {
     if (!isOnePasswordReference(value)) {
       return { value, sensitive: false, release: () => undefined };
     }
-    const resolved = await this.readReference(value, fieldPath);
+    const resolved = await this.readReference(value, fieldPath, kind !== 'project_path');
     const validated = this.validateString(resolved, fieldPath, kind);
     return { value: validated, sensitive: true, release: registerSensitiveValue(validated) };
   }
@@ -79,7 +88,10 @@ export class OnePasswordResolver {
     return value;
   }
 
-  private readReference(reference: SecretReference, fieldPath: string): Promise<string> {
+  private readReference(reference: SecretReference, fieldPath: string, blockAutomaticRetry = true): Promise<string> {
+    const failureKey = this.failureKey(reference, fieldPath);
+    const blocked = blockAutomaticRetry ? this.blockedReferences.get(failureKey) : undefined;
+    if (blocked) return Promise.reject(blocked);
     return new Promise((resolve, reject) => {
       let settled = false;
       let timedOut = false;
@@ -107,6 +119,7 @@ export class OnePasswordResolver {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (blockAutomaticRetry) this.blockedReferences.set(failureKey, error);
         reject(error);
       };
 

@@ -822,6 +822,28 @@ export function App(): React.JSX.Element {
     await executeDeleteSession(sessionId, 'leave-children');
   };
 
+  const handleForgetSessionLocally = async (sessionId: string) => {
+    const session = sessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    if (!window.confirm(`Forget "${session.name}" locally? Its remote tmux session and worktree may still be running and will not be changed.`)) return;
+    try {
+      const removed = await window.spawneaApi.forgetSessionLocally(sessionId);
+      if (!removed) return;
+      setSessions((previous) => {
+        const remaining = previous.filter((item) => item.id !== sessionId).map((item) =>
+          item.parentSessionId === sessionId
+            ? { ...item, parentSessionId: undefined, childAlias: undefined }
+            : item
+        );
+        setActiveSessionId((active) => active === sessionId ? remaining[0]?.id ?? null : active);
+        return remaining;
+      });
+    } catch (error) {
+      console.error('Failed to forget session locally:', error);
+      window.alert(error instanceof Error ? error.message : 'Failed to forget session locally.');
+    }
+  };
+
   const handleCloseCreateChildModal = useCallback(() => {
     setSessionToCreateChildFor(null);
   }, []);
@@ -1317,6 +1339,7 @@ export function App(): React.JSX.Element {
               onAttach={handleAttachSession}
               onDetach={handleDetachSession}
               onDelete={handleDeleteSession}
+              onForgetLocally={handleForgetSessionLocally}
               onStatusChange={handleSessionStatusChange}
             />
           </>

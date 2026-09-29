@@ -3,7 +3,7 @@ import type {
 
   Logger,
 } from '@spawnea/domain';
-import { createLogger } from '@spawnea/domain';
+import { createLogger, isNonRetryableAuthenticationFailure } from '@spawnea/domain';
 
 export interface ReconnectionSupervisorOptions {
   backoffScheduleMs?: number[];
@@ -97,6 +97,10 @@ export class HostReconnectionSupervisor {
    * Begins the exponential backoff reconnection sequence.
    */
   handleConnectionDrop(serverId: string, error: string, reconnectAction: ReconnectAction): void {
+    if (isNonRetryableAuthenticationFailure(error)) {
+      void this.markDisconnected(serverId, error);
+      return;
+    }
     const current = this.getState(serverId);
     if (current.status === 'reconnecting' && this.retryTimers.has(serverId)) {
       this.logger.debug('Reconnection already scheduled for host', { serverId, attempt: current.attempt });
@@ -170,6 +174,12 @@ export class HostReconnectionSupervisor {
     } catch (err: any) {
       const nextAttempt = attempt + 1;
       const errorMsg = err?.message || String(err);
+
+      if (isNonRetryableAuthenticationFailure(err)) {
+        this.logger.warn('Authentication failed; waiting for manual retry', { serverId });
+        await this.markDisconnected(serverId, errorMsg);
+        return false;
+      }
 
       if (nextAttempt > this.maxAttempts) {
         this.logger.error('Max reconnection attempts exhausted for host', err, {

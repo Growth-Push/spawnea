@@ -96,6 +96,51 @@ printf %s 'server.example.test'
     expect(failure.message).not.toContain('op://');
   });
 
+  it('does not repeat a failed read until manual retry is allowed', async () => {
+    const resolver = new OnePasswordResolver({ executablePath: '/nonexistent/spawnea-op' });
+    const reference = 'op://vault/private-item/hostname';
+    const first = await captureFailure(resolver.resolveString(reference, 'hosts.example.ssh.target', 'ssh_target'));
+    const second = await captureFailure(resolver.resolveString(reference, 'hosts.example.ssh.target', 'ssh_target'));
+    expect(second).toBe(first);
+    resolver.allowManualRetry(reference as SecretReference, 'hosts.example.ssh.target');
+    const third = await captureFailure(resolver.resolveString(reference, 'hosts.example.ssh.target', 'ssh_target'));
+    expect(third).not.toBe(first);
+  });
+
+  it('keeps another failed reference blocked when one reference is retried manually', async () => {
+    const resolver = new OnePasswordResolver({ executablePath: '/nonexistent/spawnea-op' });
+    const firstReference = 'op://vault/host-a/hostname' as SecretReference;
+    const secondReference = 'op://vault/host-b/hostname' as SecretReference;
+    const first = await captureFailure(resolver.resolveString(firstReference, 'hosts.a.ssh.target', 'ssh_target'));
+    const second = await captureFailure(resolver.resolveString(secondReference, 'hosts.b.ssh.target', 'ssh_target'));
+
+    resolver.allowManualRetry(firstReference, 'hosts.a.ssh.target');
+
+    expect(await captureFailure(resolver.resolveString(firstReference, 'hosts.a.ssh.target', 'ssh_target'))).not.toBe(first);
+    expect(await captureFailure(resolver.resolveString(secondReference, 'hosts.b.ssh.target', 'ssh_target'))).toBe(second);
+  });
+
+  it('allows a later project-path read after a failed read', async () => {
+    const resolver = new OnePasswordResolver({ executablePath: '/nonexistent/spawnea-op' });
+    const reference = 'op://vault/project/path';
+    const first = await captureFailure(resolver.resolveString(reference, 'hosts.a.projects.p.path', 'project_path'));
+    const second = await captureFailure(resolver.resolveString(reference, 'hosts.a.projects.p.path', 'project_path'));
+    expect(second).not.toBe(first);
+  });
+
+  it('keeps a second host blocked when both hosts share a reference', async () => {
+    const resolver = new OnePasswordResolver({ executablePath: '/nonexistent/spawnea-op' });
+    const reference = 'op://vault/shared/hostname' as SecretReference;
+    const first = await captureFailure(resolver.resolveString(reference, 'hosts.a.ssh.target', 'ssh_target'));
+    const second = await captureFailure(resolver.resolveString(reference, 'hosts.b.ssh.target', 'ssh_target'));
+    expect(second).not.toBe(first);
+
+    resolver.allowManualRetry(reference, 'hosts.a.ssh.target');
+
+    expect(await captureFailure(resolver.resolveString(reference, 'hosts.a.ssh.target', 'ssh_target'))).not.toBe(first);
+    expect(await captureFailure(resolver.resolveString(reference, 'hosts.b.ssh.target', 'ssh_target'))).toBe(second);
+  });
+
   it('kills timed-out reads and rejects oversized output', async () => {
     const timedOut = new OnePasswordResolver({
       executablePath: fakeOp("sleep 1; printf %s 'late.example'"),

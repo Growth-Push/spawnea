@@ -420,11 +420,35 @@ export class SessionManager {
     return host.getConnectionEndpoint();
   }
 
+  private async allowManualCredentialRetry(serverId: string, projectId?: string): Promise<void> {
+    const catalogHost = this.catalogManager.getState().catalog?.hosts[serverId];
+    const values: Array<[unknown, string]> = [
+      [catalogHost?.ssh?.target, `hosts.${serverId}.ssh.target`],
+      [catalogHost?.ssh?.user, `hosts.${serverId}.ssh.user`],
+      [catalogHost?.ssh?.port, `hosts.${serverId}.ssh.port`],
+    ];
+    if (projectId) {
+      const catalogProjectId = projectId.includes(':') ? projectId.split(':')[1] : projectId;
+      const fieldPath = `hosts.${serverId}.projects.${catalogProjectId}.path`;
+      values.push([catalogHost?.projects[catalogProjectId]?.path, fieldPath]);
+      values.push([(await this.repos.projects.findById(projectId))?.rootPath, fieldPath]);
+    }
+    for (const [value, fieldPath] of values) {
+      if (isOnePasswordReference(value)) this.onePasswordResolver.allowManualRetry(value, fieldPath);
+    }
+  }
+
+  private async allowManualHostAuthenticationRetry(serverId: string): Promise<void> {
+    const host = await this.getHostAdapter(serverId);
+    host.allowManualAuthenticationRetry?.();
+  }
+
   /**
    * Immediately retries connection for a given host profile (cancelling pending timers).
    */
   async retryHostConnection(serverId: string): Promise<HostConnectionState> {
     this.logger.info('Retrying host connection on demand (Retry Now)', { serverId });
+    await this.allowManualCredentialRetry(serverId);
     const host = await this.getHostAdapter(serverId);
     if (typeof (host as any).retryNow === 'function') {
       await (host as any).retryNow();
@@ -461,6 +485,7 @@ export class SessionManager {
    * Tests SSH connection to a single selected host profile on demand (FG-1.2, FG-2.1).
    */
   async testHost(hostId: string): Promise<HostTestResult> {
+    await this.allowManualCredentialRetry(hostId);
     this.logger.info('Testing selected host connection', { hostId });
     try {
       const host = await this.getHostAdapter(hostId);
@@ -946,6 +971,8 @@ export class SessionManager {
    * Creates a new Root Session.
    */
   async createSession(input: CreateSessionInput, creationSource: SessionCreationSource = 'ui'): Promise<Session> {
+    await this.allowManualCredentialRetry(input.serverId, input.projectId);
+    await this.allowManualHostAuthenticationRetry(input.serverId);
     return this.createSessionCore({
       serverId: input.serverId,
       projectId: input.projectId,
@@ -982,6 +1009,8 @@ export class SessionManager {
     if (this.finalizingParents.has(parent.id)) {
       throw new Error(`Parent session '${parent.id}' is being finalized and cannot accept new children`);
     }
+    await this.allowManualCredentialRetry(input.serverId ?? parent.serverId, input.projectId ?? parent.projectId);
+    await this.allowManualHostAuthenticationRetry(input.serverId ?? parent.serverId);
     let creations = this.childCreationsInProgress.get(parent.id);
     if (!creations) {
       let complete!: () => void;
@@ -1513,6 +1542,49 @@ export class SessionManager {
       }
 
       this.logger.info('Session deletion completed', { sessionId });
+      return true;
+    } finally {
+      releaseRemoval();
+    }
+  }
+
+  /** Forget local metadata without contacting or changing the remote host. */
+  async forgetSessionLocally(sessionId: string): Promise<boolean> {
+    const releaseRemoval = await this.beginSessionRemoval(sessionId);
+    try {
+      const session = await this.repos.sessions.findById(sessionId);
+      if (!session) return false;
+      const children = await this.repos.sessions.findByParentId(sessionId);
+      const sharingSessions = await this.findWorktreeUsers(session);
+      if (children.length > 0 || sharingSessions.length > 0) {
+        throw new Error('Cannot forget a session that has children or shares a worktree. Stop the remote sessions before removing their records.');
+      }
+
+      const previousContext = await this.contextStore.load(sessionId);
+      if (!await this.contextStore.delete(sessionId)) {
+        throw new Error(`Failed to delete context file for session '${sessionId}'`);
+      }
+      let deleted: boolean;
+      try {
+        deleted = await this.repos.sessions.delete(sessionId);
+      } catch (error) {
+        if (previousContext) {
+          try {
+            await this.contextStore.save(previousContext);
+          } catch (restoreError) {
+            this.logger.error('Failed to restore session context after local deletion failed', restoreError, { sessionId });
+          }
+        }
+        throw error;
+      }
+      if (!deleted) {
+        if (previousContext) await this.contextStore.save(previousContext);
+        return false;
+      }
+      this.attachedSessions.delete(sessionId);
+      this.ptyBroker.close(`pty-${sessionId}`);
+      const wc = this.getWebContents();
+      if (wc && (typeof wc.isDestroyed !== 'function' || !wc.isDestroyed())) wc.send('control:dataChanged');
       return true;
     } finally {
       releaseRemoval();

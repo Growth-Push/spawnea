@@ -62,6 +62,7 @@ interface WorkspaceTabsProps {
   onAttach?: (sessionId: string) => void;
   onDetach?: (sessionId: string) => void;
   onDelete?: (sessionId: string) => void;
+  onForgetLocally?: (sessionId: string) => void;
   onStatusChange?: (sessionId: string, status: Session['status']) => void;
 }
 
@@ -127,6 +128,7 @@ export function WorkspaceTabs({
   onAttach,
   onDetach,
   onDelete,
+  onForgetLocally,
   onStatusChange,
 }: WorkspaceTabsProps): React.JSX.Element {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -620,6 +622,7 @@ export function WorkspaceTabs({
                 onAttach={onAttach}
                 onDetach={onDetach}
                 onDelete={onDelete}
+                onForgetLocally={onForgetLocally}
                 onStatusChange={onStatusChange}
               />
             </div>

@@ -42,6 +42,7 @@ vi.mock('@xterm/xterm', () => {
       write = vi.fn((_data: string, cb?: () => void) => {
         if (typeof cb === 'function') cb();
       });
+      writeln = vi.fn();
       paste = vi.fn();
       getSelection = vi.fn(() => xtermMockState.selectionText);
       hasSelection = vi.fn().mockReturnValue(false);
@@ -451,6 +452,42 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
     });
 
     expect(mockRetryHostConnection).toHaveBeenCalledWith('srv-remote-1');
+  });
+
+  it('waits for manual reconnect after a 1Password attach failure', async () => {
+    const attach = vi.fn()
+      .mockRejectedValueOnce(new Error("Could not resolve credential-backed field 'hosts.secure.ssh.target': sign in to the 1Password CLI and verify access, then retry."))
+      .mockResolvedValueOnce({ ptyChannelId: 'pty-recon-2' });
+    window.spawneaApi.attachSession = attach;
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    render(<TerminalView session={mockSession} />);
+
+    await waitFor(() => expect(screen.getByTestId('terminal-error-overlay')).toBeDefined());
+    expect(timer).not.toHaveBeenCalledWith(expect.any(Function), 2000);
+    expect(attach).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText('Retry Attach'));
+    await waitFor(() => expect(mockRetryHostConnection).toHaveBeenCalledWith('srv-remote-1'));
+    await waitFor(() => expect(attach).toHaveBeenCalledTimes(2));
+    timer.mockRestore();
+  });
+
+  it('keeps a session reconnectable when a 1Password reference is not found', async () => {
+    const onStatusChange = vi.fn();
+    const onForgetLocally = vi.fn();
+    const attach = vi.fn().mockRejectedValue(new Error("Could not resolve credential-backed field 'hosts.secure.ssh.target': the referenced vault, item, section, or field was not found or is unavailable."));
+    window.spawneaApi.attachSession = attach;
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+
+    render(<TerminalView session={mockSession} onStatusChange={onStatusChange} onForgetLocally={onForgetLocally} />);
+    await waitFor(() => expect(screen.getByTestId('terminal-error-overlay')).toBeDefined());
+    expect(screen.queryByTestId('terminal-ended-overlay')).toBeNull();
+    expect(onStatusChange).not.toHaveBeenCalledWith(mockSession.id, 'done');
+    expect(timer).not.toHaveBeenCalledWith(expect.any(Function), 2000);
+    expect(attach).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('terminal-overlay-forget-local-button'));
+    expect(onForgetLocally).toHaveBeenCalledWith(mockSession.id);
+    timer.mockRestore();
   });
 
   it('transparently updates PTY channel when session is reconnected without losing terminal instance', async () => {

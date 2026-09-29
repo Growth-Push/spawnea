@@ -16,7 +16,7 @@ import type {
   HostConnectionEndpoint,
   Logger,
 } from '@spawnea/domain';
-import { createLogger, maskSensitiveString } from '@spawnea/domain';
+import { createLogger, isNonRetryableAuthenticationFailure, maskSensitiveString } from '@spawnea/domain';
 import { resolveSshTarget } from './ssh-config.js';
 import { HostReconnectionSupervisor } from './reconnection-supervisor.js';
 import { createKnownHostsVerifier } from './known-hosts.js';
@@ -60,6 +60,7 @@ export class SSHHostAdapter implements HostAdapter {
   private connectingPromise: Promise<void> | null = null;
   private isDeliberateDisconnect = false;
   private activeCredentialRelease: (() => void) | null = null;
+  private authenticationFailure: Error | null = null;
 
   constructor(options: SSHHostOptions) {
     this.serverId = options.serverId;
@@ -122,6 +123,7 @@ export class SSHHostAdapter implements HostAdapter {
   }
 
   async connect(options: { allowAgentAuth?: boolean } = {}): Promise<void> {
+    if (this.authenticationFailure) throw this.authenticationFailure;
     if (this.isConnected()) {
       return;
     }
@@ -132,6 +134,10 @@ export class SSHHostAdapter implements HostAdapter {
 
     this.connectingPromise = this.establishConnection(options.allowAgentAuth !== false).catch((error) => {
       this.connectingPromise = null;
+      if (isNonRetryableAuthenticationFailure(error)) {
+        this.authenticationFailure = error;
+        void this.supervisor.markDisconnected(this.serverId, error.message);
+      }
       throw error;
     });
     return this.connectingPromise;
@@ -192,7 +198,14 @@ export class SSHHostAdapter implements HostAdapter {
           hasFinished = true;
           this.connectingPromise = null;
           this.releaseActiveCredentials();
-          reject(new Error(`SSH connection error: ${maskSensitiveString(err.message)}`));
+          const agent = connectConfig.agent;
+          const onePasswordAgent = typeof agent === 'string' && agent.toLowerCase().includes('1password');
+          const authenticationFailed = /authenticat|permission denied|agent.*(?:fail|refus|denied)|sign.*(?:fail|refus|denied)/i.test(err.message);
+          reject(authenticationFailed
+            ? new Error(onePasswordAgent
+              ? '1Password SSH authentication failed or was declined. Reconnect manually to retry.'
+              : 'SSH authentication failed. Reconnect manually to retry.')
+            : new Error(`SSH connection error: ${maskSensitiveString(err.message)}`));
         } else if (wasConnected && !this.isDeliberateDisconnect) {
           this.supervisor.handleConnectionDrop(
             this.serverId,
@@ -319,10 +332,16 @@ export class SSHHostAdapter implements HostAdapter {
   }
 
   async retryNow(): Promise<boolean> {
+    this.allowManualAuthenticationRetry();
     return this.supervisor.retryNow(this.serverId, () => this.reconnect());
   }
 
+  allowManualAuthenticationRetry(): void {
+    this.authenticationFailure = null;
+  }
+
   async testConnection(options: { allowAgentAuth?: boolean } = {}): Promise<HostTestResult> {
+    this.authenticationFailure = null;
     const startTime = Date.now();
     try {
       await this.connect(options);
