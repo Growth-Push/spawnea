@@ -135,4 +135,5 @@ export interface HostAdapter {
   getConnectionEndpoint?(): Promise<HostConnectionEndpoint | null>;
   onConnectionStateChange?(listener: (state: HostConnectionState) => void): () => void;
   reconnect?(): Promise<void>;
+  allowManualAuthenticationRetry?(): void;
 }

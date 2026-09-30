@@ -5,3 +5,6 @@ packages:
 
 packageManagerStrictVersion: true
 verifyDepsBeforeRun: install
+
+overrides:
+  fast-uri: 3.1.8

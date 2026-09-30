@@ -115,6 +115,8 @@ export const api = {
     ipcRenderer.invoke('sessions:inspectWorktree', sessionId),
   deleteSession: (sessionId: string, childAction?: ParentCloseAction): Promise<boolean> =>
     ipcRenderer.invoke('sessions:delete', sessionId, childAction),
+  forgetSessionLocally: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke('sessions:forgetLocal', sessionId),
   sendPrompt: (sessionId: string, prompt: string): Promise<{ delivered: boolean; deliveryMethod: 'pty' | 'tmux' }> =>
     ipcRenderer.invoke('sessions:sendPrompt', sessionId, prompt),
 

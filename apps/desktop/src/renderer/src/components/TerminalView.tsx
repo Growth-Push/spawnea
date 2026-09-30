@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal, type ILinkProvider } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import type { Session, Agent, HostConnectionState } from '@spawnea/domain';
+import { isNonRetryableAuthenticationFailure, type Session, type Agent, type HostConnectionState } from '@spawnea/domain';
 import {
   Activity,
   AlertCircle,
@@ -23,6 +23,7 @@ interface TerminalViewProps {
   onAttach?: (sessionId: string) => void;
   onDetach?: (sessionId: string) => void;
   onDelete?: (sessionId: string) => void;
+  onForgetLocally?: (sessionId: string) => void;
   onStatusChange?: (sessionId: string, status: Session['status']) => void;
 }
 
@@ -120,6 +121,7 @@ export function TerminalView({
   onAttach,
   onDetach: _onDetach,
   onDelete,
+  onForgetLocally,
   onStatusChange,
 }: TerminalViewProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -422,6 +424,14 @@ export function TerminalView({
           setErrorMessage(msg);
           term.options.disableStdin = true;
 
+          if (isNonRetryableAuthenticationFailure(msg)) {
+            setErrorMessage(msg.includes('Reconnect manually to retry.')
+              ? msg
+              : `${msg} Reconnect manually to retry.`);
+            term.writeln(`\r\n\x1b[31m[Spawnea Connection Error: ${msg}]\x1b[0m`);
+            return;
+          }
+
           // If the backend confirmed the session is no longer active / concluded, mark as done immediately
           if (
             msg.includes('no longer active') ||
@@ -721,6 +731,21 @@ export function TerminalView({
 
   const handleManualRetry = async () => {
     cleanupActiveConnection();
+    if (isNonRetryableAuthenticationFailure(errorMessage)) {
+      try {
+        const state = await window.spawneaApi.retryHostConnection(session.serverId);
+        setHostConnectionState(state);
+        if (state.status !== 'connected') {
+          setConnectionStatus('error');
+          setErrorMessage(state.error || '1Password connection failed. Reconnect manually to retry.');
+          return;
+        }
+      } catch (error) {
+        setConnectionStatus('error');
+        setErrorMessage(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
     if (onAttachRef.current) {
       onAttachRef.current(session.id);
     }
@@ -1088,7 +1113,18 @@ export function TerminalView({
                   className="flex items-center gap-1.5 px-3 py-2 bg-[#21262d] hover:bg-rose-950/60 hover:border-rose-500/40 hover:text-rose-300 border border-[#30363d] text-zinc-300 rounded-lg text-xs font-medium transition-all cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Remove Session</span>
+                  <span>Stop remote and remove</span>
+                </button>
+              )}
+              {onForgetLocally && (
+                <button
+                  type="button"
+                  data-testid="terminal-overlay-forget-local-button"
+                  onClick={() => onForgetLocally(session.id)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-[#21262d] hover:bg-rose-950/60 border border-[#30363d] text-zinc-300 rounded-lg text-xs font-medium cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Forget locally</span>
                 </button>
               )}
             </div>

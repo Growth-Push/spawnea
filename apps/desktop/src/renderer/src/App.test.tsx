@@ -277,6 +277,7 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
     openExternalUrl: vi.fn().mockResolvedValue(true),
     openConfig: vi.fn().mockResolvedValue({ success: true }),
     deleteSession: vi.fn().mockResolvedValue(true),
+    forgetSessionLocally: vi.fn().mockResolvedValue(true),
     syncControlUiState: vi.fn(),
     listControlFinalizationRequests: vi.fn().mockResolvedValue([]),
     getAgentContext: vi.fn().mockResolvedValue({
@@ -1567,6 +1568,32 @@ describe('App Desktop Shell', () => {
       expect(deleteMock).toHaveBeenCalledWith('sess-1');
       expect(screen.getByText('Active Sessions (1)')).toBeDefined();
     });
+  });
+
+  it('forgets a session locally from the connection error without trying remote deletion', async () => {
+    const forget = vi.fn().mockResolvedValue(true);
+    const remove = vi.fn().mockResolvedValue(true);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue([mockSessions[0]]),
+      attachSession: vi.fn().mockRejectedValue(new Error('1Password SSH authentication failed or was declined.')),
+      forgetSessionLocally: forget,
+      deleteSession: remove,
+    });
+
+    try {
+      render(<App />);
+      const button = await screen.findByTestId('terminal-overlay-forget-local-button');
+      fireEvent.click(button);
+      await waitFor(() => {
+        expect(confirm).toHaveBeenCalled();
+        expect(forget).toHaveBeenCalledWith('sess-1');
+        expect(screen.getByText('Active Sessions (0)')).toBeDefined();
+      });
+      expect(remove).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
   });
 
   it('shows and hides lifecycle buttons in ContextBar according to state machine (disconnected -> connected -> stopped -> deleted)', async () => {

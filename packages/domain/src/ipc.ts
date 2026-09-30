@@ -198,6 +198,7 @@ export interface IpcChannels {
   ) => Promise<FinishSessionResult>;
   'sessions:inspectWorktree': (sessionId: string) => Promise<ManagedWorktreeInspection>;
   'sessions:delete': (sessionId: string, childAction?: ParentCloseAction) => Promise<boolean>;
+  'sessions:forgetLocal': (sessionId: string) => Promise<boolean>;
   'sessions:sendPrompt': (sessionId: string, prompt: string) => Promise<{ delivered: boolean; deliveryMethod: 'pty' | 'tmux' }>;
 
   // Local MCP control requests. Pending destructive actions are resolved here

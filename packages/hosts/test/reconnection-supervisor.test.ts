@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { HostReconnectionSupervisor } from '../src/reconnection-supervisor.js';
 import type { HostConnectionState } from '@spawnea/domain';
+import { SecretResolutionError } from '@spawnea/domain';
 
 describe('HostReconnectionSupervisor', () => {
   let supervisor: HostReconnectionSupervisor;
@@ -133,5 +134,31 @@ describe('HostReconnectionSupervisor', () => {
     expect(res).toBe(true);
     expect(mockReconnect).toHaveBeenCalledTimes(1);
     expect(supervisor.getState('srv-1').status).toBe('connected');
+  });
+
+  it('stops automatic retries after a 1Password failure and permits a manual retry', async () => {
+    const reconnect = vi.fn()
+      .mockRejectedValueOnce(new SecretResolutionError('authentication_required', 'hosts.srv-1.ssh.target'))
+      .mockResolvedValueOnce(true);
+    supervisor.handleConnectionDrop('srv-1', 'SSH transport closed', reconnect);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(supervisor.getState('srv-1').status).toBe('disconnected');
+
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(await supervisor.retryNow('srv-1', reconnect)).toBe(true);
+    expect(reconnect).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops after an SSH agent authentication failure regardless of socket name', async () => {
+    const reconnect = vi.fn().mockRejectedValue(new Error('SSH authentication failed. Reconnect manually to retry.'));
+    supervisor.handleConnectionDrop('srv-1', 'SSH transport closed', reconnect);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(supervisor.getState('srv-1').status).toBe('disconnected');
   });
 });
