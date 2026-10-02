@@ -1124,16 +1124,21 @@ export class AgentControlService {
       .filter((l) => l.length > 0)
       .map((l) => l.replace(/^[>›$#%]\s*/, '').trim());
 
-    const contentLines = lines.filter((line) => {
+    let promptIndex = 0;
+    const contentLines: string[] = [];
+
+    for (const line of lines) {
       const withoutShellPrompt = line.replace(/^[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+:[^$#%]*[$#%]\s*/, '').trim();
       const stripped = withoutShellPrompt.replace(/^[>›$#%]\s*/, '').trim();
 
       if (
-        normalizedPromptLines.includes(stripped) ||
-        normalizedPromptLines.includes(withoutShellPrompt) ||
-        normalizedPromptLines.includes(line)
+        promptIndex < normalizedPromptLines.length &&
+        (stripped === normalizedPromptLines[promptIndex] ||
+          withoutShellPrompt === normalizedPromptLines[promptIndex] ||
+          line === normalizedPromptLines[promptIndex])
       ) {
-        return false;
+        promptIndex += 1;
+        continue;
       }
 
       const promptDetection = detectPromptInTail([line], { harness: turn.harness });
@@ -1144,11 +1149,11 @@ export class AgentControlService {
         /^[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+:[^$#%]*[$#%]?\s*$/.test(line) ||
         stripped === ''
       ) {
-        return false;
+        continue;
       }
 
-      return true;
-    });
+      contentLines.push(line);
+    }
 
     return contentLines.length > 0;
   }

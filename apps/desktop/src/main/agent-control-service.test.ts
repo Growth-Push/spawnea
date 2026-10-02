@@ -838,6 +838,16 @@ describe('AgentControlService', () => {
       expect(read.status).not.toBe('completed');
     });
 
+    it('preserves answers that repeat prompt text without delimiters', async () => {
+      await repositories.sessions.updateStatus('existing', 'idle');
+      const sent = await service.sendPrompt({ target: 'existing', prompt: 'Reply with only:\nOK' });
+      terminalOutput = 'Codex ready\n› Reply with only:\n› OK\nOK\n› Ask Codex to do anything';
+
+      const read = await service.getTurn({ turnId: sent.turnId });
+      expect(read.status).toBe('completed');
+      expect(read.output).toContain('OK');
+    });
+
     it('captures full multiline findings after intermediate working states and in-place TUI redraws', async () => {
       await repositories.sessions.updateStatus('existing', 'idle');
       const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review the changes' });
