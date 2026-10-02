@@ -1,0 +1,57 @@
+# Sanitized catalog for the short Spawnea demo.
+# Replace only the remote SSH placeholders with values that already work in the user's normal SSH setup.
+# Do not commit real credentials or private host configuration.
+version: 1
+
+hosts:
+  local:
+    name: Demo Local Workstation
+    enabled: true
+    projects:
+      demo-project:
+        name: Demo Project
+        path: /tmp/demo-proj
+        enabled: true
+        worktree:
+          enabled: true
+      demo-project-2:
+        name: Demo Project 2
+        path: /tmp/demo-proj-2
+        enabled: true
+        worktree:
+          enabled: false
+    harnesses:
+      codex:
+        name: Codex
+        command: codex
+        args: []
+        enabled: true
+      antigravity:
+        name: Antigravity
+        command: agy
+        args: []
+        enabled: true
+      shell:
+        name: Shell
+        command: sh
+        args: []
+        enabled: true
+
+  rpi-demo:
+    name: Demo Raspberry Pi
+    enabled: true
+    ssh:
+      target: demo-rpi
+      user: demo-user
+      port: 22
+    projects:
+      demo-project:
+        name: Remote Demo Project
+        path: ~/demo-proj
+        enabled: true
+    harnesses:
+      hermes:
+        name: Hermes
+        command: hermes
+        args: []
+        enabled: true

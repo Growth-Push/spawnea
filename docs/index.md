@@ -30,6 +30,9 @@ Spawnea is a local-first desktop workspace for supervising and operating AI codi
 - **[Inspiration and Related Tools](inspiration-and-related-tools.md)**  
   The ideas behind Spawnea from `tmux`, Git worktrees, Workmux, and agent multiplexers, and how Spawnea provides a multi-project, multi-harness desktop model.
 
+- **[Demo Recording Kit](demo-recording-kit.md)**
+  A reproducible test fixture and script suite to record a short multi-harness demonstration of Spawnea.
+
 ---
 
 ## Architecture and Specifications

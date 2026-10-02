@@ -87,6 +87,44 @@ describe('Operational Catalog Validation', () => {
     expect(exampleContent).toContain('op://example-vault/example-server/project-root');
   });
 
+  it('successfully parses and validates config/spawnea.demo.example.yaml', () => {
+    const demoPath = join(__dirname, '../../../config/spawnea.demo.example.yaml');
+    const demoContent = readFileSync(demoPath, 'utf8');
+
+    const result = parseOperationalCatalog(demoContent);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.catalog.version).toBe(1);
+    expect(Object.keys(result.catalog.hosts)).toEqual(['local', 'rpi-demo']);
+
+    const localHost = result.catalog.hosts['local'];
+    expect(localHost.name).toBe('Demo Local Workstation');
+    expect(localHost.enabled).toBe(true);
+    expect(localHost.ssh).toBeUndefined();
+    expect(Object.keys(localHost.projects)).toEqual(['demo-project', 'demo-project-2']);
+    expect(localHost.projects['demo-project'].path).toBe('/tmp/demo-proj');
+    expect(localHost.projects['demo-project'].worktree).toEqual({
+      enabled: true,
+      copy_files: [],
+    });
+    expect(localHost.projects['demo-project-2'].path).toBe('/tmp/demo-proj-2');
+    expect(localHost.projects['demo-project-2'].worktree).toEqual({
+      enabled: false,
+      copy_files: [],
+    });
+    expect(Object.keys(localHost.harnesses)).toEqual(['codex', 'antigravity', 'shell']);
+    expect(localHost.harnesses.shell.command).toBe('sh');
+
+    const remoteHost = result.catalog.hosts['rpi-demo'];
+    expect(remoteHost.name).toBe('Demo Raspberry Pi');
+    expect(remoteHost.enabled).toBe(true);
+    expect(remoteHost.ssh).toEqual({ target: 'demo-rpi', user: 'demo-user', port: 22 });
+    expect(Object.keys(remoteHost.projects)).toEqual(['demo-project']);
+    expect(remoteHost.projects['demo-project'].path).toBe('~/demo-proj');
+    expect(Object.keys(remoteHost.harnesses)).toEqual(['hermes']);
+  });
+
   it('validates user config with 2 hosts (local + example-remote), 5 harnesses, and 1 project', () => {
     const userConfig = `
 version: 1
