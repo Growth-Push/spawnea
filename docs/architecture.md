@@ -275,9 +275,11 @@ the same user-data directory, MCP runtime paths, and session prefix. Windows
 reserved device names are rejected on Windows. Existing directories are not
 automatically migrated. Profiles select separate user-data directories, MCP
 runtime paths, and tmux session name prefixes. Harness environments inherit the profile selector.
-A missing profile-specific catalog falls back to the default catalog unless the
-caller explicitly selects a user-data directory. This fallback shares catalog
-writes; database and session context remain specific to each profile.
+A missing profile-specific catalog is initialized once from the default catalog
+using a private copy published atomically without overwriting an existing catalog.
+Each profile owns subsequent catalog writes. An explicit user-data directory
+disables default-catalog copying; without a default catalog, normal catalog
+creation uses the profile path. Database and session context remain profile-specific.
 
 ### Local MCP control boundary
 

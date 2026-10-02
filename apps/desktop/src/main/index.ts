@@ -31,7 +31,7 @@ import { AgentControlService } from './agent-control-service.js';
 import { ControlMcpGateway } from './control-mcp-gateway.js';
 import { isControlMcpEnabled } from './control-config.js';
 import { initializeProcessPath } from './process-path.js';
-import { parseProfileFromArgs, resolveActiveCatalogPath, resolveSpawneaUserDataPath } from './product-paths.js';
+import { parseProfileFromArgs, initializeActiveCatalogPath, resolveSpawneaUserDataPath } from './product-paths.js';
 import { resolveDesktopRuntimePaths } from './runtime-paths.js';
 import {
   sanitizeCatalogResultForRenderer,
@@ -972,7 +972,7 @@ app.whenReady().then(async () => {
     repositories = createRepositories(dbConnection.db, { logger });
 
     const hasExplicitUserData = Boolean(process.env.SPAWNEA_USER_DATA_DIR || smokeUserDataPath);
-    const catalogPath = resolveActiveCatalogPath(
+    const catalogPath = await initializeActiveCatalogPath(
       app.getPath('userData'),
       app.getPath('appData'),
       Boolean(activeProfile),

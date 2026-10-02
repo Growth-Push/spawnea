@@ -19,11 +19,12 @@ directories are not renamed or migrated automatically. The window title
 and newly created tmux session names identify the profile. Child harnesses inherit
 `SPAWNEA_PROFILE` so their MCP helper selects the same runtime.
 
-A named profile uses its own `config.yaml` when present. If it is absent, the
-profile shares the default catalog, including edits made in Settings. Create a
-profile-specific catalog to separate host and project configuration as well.
-An explicit `SPAWNEA_USER_DATA_DIR` always takes precedence and disables catalog
-fallback. Explicit control socket and runtime-file overrides also take precedence;
+A named profile uses its own `config.yaml`. On first startup, if it is absent and
+the default catalog exists, Spawnea creates a private copy in the profile directory.
+Subsequent Settings edits affect only that profile. An existing profile catalog is
+never overwritten or recopied. Without a default catalog, normal catalog creation
+uses the profile path. An explicit `SPAWNEA_USER_DATA_DIR` always takes precedence
+and disables copying from the default catalog. Explicit control socket and runtime-file overrides also take precedence;
 use different paths for concurrently running instances.
 
 ## Enable and connect

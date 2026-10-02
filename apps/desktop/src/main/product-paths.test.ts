@@ -1,11 +1,11 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   MAX_PROFILE_NAME_LENGTH,
   parseProfileFromArgs,
-  resolveActiveCatalogPath,
+  initializeActiveCatalogPath,
   resolveSpawneaUserDataPath,
   sanitizeProfileName,
 } from './product-paths.js';
@@ -87,28 +87,71 @@ describe('Spawnea user data compatibility', () => {
     expect(() => parseProfileFromArgs([], { SPAWNEA_PROFILE: 'invalid/env' })).toThrow('Invalid profile name');
   });
 
-  it('resolves active catalog path with named profile fallback and explicit user data protection', () => {
-    const userData = '/tmp/profile-app-data/spawnea/profiles/chatgpt';
-    const appData = '/tmp/profile-app-data';
+  async function catalogFixture() {
+    directory = await mkdtemp(join(tmpdir(), 'spawnea-profile-catalog-'));
+    const base = join(directory, 'spawnea', 'config.yaml');
+    const profileDir = join(directory, 'spawnea', 'profiles', 'work');
+    const profile = join(profileDir, 'config.yaml');
+    await mkdir(join(directory, 'spawnea'), { recursive: true });
+    await writeFile(base, 'hosts: original\n');
+    return { appData: directory, base, profileDir, profile };
+  }
 
-    // 1. Named profile with profile-specific config -> uses profile config
-    expect(resolveActiveCatalogPath(userData, appData, true, false, (p) => p === join(userData, 'config.yaml')))
-      .toBe(join(userData, 'config.yaml'));
+  it('initializes a private catalog once and keeps profile edits separate from the default', async () => {
+    const { appData, base, profileDir, profile } = await catalogFixture();
+    expect(await initializeActiveCatalogPath(profileDir, appData, true, false)).toBe(profile);
+    expect(await readFile(profile, 'utf8')).toBe('hosts: original\n');
+    if (process.platform !== 'win32') expect((await stat(profile)).mode & 0o777).toBe(0o600);
+    await writeFile(profile, 'hosts: profile-edited\n');
+    expect(await readFile(base, 'utf8')).toBe('hosts: original\n');
+    await writeFile(base, 'hosts: default-edited\n');
+    await initializeActiveCatalogPath(profileDir, appData, true, false);
+    expect(await readFile(profile, 'utf8')).toBe('hosts: profile-edited\n');
+  });
 
-    // 2. Named profile without profile config, but base exists -> falls back to base config
-    expect(resolveActiveCatalogPath(userData, appData, true, false, (p) => p === join(appData, 'spawnea', 'config.yaml')))
-      .toBe(join(appData, 'spawnea', 'config.yaml'));
+  it('preserves an existing profile catalog', async () => {
+    const { appData, profileDir, profile } = await catalogFixture();
+    await mkdir(profileDir, { recursive: true });
+    await writeFile(profile, 'hosts: existing\n');
+    await initializeActiveCatalogPath(profileDir, appData, true, false);
+    expect(await readFile(profile, 'utf8')).toBe('hosts: existing\n');
+  });
 
-    // 3. Named profile with neither existing -> defaults to profile config
-    expect(resolveActiveCatalogPath(userData, appData, true, false, () => false))
-      .toBe(join(userData, 'config.yaml'));
+  it('does not inspect or copy the base for explicit data overrides or default runs', async () => {
+    const { appData, base, profileDir, profile } = await catalogFixture();
+    // A directory at the base catalog path would fail readFile if inspected.
+    await rm(base);
+    await mkdir(base);
+    expect(await initializeActiveCatalogPath(profileDir, appData, true, true)).toBe(profile);
+    expect(await initializeActiveCatalogPath(profileDir, appData, false, false)).toBe(profile);
+    await expect(stat(profile)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(profileDir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
-    // 4. Explicit user data override (e.g. smoke test) -> NEVER falls back to base config even if base exists
-    expect(resolveActiveCatalogPath(userData, appData, true, true, (p) => p === join(appData, 'spawnea', 'config.yaml')))
-      .toBe(join(userData, 'config.yaml'));
+  it('keeps the profile path when no default catalog exists', async () => {
+    const { appData, base, profileDir, profile } = await catalogFixture();
+    await rm(base);
+    expect(await initializeActiveCatalogPath(profileDir, appData, true, false)).toBe(profile);
+    await expect(stat(profile)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
-    // 5. Default profile (not named) -> uses default user data config
-    expect(resolveActiveCatalogPath('/tmp/profile-app-data/spawnea', appData, false, false, () => true))
-      .toBe('/tmp/profile-app-data/spawnea/config.yaml');
+  it('preserves a catalog created while the default copy is being staged', async () => {
+    const { appData, profileDir, profile } = await catalogFixture();
+    const publishCatalog: typeof link = async (source, target) => {
+      await writeFile(profile, 'hosts: concurrent-owner\n', { flag: 'wx' });
+      await link(source, target);
+    };
+    expect(await initializeActiveCatalogPath(profileDir, appData, true, false, publishCatalog)).toBe(profile);
+    expect(await readFile(profile, 'utf8')).toBe('hosts: concurrent-owner\n');
+    expect(await readdir(profileDir)).toEqual(['config.yaml']);
+  });
+
+  it('publishes concurrent initializations without replacing a catalog or leaving temporary copies', async () => {
+    const { appData, profileDir, profile } = await catalogFixture();
+    expect(await Promise.all(Array.from({ length: 8 }, () =>
+      initializeActiveCatalogPath(profileDir, appData, true, false))))
+      .toEqual(Array(8).fill(profile));
+    expect(await readFile(profile, 'utf8')).toBe('hosts: original\n');
+    expect(await readdir(profileDir)).toEqual(['config.yaml']);
   });
 });

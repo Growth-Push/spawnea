@@ -1,4 +1,6 @@
 import { existsSync } from 'node:fs';
+import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
 export const MAX_PROFILE_NAME_LENGTH = 32;
@@ -45,19 +47,38 @@ export function parseProfileFromArgs(
   return undefined;
 }
 
-export function resolveActiveCatalogPath(
+export async function initializeActiveCatalogPath(
   userDataDir: string,
   appDataDir: string,
   isNamedProfile: boolean,
   hasExplicitUserDataDir: boolean,
-  exists: (path: string) => boolean = existsSync,
-): string {
+  publishCatalog: typeof link = link,
+): Promise<string> {
   const profileCatalogPath = join(userDataDir, 'config.yaml');
-  const baseCatalogPath = join(appDataDir, 'spawnea', 'config.yaml');
-  if (isNamedProfile && !hasExplicitUserDataDir) {
-    if (!exists(profileCatalogPath) && exists(baseCatalogPath)) {
-      return baseCatalogPath;
-    }
+  if (!isNamedProfile || hasExplicitUserDataDir || existsSync(profileCatalogPath)) {
+    return profileCatalogPath;
+  }
+
+  let baseCatalog: Buffer;
+  try {
+    baseCatalog = await readFile(join(appDataDir, 'spawnea', 'config.yaml'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return profileCatalogPath;
+    throw error;
+  }
+
+  await mkdir(userDataDir, { recursive: true, mode: 0o700 });
+  const tempPath = join(userDataDir, `.config-${randomUUID()}.tmp`);
+  try {
+    await writeFile(tempPath, baseCatalog, { flag: 'wx', mode: 0o600 });
+    // Publish the complete copy atomically without replacing an existing catalog.
+    await publishCatalog(tempPath, profileCatalogPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  } finally {
+    await unlink(tempPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
   }
   return profileCatalogPath;
 }
