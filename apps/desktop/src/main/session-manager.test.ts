@@ -6,6 +6,8 @@ import { execFileSync } from 'node:child_process';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
 import { LocalHostAdapter, MockHostAdapter, OnePasswordResolver, SSHHostAdapter } from '@spawnea/hosts';
 import {
+  createLogger,
+  type Logger,
   createCatalogProjectPathLocator,
   createCatalogWorktreePathLocator,
   registerSensitiveValue,
@@ -25,6 +27,7 @@ describe('SessionManager', () => {
   let ptyBroker: PtyBroker;
   let sessionManager: SessionManager;
   let mockHost: MockHostAdapter;
+  let logger: Logger;
 
   async function enableManagedWorktrees(): Promise<void> {
     mockHost.customRules.push({ pattern: 'git merge-tree --write-tree', response: { stdout: '0123456789abcdef0123456789abcdef01234567\0', stderr: '', exitCode: 0 } });
@@ -185,7 +188,9 @@ hosts:
       command: 'claude',
     });
 
+    logger = createLogger('session-manager-test');
     sessionManager = new SessionManager({
+      logger,
       repositories: repos,
       catalogManager: catManager,
       contextStore,
@@ -1268,9 +1273,16 @@ hosts:
       task: 'False deletion with restore failure',
     });
     vi.spyOn(repos.sessions, 'delete').mockResolvedValueOnce(false);
-    vi.spyOn(contextStore, 'save').mockRejectedValueOnce(new Error('Context restore error'));
+    const restoreError = new Error('Context restore error');
+    vi.spyOn(contextStore, 'save').mockRejectedValueOnce(restoreError);
+    const logError = vi.spyOn(logger, 'error');
 
     await expect(sessionManager.forgetSessionLocally(session.id)).resolves.toBe(false);
+    expect(logError).toHaveBeenCalledExactlyOnceWith(
+      'Failed to restore session context after local deletion failed',
+      restoreError,
+      { sessionId: session.id },
+    );
   });
 
   it('probes host system telemetry and caches result in memory for subsequent tabs/sessions', async () => {

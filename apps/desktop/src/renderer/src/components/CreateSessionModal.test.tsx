@@ -398,6 +398,69 @@ describe('CreateSessionModal Harness Ordering', () => {
     expect(checkbox.checked).toBe(false);
   });
 
+  it('preserves an explicit worktree choice on list refresh and resets it on reopen', () => {
+    const catalog = {
+      version: 1 as const,
+      hosts: {
+        'srv-1': {
+          id: 'srv-1', name: 'Local Workstation', enabled: true,
+          projects: {
+            'srv-1:spawnea': {
+              id: 'srv-1:spawnea', name: 'Spawnea', path: '/workspace/spawnea',
+              enabled: true, worktree: { enabled: true, copy_files: [] },
+            },
+          },
+          harnesses: {},
+        },
+      },
+    };
+    const props = {
+      isOpen: true, onClose: vi.fn(), onSubmit: vi.fn(),
+      servers: mockServers, projects: mockProjects, agents: mockAgents, catalog,
+    };
+    const { rerender } = render(<CreateSessionModal {...props} />);
+    fireEvent.click(screen.getByTestId('checkbox-use-worktree'));
+    expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(true);
+
+    rerender(<CreateSessionModal {...props} servers={[...mockServers]} agents={[...mockAgents]} projects={[...mockProjects]} />);
+    expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(true);
+
+    rerender(<CreateSessionModal {...props} isOpen={false} />);
+    rerender(<CreateSessionModal {...props} />);
+    expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(false);
+
+    fireEvent.click(screen.getByTestId('checkbox-use-worktree'));
+    rerender(<CreateSessionModal {...props} catalog={{ ...catalog, hosts: {} }} />);
+    expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('keeps connection test and retry buttons in the sequential keyboard focus order', async () => {
+    const testServer = vi.fn()
+      .mockResolvedValueOnce({ success: true, hostId: 'srv-1', target: 'localhost' })
+      .mockResolvedValueOnce({ success: false, hostId: 'srv-1', target: 'localhost', error: 'Unavailable' });
+    const originalApi = window.spawneaApi;
+    window.spawneaApi = { ...originalApi, testServer };
+    try {
+      render(<CreateSessionModal isOpen={true} onClose={vi.fn()} onSubmit={vi.fn()}
+        servers={mockServers} projects={mockProjects} agents={mockAgents} />);
+      const assertFocusable = (id: string) => {
+        const button = screen.getByTestId(id);
+        expect(button.tabIndex).toBe(0);
+        expect((button as HTMLButtonElement).disabled).toBe(false);
+        button.focus();
+        expect(document.activeElement).toBe(button);
+        return button;
+      };
+      fireEvent.click(assertFocusable('test-host-button'));
+      await screen.findByTestId('host-status-connected');
+      fireEvent.click(assertFocusable('test-host-button'));
+      await screen.findByTestId('retry-host-test');
+      assertFocusable('retry-host-test');
+    } finally {
+      window.spawneaApi = originalApi;
+    }
+  });
+
   it('ignores shortcuts and navigation when modifier keys (ctrl, meta, alt) are pressed', () => {
     const multiServers: Server[] = [
       ...mockServers,

@@ -395,11 +395,22 @@ export function CreateSessionModal({
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [isOpen, isSubmitting, hasChildModalOpen, onClose]);
 
-  // Initialize or synchronize selections when modal opens or lists change
+  // Reset dialog state only when it opens, preserving choices on catalog refresh.
+  useEffect(() => {
+    if (!isOpen) return;
+    setIsCustomTask(false);
+    lastConsumedCreatedProjectRef.current = null;
+    setUseWorktree(false);
+    setError(null);
+    setHostTestStatus('idle');
+    setHostTestResult(null);
+    const timer = setTimeout(() => serverTriggerRef.current?.focus(), 0);
+    return () => clearTimeout(timer);
+  }, [isOpen]);
+
+  // Synchronize selections when modal opens or lists change.
   useEffect(() => {
     if (isOpen) {
-      setIsCustomTask(false);
-      lastConsumedCreatedProjectRef.current = null;
       const initialServerId = servers.length > 0 ? (serverId && servers.some((s) => s.id === serverId) ? serverId : servers[0].id) : '';
       if (initialServerId && initialServerId !== serverId) {
         setServerId(initialServerId);
@@ -407,15 +418,6 @@ export function CreateSessionModal({
       if (agents.length > 0 && (!agentId || !agents.some((a) => a.id === agentId))) {
         setAgentId(agents[0].id);
       }
-      setUseWorktree(false);
-      setError(null);
-      setHostTestStatus('idle');
-      setHostTestResult(null);
-
-      const timer = setTimeout(() => {
-        serverTriggerRef.current?.focus();
-      }, 0);
-      return () => clearTimeout(timer);
     }
   }, [isOpen, servers, agents]);
 
@@ -729,7 +731,6 @@ export function CreateSessionModal({
                         </span>
                         <button
                           type="button"
-                          tabIndex={-1}
                           data-testid="test-host-button"
                           onClick={() => testHostConnection(serverId)}
                           className="flex items-center gap-0.5 text-zinc-400 hover:text-emerald-300 font-mono transition-colors cursor-pointer px-1 py-0.5 bg-[#21262d] rounded border border-[#30363d]"
@@ -743,7 +744,6 @@ export function CreateSessionModal({
                     {hostTestStatus === 'failed' && (
                       <button
                         type="button"
-                        tabIndex={-1}
                         data-testid="retry-host-test"
                         onClick={() => testHostConnection(serverId)}
                         className="flex items-center gap-1 text-rose-400 hover:text-rose-300 font-mono cursor-pointer px-1.5 py-0.5 bg-rose-950/40 rounded border border-rose-500/30"
@@ -756,7 +756,6 @@ export function CreateSessionModal({
                     {hostTestStatus === 'idle' && (
                       <button
                         type="button"
-                        tabIndex={-1}
                         data-testid="test-host-button"
                         onClick={() => testHostConnection(serverId)}
                         className="flex items-center gap-1 text-zinc-400 hover:text-emerald-400 font-mono cursor-pointer px-1.5 py-0.5 bg-[#21262d] rounded border border-[#30363d]"
