@@ -6,6 +6,27 @@ Bootstrap mode is available only when `SPAWNEA_SESSION_ID` is absent. A defined
 but empty value is rejected. Root-creation retry records live for the lifetime
 of the running desktop process and are not restored after Spawnea restarts.
 
+## Named desktop profiles
+
+Start the desktop with `--profile <name>` (or `SPAWNEA_PROFILE=<name>`) to keep
+its database, artifacts, logs, snippets, and MCP socket separate from the default
+instance. Profile names accept letters, numbers, hyphens, and underscores, start
+and end with a letter or number, and have at most 32 characters. Names are trimmed
+and normalized to lowercase everywhere, so `Work` and `work` select the same
+identity. On Windows, device names `CON`, `PRN`, `AUX`, `NUL`, `COM1` through
+`COM9`, and `LPT1` through `LPT9` are rejected regardless of case. Existing profile
+directories are not renamed or migrated automatically. The window title
+and newly created tmux session names identify the profile. Child harnesses inherit
+`SPAWNEA_PROFILE` so their MCP helper selects the same runtime.
+
+A named profile uses its own `config.yaml`. On first startup, if it is absent and
+the default catalog exists, Spawnea creates a private copy in the profile directory.
+Subsequent Settings edits affect only that profile. An existing profile catalog is
+never overwritten or recopied. Without a default catalog, normal catalog creation
+uses the profile path. An explicit `SPAWNEA_USER_DATA_DIR` always takes precedence
+and disables copying from the default catalog. Explicit control socket and runtime-file overrides also take precedence;
+use different paths for concurrently running instances.
+
 ## Enable and connect
 
 1. Build and package Spawnea with `pnpm package:desktop:host`.
@@ -49,7 +70,34 @@ The macOS example uses the default install location. If Spawnea is installed
 elsewhere, replace only the helper path. On Unix-like systems, ensure the helper
 or AppImage is executable.
 
-The bridge finds the active desktop process through `${XDG_RUNTIME_DIR}/spawnea/control-runtime.json`. On Linux it also checks `/run/user/<uid>/spawnea/control-runtime.json` so harnesses launched through tmux still connect when that shell does not inherit `XDG_RUNTIME_DIR`; the private temporary-directory location remains a fallback. Set `SPAWNEA_CONTROL_RUNTIME_FILE` in both processes only when a non-default runtime file is required. Stop the desktop app to disable the integration; without an active app, the bridge exits because its owner socket closes. Set `SPAWNEA_CONTROL_ENABLED=0`, `false`, `off`, `no`, or `disabled` only when the local MCP socket should be disabled intentionally. The integration is currently disabled on Windows because named-pipe transport is not implemented yet.
+The bridge finds the active desktop process through `${XDG_RUNTIME_DIR}/spawnea/control-runtime.json` (or `${XDG_RUNTIME_DIR}/spawnea/profiles/<profile>/control-runtime.json` when running in a named profile). On Linux it also checks `/run/user/<uid>/spawnea/control-runtime.json` so harnesses launched through tmux still connect when that shell does not inherit `XDG_RUNTIME_DIR`; the private temporary-directory location remains a fallback. To target a specific isolated instance or profile, pass `--profile <name>` as an argument to the MCP helper or set `SPAWNEA_PROFILE=<name>` in its environment:
+
+```json
+{
+  "mcpServers": {
+    "spawnea": {
+      "command": "/Applications/Spawnea.app/Contents/Resources/spawnea-mcp",
+      "args": ["--profile", "chatgpt"]
+    }
+  }
+}
+```
+
+For Linux AppImage configurations targeting an isolated profile, pass both `--spawnea-mcp` and `--profile <name>` in `args`:
+
+```json
+{
+  "mcpServers": {
+    "spawnea": {
+      "command": "/absolute/path/to/Spawnea-0.1.0-linux-x86_64.AppImage",
+      "args": ["--spawnea-mcp", "--profile", "chatgpt"]
+    }
+  }
+}
+```
+
+Set `SPAWNEA_CONTROL_RUNTIME_FILE` in both processes only when a non-default runtime file is required. Stop the desktop app to disable the integration; without an active app, the bridge exits because its owner socket closes. Set `SPAWNEA_CONTROL_ENABLED=0`, `false`, `off`, `no`, or `disabled` only when the local MCP socket should be disabled intentionally. The integration is currently disabled on Windows because named-pipe transport is not implemented yet.
+
 
 The v1 bridge exposes only the canonical `spawnea_*` tools documented below. When `SPAWNEA_SESSION_ID` is present, the bridge sends it with `spawnea-auth` and the connection opens directly in that active local root's scope. Children receive their own identity and cannot authenticate as an orchestrating root. Existing scoped connections are revalidated on each operation.
 

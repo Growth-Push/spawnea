@@ -1,22 +1,11 @@
 import { createConnection } from 'node:net';
 import { lstat, readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import {
   SPAWNEA_CONTROL_API_VERSION,
   type ControlRuntimeDescriptor,
 } from '@spawnea/domain';
-import { resolveControlRuntimeFileCandidates } from '../main/control-runtime.js';
+import { runtimeFilesFromArgs } from './runtime-args.js';
 import { attachMcpBridgeSocket } from './socket-bridge.js';
-
-function runtimeFilesFromArgs(argv: string[]): string[] {
-  const index = argv.indexOf('--runtime-file');
-  if (index !== -1) {
-    const value = argv[index + 1];
-    if (!value) throw new Error('--runtime-file requires a path');
-    return [resolve(value)];
-  }
-  return resolveControlRuntimeFileCandidates();
-}
 
 async function loadRuntimeDescriptor(path: string): Promise<ControlRuntimeDescriptor> {
   const stat = await lstat(path);

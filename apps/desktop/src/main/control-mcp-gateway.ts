@@ -21,9 +21,11 @@ const MAX_AUTH_BYTES = 4_096;
 export interface ControlMcpGatewayOptions {
   control: AgentControlService;
   logger: Logger;
+  profile?: string;
   runtimeFilePath?: string;
   socketPath?: string;
 }
+
 
 function sameToken(actual: unknown, expected: string): boolean {
   if (typeof actual !== 'string') return false;
@@ -70,12 +72,15 @@ export class ControlMcpGateway {
   private readonly token = randomBytes(32).toString('hex');
   private readonly handles = new Set<StdioServerHandle>();
   private server: NetServer | null = null;
+  private ownsSocketPath = false;
+  private ownsRuntimeFilePath = false;
 
   constructor(options: ControlMcpGatewayOptions) {
     this.control = options.control;
     this.logger = options.logger;
-    this.runtimeFilePath = options.runtimeFilePath ?? resolveControlRuntimeFile();
-    this.socketPath = options.socketPath ?? resolveControlSocketPath();
+    this.runtimeFilePath = options.runtimeFilePath ?? resolveControlRuntimeFile(process.env, options.profile);
+    this.socketPath = options.socketPath ?? resolveControlSocketPath(process.env, options.profile);
+
   }
 
   private startCleanupWatchdog(): void {
@@ -138,6 +143,7 @@ export class ControlMcpGateway {
       server.once('listening', onListening);
       server.listen(this.socketPath);
     });
+    this.ownsSocketPath = true;
     await chmod(this.socketPath, 0o600);
 
     const descriptor: ControlRuntimeDescriptor = {
@@ -150,6 +156,7 @@ export class ControlMcpGateway {
     const tempPath = `${this.runtimeFilePath}.${process.pid}.tmp`;
     await writeFile(tempPath, `${JSON.stringify(descriptor)}\n`, { encoding: 'utf8', mode: 0o600 });
     await rename(tempPath, this.runtimeFilePath);
+    this.ownsRuntimeFilePath = true;
     await chmod(this.runtimeFilePath, 0o600);
     this.startCleanupWatchdog();
     this.logger.info('Spawnea MCP control gateway enabled', {
@@ -238,8 +245,14 @@ export class ControlMcpGateway {
       this.server = null;
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-    await removeOwnedRuntimePath(this.runtimeFilePath, 'file').catch(() => {});
-    await removeOwnedRuntimePath(this.socketPath, 'socket').catch(() => {});
+    if (this.ownsRuntimeFilePath) {
+      this.ownsRuntimeFilePath = false;
+      await removeOwnedRuntimePath(this.runtimeFilePath, 'file').catch(() => {});
+    }
+    if (this.ownsSocketPath) {
+      this.ownsSocketPath = false;
+      await removeOwnedRuntimePath(this.socketPath, 'socket').catch(() => {});
+    }
   }
 }
 

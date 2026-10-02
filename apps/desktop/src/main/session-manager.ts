@@ -60,6 +60,7 @@ import { StateDetector } from '@spawnea/state';
 import type { CatalogManager } from './catalog-manager.js';
 import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
+import { sanitizeProfileName } from './product-paths.js';
 import { HarnessLaunchRegistry } from './harness-launch-registry.js';
 
 function normalizeWorktreePathForComparison(path: string): string {
@@ -80,6 +81,7 @@ export interface SessionManagerOptions {
   catalogManager: CatalogManager;
   contextStore: SessionContextStore;
   ptyBroker: PtyBroker;
+  profile?: string;
   hostAdapterFactory?: (serverId: string) => Promise<HostAdapter>;
   stateDetector?: StateDetector;
   logger?: Logger;
@@ -92,6 +94,7 @@ export class SessionManager {
   private readonly catalogManager: CatalogManager;
   private readonly contextStore: SessionContextStore;
   private readonly ptyBroker: PtyBroker;
+  private readonly profile?: string;
   private readonly tmuxManager: TmuxManager;
   private readonly gitService: GitService;
   private readonly stateDetector: StateDetector;
@@ -124,8 +127,10 @@ export class SessionManager {
     this.catalogManager = options.catalogManager;
     this.contextStore = options.contextStore;
     this.ptyBroker = options.ptyBroker;
+    this.profile = options.profile === undefined ? undefined : sanitizeProfileName(options.profile);
     this.customHostFactory = options.hostAdapterFactory;
     this.logger = options.logger || createLogger('SessionManager');
+
     this.onePasswordResolver = options.onePasswordResolver || new OnePasswordResolver();
     this.tmuxManager = new TmuxManager(this.logger.child('tmux'));
     this.gitService = new GitService(this.logger.child('git'));
@@ -736,8 +741,11 @@ export class SessionManager {
       const sessionId = `sess-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
       creatingSessionId = sessionId;
       this.creatingSessionIds.add(sessionId);
-      const tmuxSessionName = `spawnea-${slug}-${Date.now().toString(36).substring(3)}`;
+      const tmuxPrefix = this.profile ? `spawnea-${this.profile}` : 'spawnea';
+      const tmuxSessionName = `${tmuxPrefix}-${slug}-${Date.now().toString(36).substring(3)}`;
       const worktreeConfig = catProject?.worktree;
+
+
       let runtimePath = prepResult.path;
       let repositoryPath = prepResult.path;
       const currentBranchResult = await host.execute('git branch --show-current', { cwd: prepResult.path });
@@ -896,8 +904,13 @@ export class SessionManager {
           cwd: runtimePath,
           command: harnessCommand,
           args: harnessArgs,
-          env: { SPAWNEA_SESSION_ID: sessionId },
+          env: {
+            SPAWNEA_SESSION_ID: sessionId,
+            ...(this.profile ? { SPAWNEA_PROFILE: this.profile } : {}),
+          },
+
           tmuxOptions: catProject?.tmux?.options,
+
           tmuxCommands: catProject?.tmux?.commands,
           logger: this.logger.child('tmux'),
         });

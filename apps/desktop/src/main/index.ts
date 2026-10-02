@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, ipcMain, shell, dialog, type WebContents } from 'electron';
 import { join, resolve, dirname } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { mkdir, rm as rmAsync, writeFile } from 'node:fs/promises';
@@ -31,7 +31,7 @@ import { AgentControlService } from './agent-control-service.js';
 import { ControlMcpGateway } from './control-mcp-gateway.js';
 import { isControlMcpEnabled } from './control-config.js';
 import { initializeProcessPath } from './process-path.js';
-import { resolveSpawneaUserDataPath } from './product-paths.js';
+import { parseProfileFromArgs, initializeActiveCatalogPath, resolveSpawneaUserDataPath } from './product-paths.js';
 import { resolveDesktopRuntimePaths } from './runtime-paths.js';
 import {
   sanitizeCatalogResultForRenderer,
@@ -39,6 +39,11 @@ import {
 } from './catalog-redaction.js';
 
 initializeProcessPath();
+
+const activeProfile = parseProfileFromArgs(process.argv, process.env);
+if (activeProfile) {
+  process.env.SPAWNEA_PROFILE = activeProfile;
+}
 
 const derivedLegacyUserDataPath = app.getPath('userData');
 const smokeUserDataPath = process.env.SPAWNEA_SMOKE_TEST === '1' || process.argv.includes('--smoke-test')
@@ -49,7 +54,9 @@ app.setPath('userData', resolveSpawneaUserDataPath(
   app.getPath('appData'),
   derivedLegacyUserDataPath,
   process.env.SPAWNEA_USER_DATA_DIR || smokeUserDataPath,
+  activeProfile,
 ));
+
 
 // Polyfill global __filename and __dirname for native modules in ESM if needed
 try {
@@ -801,7 +808,7 @@ function registerIpcHandlers(
   // Terminal Snippet & Text Artifact Handlers
   ipcMain.handle('terminal:openSnippetInEditor', async (_event, text: string) => {
     try {
-      const snippetsDir = join(homedir(), '.config', 'spawnea', 'snippets');
+      const snippetsDir = join(app.getPath('userData'), 'snippets');
       await mkdir(snippetsDir, { recursive: true });
       const snippetPath = join(snippetsDir, `snippet-${Date.now()}.txt`);
       await writeFile(snippetPath, text, 'utf8');
@@ -876,7 +883,9 @@ function createWindow(): void {
   } else {
     logger.warn('Preload script not found on disk', { path: preloadPath });
   }
+  const windowTitle = activeProfile ? `Spawnea — [${activeProfile}]` : 'Spawnea';
   const mainWindow = new BrowserWindow({
+    title: windowTitle,
     width: 1360,
     height: 880,
     minWidth: 1024,
@@ -892,8 +901,16 @@ function createWindow(): void {
     },
   });
 
+  if (activeProfile) {
+    mainWindow.on('page-title-updated', (event) => {
+      event.preventDefault();
+      mainWindow.setTitle(windowTitle);
+    });
+  }
+
   // Spawnea has its own renderer UI; prevent Electron's hidden menu from reappearing on Alt.
   mainWindow.setMenu(null);
+
 
   mainWindowRef = mainWindow;
   mainWindow.once('closed', () => {
@@ -954,8 +971,16 @@ app.whenReady().then(async () => {
     dbConnection = createDatabase({ path: dbPath, migrate: true });
     repositories = createRepositories(dbConnection.db, { logger });
 
+    const hasExplicitUserData = Boolean(process.env.SPAWNEA_USER_DATA_DIR || smokeUserDataPath);
+    const catalogPath = await initializeActiveCatalogPath(
+      app.getPath('userData'),
+      app.getPath('appData'),
+      Boolean(activeProfile),
+      hasExplicitUserData,
+    );
+
     catalogManager = new CatalogManager({
-      catalogPath: join(app.getPath('userData'), 'config.yaml'),
+      catalogPath,
       logger,
     });
     const catalogState = catalogManager.load();
@@ -995,7 +1020,9 @@ app.whenReady().then(async () => {
       contextStore,
       ptyBroker,
       logger,
+      profile: activeProfile,
     });
+
     agentControlService = new AgentControlService({
       repositories,
       sessionManager,
@@ -1108,6 +1135,7 @@ app.whenReady().then(async () => {
       controlMcpGateway = new ControlMcpGateway({
         control: agentControlService,
         logger: logger.child('control-mcp'),
+        profile: activeProfile,
       });
       await controlMcpGateway.start();
     } else {
