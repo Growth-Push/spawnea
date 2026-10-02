@@ -149,6 +149,24 @@ describe('AgentControlService', () => {
     await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'completed', extraction: 'delimited' });
   });
 
+  it('allows regular response output and idle status to resolve an uncertain submission without delimiters', async () => {
+    sessionManager.sendPrompt.mockRejectedValueOnce(new PromptSubmissionError('pty'));
+    const sent = await service.sendPrompt({ target: 'existing', clientRequestId: 'uncertain-regular', prompt: 'Review' });
+    terminalOutput = 'Codex ready\n› Review\nHere are the review findings:\n- Finding 1\n› Ask Codex to do anything';
+    await repositories.sessions.updateStatus('existing', 'idle');
+    const result = await service.getTurn({ turnId: sent.turnId });
+    expect(result.status).toBe('completed');
+    expect(result.output).toContain('Here are the review findings:');
+  });
+
+  it('preserves authoritative session error even when pane retains working text', async () => {
+    const sent = await service.sendPrompt({ target: 'existing', prompt: 'Run task' });
+    terminalOutput = 'Codex ready\n› Run task\n• Working (5s • esc to interrupt)';
+    await repositories.sessions.updateStatus('existing', 'error');
+    const result = await service.getTurn({ turnId: sent.turnId });
+    expect(result.status).toBe('failed');
+  });
+
   it('reads Agent Context without refreshing live turn state', async () => {
     const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review' });
     terminalOutput += '\nCaptured result';
@@ -808,6 +826,108 @@ describe('AgentControlService', () => {
       terminalOutput += '\n<<<SPAWNEA_RESPONSE_BEGIN>>>\nactual result\n<<<SPAWNEA_RESPONSE_END>>>';
       const response = await service.getTurn({ turnId: sent.turnId, cursor: echoed.cursor });
       expect(response).toMatchObject({ output: 'actual result', extraction: 'delimited', confidence: 'high' });
+    });
+
+    it('does not prematurely complete a turn when terminal echoes prompt with prompt symbol', async () => {
+      await repositories.sessions.updateStatus('existing', 'idle');
+      const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review the changes' });
+      terminalOutput = 'Codex ready\n› Review the changes';
+
+      const read = await service.getTurn({ turnId: sent.turnId });
+      expect(read.status).toBe('unknown');
+      expect(read.status).not.toBe('completed');
+    });
+
+    it('captures full multiline findings after intermediate working states and in-place TUI redraws', async () => {
+      await repositories.sessions.updateStatus('existing', 'idle');
+      const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review the changes' });
+
+      // Step 1: Child agent starts working, showing spinner/working line
+      terminalOutput = 'Codex ready\n› Review the changes\n• Working (1s • esc to interrupt)';
+      const step1 = await service.getTurn({ turnId: sent.turnId });
+      expect(step1.status).toBe('working');
+      expect(step1.cursorExpired).toBe(false);
+
+      // Step 2: Child agent in-place redraws progress line (detects generation change without corrupting buffer)
+      terminalOutput = 'Codex ready\n› Review the changes\n• Working (2s • esc to interrupt)';
+      const step2 = await service.getTurn({ turnId: sent.turnId, cursor: step1.cursor });
+      expect(step2.status).toBe('working');
+
+      // Step 3: Child agent completes findings and returns to idle prompt
+      terminalOutput = [
+        'Codex ready',
+        '› Review the changes',
+        '─ Worked for 5s ─────────────────────────────────────────────────────────────',
+        'Finding 1: packages/hosts/src/git-service.ts timeout cleanup',
+        'Finding 2: apps/desktop/src/main/session-supervisor.ts post-shutdown publication',
+        'Finding 3: apps/desktop/src/renderer/src/App.tsx overlapping polling work',
+        '─────────────────────────────────────────────────────────────────────────────',
+        '› Ask Codex to do anything',
+      ].join('\n');
+
+      // Polling with cursor from intermediate working state must cleanly deliver all findings without UTF-8 corruption
+      const step3WithWorkingCursor = await service.getTurn({ turnId: sent.turnId, cursor: step2.cursor });
+      expect(step3WithWorkingCursor.status).toBe('completed');
+      expect(step3WithWorkingCursor.output).toContain('Finding 1: packages/hosts/src/git-service.ts timeout cleanup');
+      expect(step3WithWorkingCursor.output).toContain('Finding 2: apps/desktop/src/main/session-supervisor.ts post-shutdown publication');
+      expect(step3WithWorkingCursor.output).toContain('Finding 3: apps/desktop/src/renderer/src/App.tsx overlapping polling work');
+      expect(step3WithWorkingCursor.cursorExpired).toBe(true);
+
+      const step3 = await service.getTurn({ turnId: sent.turnId });
+      expect(step3.status).toBe('completed');
+      expect(step3.output).toBe(step3WithWorkingCursor.output);
+      expect(step3.cursorExpired).toBe(false);
+
+      // Step 4: Re-reading completed turn is stable and preserves full result
+      const stableRead = await service.getTurn({ turnId: sent.turnId });
+      expect(stableRead.status).toBe('completed');
+      expect(stableRead.output).toBe(step3.output);
+
+      // Step 5: Reading with cursor at end of completed turn reports unchanged
+      const unchanged = await service.getTurn({
+        turnId: sent.turnId,
+        cursor: step3.cursor,
+        afterVersion: step3.version,
+      });
+      expect(unchanged.status).toBe('unchanged');
+      expect(unchanged.output).toBe('');
+
+      // Step 6: Raw read returns uncompacted output including status decorations
+      const rawRead = await service.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+      expect(rawRead.status).toBe('completed');
+      expect(rawRead.output).toContain('─ Worked for 5s ─');
+      expect(rawRead.output).toContain('Finding 1: packages/hosts/src/git-service.ts timeout cleanup');
+    });
+
+    it('does not advance baseOffset across repeated in-place TUI redraws', async () => {
+      const sent = await service.sendPrompt({ target: 'existing', prompt: 'Compute' });
+
+      let cursor: string | undefined;
+      const expectedOffset = Buffer.byteLength('\n› Compute\n• Working (1s • esc to interrupt)', 'utf8');
+      for (let i = 1; i <= 8; i++) {
+        terminalOutput = `Codex ready\n› Compute\n• Working (${i}s • esc to interrupt)`;
+        const result = await service.getTurn({ turnId: sent.turnId, cursor });
+        expect(result.status).toBe('working');
+        expect(result.cursorExpired).toBe(i > 1);
+        expect(result.cursor).toBe(`${sent.turnId}:${i}:${expectedOffset}`);
+        cursor = result.cursor;
+      }
+    });
+
+    it('handles in-place redraw after output exceeds MAX_RETAINED_TURN_BYTES', async () => {
+      const sent = await service.sendPrompt({ target: 'existing', prompt: 'Big log' });
+      const bigPrefix = 'A'.repeat(270_000);
+      terminalOutput = `Codex ready\n› Big log\n${bigPrefix}\n• Working (1s)`;
+      const initialRead = await service.getTurn({ turnId: sent.turnId });
+      expect(initialRead.status).toBe('working');
+      expect(initialRead.cursorExpired).toBe(true);
+
+      // Now an in-place redraw occurs
+      terminalOutput = `Codex ready\n› Big log\n${bigPrefix}\n• Working (2s)`;
+      const redrawRead = await service.getTurn({ turnId: sent.turnId, cursor: initialRead.cursor });
+      expect(redrawRead.status).toBe('working');
+      expect(redrawRead.cursorExpired).toBe(true);
+      expect(redrawRead.cursor).toBeDefined();
     });
 
     it('navigates to session by child alias when parentSessionId is provided', async () => {

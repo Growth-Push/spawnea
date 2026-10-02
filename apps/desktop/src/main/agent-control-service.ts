@@ -46,7 +46,7 @@ import {
   isLoopbackHost,
 } from '@spawnea/domain';
 import type { SessionManager } from './session-manager.js';
-import { resolveHarnessOutputAdapter } from '@spawnea/state';
+import { detectPromptInTail, resolveHarnessOutputAdapter, StateDetector, stripAnsi } from '@spawnea/state';
 import { PromptSubmissionError } from '@spawnea/hosts';
 
 interface CachedBatchResult {
@@ -82,11 +82,11 @@ interface TrackedTurn {
   initialSnapshot: string;
   lastSnapshot: string;
   output: string;
+  outputGeneration: number;
   baseOffset: number;
   version: number;
   status: Exclude<ControlTurnStatus, 'unchanged'>;
   changedAt: string;
-  cursorExpired: boolean;
   observedWorking: boolean;
   outputChanges: number;
   promptDelimiterPairs: number;
@@ -106,6 +106,7 @@ export interface AgentControlServiceOptions {
   notifyFinalizationRequested?: (request: ControlFinalizationRequest) => boolean;
   notifyDataChanged?: () => boolean;
   getActiveCatalog?: () => OperationalCatalog | null;
+  stateDetector?: StateDetector;
 }
 
 export interface ScopedAgentControlService {
@@ -182,6 +183,7 @@ export class AgentControlService {
   private readonly promptLocks = new Map<string, Promise<void>>();
   private readonly contextCalls = new Map<string, ControlAgentContextCall[]>();
   private readonly finalizationOwners = new Map<string, string>();
+  private readonly stateDetector: StateDetector;
   private uiState: ControlUiState = { activeSessionId: null, activeTab: 'terminal' };
 
   constructor(options: AgentControlServiceOptions) {
@@ -192,6 +194,7 @@ export class AgentControlService {
     this.notifyFinalizationRequested = options.notifyFinalizationRequested;
     this.notifyDataChanged = options.notifyDataChanged;
     this.getActiveCatalog = options.getActiveCatalog;
+    this.stateDetector = options.stateDetector ?? new StateDetector();
   }
 
   setUiState(state: ControlUiState): void {
@@ -1007,11 +1010,11 @@ export class AgentControlService {
           initialSnapshot: await this.sessionManager.captureSessionTerminal(targetSession.id),
           lastSnapshot: '',
           output: '',
+          outputGeneration: 1,
           baseOffset: 0,
           version: 1,
           status: 'working',
           changedAt: now,
-          cursorExpired: false,
           observedWorking: false,
           outputChanges: 0,
           promptDelimiterPairs: (request.prompt.match(/<<<SPAWNEA_RESPONSE_BEGIN>>>[\s\S]*?<<<SPAWNEA_RESPONSE_END>>>/g) ?? []).length,
@@ -1107,9 +1110,47 @@ export class AgentControlService {
   }
 
   private hasResponseOutput(turn: TrackedTurn, output: string): boolean {
-    const trimmedOutput = output.trim();
-    const trimmedPrompt = turn.prompt.trim();
-    return Boolean(trimmedOutput) && trimmedOutput !== trimmedPrompt;
+    const rawCleaned = stripAnsi(output);
+    const compacted = resolveHarnessOutputAdapter(turn.harness).compact(rawCleaned).output;
+    const lines = compacted
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    if (lines.length === 0) return false;
+
+    const normalizedPromptLines = stripAnsi(turn.prompt)
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .map((l) => l.replace(/^[>›$#%]\s*/, '').trim());
+
+    const contentLines = lines.filter((line) => {
+      const withoutShellPrompt = line.replace(/^[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+:[^$#%]*[$#%]\s*/, '').trim();
+      const stripped = withoutShellPrompt.replace(/^[>›$#%]\s*/, '').trim();
+
+      if (
+        normalizedPromptLines.includes(stripped) ||
+        normalizedPromptLines.includes(withoutShellPrompt) ||
+        normalizedPromptLines.includes(line)
+      ) {
+        return false;
+      }
+
+      const promptDetection = detectPromptInTail([line], { harness: turn.harness });
+      if (
+        promptDetection.kind === 'idle_prompt' ||
+        promptDetection.kind === 'shell_prompt' ||
+        /^[>›$#%]\s*$/.test(line) ||
+        /^[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+:[^$#%]*[$#%]?\s*$/.test(line) ||
+        stripped === ''
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+
+    return contentLines.length > 0;
   }
 
   private async refreshTurn(turn: TrackedTurn): Promise<void> {
@@ -1121,29 +1162,73 @@ export class AgentControlService {
     ]);
     if (!session) throw new Error(`Session '${turn.sessionId}' not found`);
     const nextOutput = this.terminalOutputSince(turn.initialSnapshot, snapshot);
-    if (session.status === 'working' || session.status === 'starting') turn.observedWorking = true;
+
+    const tailLines = snapshot ? snapshot.split('\n').slice(-50) : [];
+    const liveStatusResult = this.stateDetector.detectStatus({
+      sessionId: turn.sessionId,
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      tailLines,
+    }, turn.harness);
+
+    const liveStatus = (liveStatusResult.confidence && liveStatusResult.confidence >= 0.8)
+      ? liveStatusResult.status
+      : undefined;
+
+    const effectiveStatus = (session.status === 'error' || session.status === 'disconnected')
+      ? session.status
+      : (liveStatus ?? session.status);
+
+    if (effectiveStatus === 'working' && !turn.submissionUncertain) {
+      turn.observedWorking = true;
+    }
+
     const delimiterPairs = (nextOutput.match(/<<<SPAWNEA_RESPONSE_BEGIN>>>[\s\S]*?<<<SPAWNEA_RESPONSE_END>>>/g) ?? []).length;
     const hasResponseDelimiter = delimiterPairs > turn.promptDelimiterPairs;
-    const nextStatus: Exclude<ControlTurnStatus, 'unchanged'> = hasResponseDelimiter
-      ? 'completed'
-      : session.status === 'error' || session.status === 'disconnected'
-        ? 'failed'
-        : session.status === 'needs_input'
-          ? 'needs_input'
-          : this.hasResponseOutput(turn, nextOutput) && (session.status === 'done' || session.status === 'idle')
-            ? 'completed'
-            : turn.submissionUncertain
-              ? 'unknown'
-          : session.status === 'starting' || session.status === 'working'
-            ? 'working'
-            : 'unknown';
+    const hasOutput = this.hasResponseOutput(turn, nextOutput);
+
+    let nextStatus: Exclude<ControlTurnStatus, 'unchanged'>;
+
+    if (hasResponseDelimiter) {
+      turn.submissionUncertain = false;
+      nextStatus = 'completed';
+    } else if (
+      effectiveStatus === 'error' ||
+      effectiveStatus === 'disconnected'
+    ) {
+      nextStatus = 'failed';
+    } else if (effectiveStatus === 'needs_input') {
+      nextStatus = 'needs_input';
+    } else if (hasOutput && (effectiveStatus === 'done' || effectiveStatus === 'idle')) {
+      turn.submissionUncertain = false;
+      nextStatus = 'completed';
+    } else if (turn.submissionUncertain) {
+      nextStatus = 'unknown';
+    } else if (effectiveStatus === 'working') {
+      nextStatus = 'working';
+    } else if (effectiveStatus === 'done') {
+      nextStatus = 'completed';
+    } else if (effectiveStatus === 'idle') {
+      if (turn.observedWorking) {
+        nextStatus = 'completed';
+      } else if (hasOutput) {
+        nextStatus = 'completed';
+      } else {
+        nextStatus = 'unknown';
+      }
+    } else {
+      nextStatus = turn.status === 'working' ? 'working' : 'unknown';
+    }
+
     const outputChanged = snapshot !== turn.lastSnapshot;
     if (outputChanged || nextStatus !== turn.status) {
       if (outputChanged) {
-        const oldOutput = turn.output;
-        if (oldOutput && !nextOutput.startsWith(oldOutput)) {
-          turn.baseOffset += Buffer.byteLength(oldOutput, 'utf8');
-          turn.cursorExpired = true;
+        if (turn.output && !nextOutput.startsWith(turn.output)) {
+          turn.outputGeneration += 1;
+          turn.baseOffset = 0;
         }
         turn.output = nextOutput;
         turn.outputChanges += 1;
@@ -1153,7 +1238,6 @@ export class AgentControlService {
         const excess = byteLength - MAX_RETAINED_TURN_BYTES;
         turn.output = Buffer.from(turn.output, 'utf8').subarray(excess).toString('utf8');
         turn.baseOffset += excess;
-        turn.cursorExpired = true;
       }
       turn.status = nextStatus;
       turn.version += 1;
@@ -1166,10 +1250,26 @@ export class AgentControlService {
   }
 
   private cursorOffset(turn: TrackedTurn, cursor?: string): { offset: number; expired: boolean } {
-    if (!cursor) return { offset: turn.baseOffset, expired: turn.cursorExpired };
-    const [turnId, rawOffset] = cursor.split(':');
+    if (!cursor) return { offset: turn.baseOffset, expired: turn.baseOffset > 0 };
+    const parts = cursor.split(':');
+    if (parts.length === 3) {
+      const [turnId, rawGen, rawOffset] = parts;
+      const gen = Number(rawGen);
+      const offset = Number(rawOffset);
+      if (
+        turnId !== turn.id ||
+        !Number.isSafeInteger(gen) ||
+        !Number.isSafeInteger(offset) ||
+        gen !== turn.outputGeneration ||
+        offset < turn.baseOffset
+      ) {
+        return { offset: turn.baseOffset, expired: true };
+      }
+      return { offset, expired: false };
+    }
+    const [turnId, rawOffset] = parts;
     const offset = Number(rawOffset);
-    if (turnId !== turn.id || !Number.isSafeInteger(offset) || offset < turn.baseOffset) {
+    if (turnId !== turn.id || !Number.isSafeInteger(offset) || turn.outputGeneration > 1 || offset < turn.baseOffset) {
       return { offset: turn.baseOffset, expired: true };
     }
     return { offset, expired: false };
@@ -1227,7 +1327,7 @@ export class AgentControlService {
       sessionId: turn.sessionId,
       status: unchanged ? 'unchanged' : turn.status,
       version: turn.version,
-      cursor: `${turn.id}:${nextOffset}`,
+      cursor: `${turn.id}:${turn.outputGeneration}:${nextOffset}`,
       output: unchanged ? '' : output,
       outputMode,
       truncated: available.length > maxBytes || extractedBytes > maxBytes,
