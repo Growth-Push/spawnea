@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { AddProjectToCatalogInput, GitBranchDiscoveryResult, Server } from '@spawnea/domain';
 import { AlertCircle, CheckCircle2, FolderOpen, FolderPlus, GitBranch, Loader2, Settings, X } from 'lucide-react';
 
@@ -8,6 +8,7 @@ interface NewProjectModalProps {
   onSubmit: (input: AddProjectToCatalogInput) => Promise<{ success: boolean; error?: string }>;
   servers: Server[];
   onOpenSettings: () => Promise<{ success: boolean; error?: string }>;
+  initialServerId?: string;
 }
 
 export function NewProjectModal({
@@ -16,6 +17,7 @@ export function NewProjectModal({
   onSubmit,
   servers,
   onOpenSettings,
+  initialServerId,
 }: NewProjectModalProps): React.JSX.Element | null {
   const [serverId, setServerId] = useState('');
   const [projectId, setProjectId] = useState('');
@@ -30,12 +32,46 @@ export function NewProjectModal({
   const [isOpeningSettings, setIsOpeningSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const projectIdInputRef = useRef<HTMLInputElement>(null);
+  const hasInitializedServerIdRef = useRef(false);
+
   const selectedServer = useMemo(() => servers.find((server) => server.id === serverId), [servers, serverId]);
 
   useEffect(() => {
     if (!isOpen) return;
-    setServerId((current) => current || servers[0]?.id || '');
-  }, [isOpen, servers]);
+    const timer = setTimeout(() => {
+      projectIdInputRef.current?.focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      hasInitializedServerIdRef.current = false;
+      return;
+    }
+    if (!hasInitializedServerIdRef.current) {
+      hasInitializedServerIdRef.current = true;
+      if (initialServerId && servers.some((s) => s.id === initialServerId)) {
+        setServerId(initialServerId);
+        return;
+      }
+    }
+    setServerId((current) => (current && servers.some((s) => s.id === current) ? current : servers[0]?.id || ''));
+  }, [isOpen, servers, initialServerId]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isSubmitting) {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [isOpen, isSubmitting, onClose]);
 
   useEffect(() => {
     setDiscovery(null);
@@ -145,7 +181,7 @@ export function NewProjectModal({
   };
 
   return (
-    <div role="dialog" aria-modal="true" aria-labelledby="new-project-title" className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div role="dialog" aria-modal="true" aria-labelledby="new-project-title" className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
         <div className="h-14 px-5 border-b border-[#30363d] flex items-center justify-between bg-[#12161c]">
           <div className="flex items-center gap-2">
@@ -161,7 +197,7 @@ export function NewProjectModal({
           <label className="block text-xs font-semibold text-zinc-300">Host<select data-testid="new-project-server" value={serverId} onChange={(event) => setServerId(event.target.value)} disabled={isSubmitting} className="mt-1.5 w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200"><option value="">Select a host</option>{servers.map((server) => <option key={server.id} value={server.id}>{server.name} ({server.host})</option>)}</select></label>
 
           <div className="grid grid-cols-2 gap-3">
-            <label className="block text-xs font-semibold text-zinc-300">Project ID<input data-testid="new-project-id" value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="my-project" disabled={isSubmitting} className="mt-1.5 w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200" /></label>
+            <label className="block text-xs font-semibold text-zinc-300">Project ID<input ref={projectIdInputRef} autoFocus data-testid="new-project-id" value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="my-project" disabled={isSubmitting} className="mt-1.5 w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200" /></label>
             <label className="block text-xs font-semibold text-zinc-300">Display name<input data-testid="new-project-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="My Project" disabled={isSubmitting} className="mt-1.5 w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200" /></label>
           </div>
 
