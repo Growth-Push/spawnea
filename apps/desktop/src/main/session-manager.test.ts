@@ -334,7 +334,40 @@ hosts:
     expect(session.creationSource).toBe('ui');
   });
 
+  it('incorporates the profile into tmux session name when configured', async () => {
+    const profiledManager = new SessionManager({
+      repositories: repos,
+      catalogManager: catManager,
+      contextStore,
+      ptyBroker,
+      profile: 'project-a',
+      hostAdapterFactory: async () => mockHost,
+    });
+
+
+    const session = await profiledManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Profiled task',
+    });
+
+    expect(session.tmuxSessionName).toContain('spawnea-project-a-profiled-task-');
+    const launch = mockHost.executedCommands.find(({ command }) =>
+      command.includes('SPAWNEA_PROFILE') && command.includes('project-a')
+    );
+    expect(launch).toBeDefined();
+
+    const child = await profiledManager.createChildSession({
+      parentSessionId: session.id,
+      task: 'Profiled child task',
+      workspace: 'same-project',
+    });
+    expect(child.tmuxSessionName).toContain('spawnea-project-a-profiled-child-task-');
+  });
+
   it('persists the root identity before launching its harness', async () => {
+
     let persistedBeforeTmux = false;
     mockHost.customRules.unshift({
       pattern: 'tmux new-session',

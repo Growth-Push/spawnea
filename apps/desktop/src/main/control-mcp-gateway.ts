@@ -21,9 +21,11 @@ const MAX_AUTH_BYTES = 4_096;
 export interface ControlMcpGatewayOptions {
   control: AgentControlService;
   logger: Logger;
+  profile?: string;
   runtimeFilePath?: string;
   socketPath?: string;
 }
+
 
 function sameToken(actual: unknown, expected: string): boolean {
   if (typeof actual !== 'string') return false;
@@ -74,8 +76,9 @@ export class ControlMcpGateway {
   constructor(options: ControlMcpGatewayOptions) {
     this.control = options.control;
     this.logger = options.logger;
-    this.runtimeFilePath = options.runtimeFilePath ?? resolveControlRuntimeFile();
-    this.socketPath = options.socketPath ?? resolveControlSocketPath();
+    this.runtimeFilePath = options.runtimeFilePath ?? resolveControlRuntimeFile(process.env, options.profile);
+    this.socketPath = options.socketPath ?? resolveControlSocketPath(process.env, options.profile);
+
   }
 
   private startCleanupWatchdog(): void {

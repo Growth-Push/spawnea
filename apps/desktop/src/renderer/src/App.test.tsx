@@ -649,7 +649,7 @@ describe('App Desktop Shell', () => {
     expect(contextBar?.textContent?.split(duplicatedTitleSession.task)).toHaveLength(2);
 
     fireEvent.click(editButton);
-    const input = screen.getByRole('textbox', { name: 'Session title' });
+    const input = await screen.findByRole('textbox', { name: 'Session title' });
     fireEvent.change(input, { target: { value: 'JWT review' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -667,7 +667,7 @@ describe('App Desktop Shell', () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit session title' }));
-    const input = screen.getByRole('textbox', { name: 'Session title' });
+    const input = await screen.findByRole('textbox', { name: 'Session title' });
     fireEvent.change(input, { target: { value: '   ' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 

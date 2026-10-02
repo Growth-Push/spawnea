@@ -357,4 +357,44 @@ describe('ControlMcpGateway security boundary', () => {
       await client.close();
     }
   });
+
+  it('allows multiple gateways to run concurrently with distinct profiles and prevents duplicate profiles', async () => {
+    const tempRuntime = await mkdtemp(join(tmpdir(), 'spawnea-runtime-multi-'));
+    directories.push(tempRuntime);
+    const origXdg = process.env.XDG_RUNTIME_DIR;
+    process.env.XDG_RUNTIME_DIR = tempRuntime;
+
+    try {
+      const gatewayA = new ControlMcpGateway({
+        control: { getState: vi.fn() } as unknown as AgentControlServiceType,
+        logger: createLogger('ControlMcpGatewayTestA'),
+        profile: 'profile-a',
+      });
+      gateways.push(gatewayA);
+      const descA = await gatewayA.start();
+
+      const gatewayB = new ControlMcpGateway({
+        control: { getState: vi.fn() } as unknown as AgentControlServiceType,
+        logger: createLogger('ControlMcpGatewayTestB'),
+        profile: 'profile-b',
+      });
+      gateways.push(gatewayB);
+      const descB = await gatewayB.start();
+
+      expect(descA.socketPath).toContain('/profiles/profile-a/');
+      expect(descB.socketPath).toContain('/profiles/profile-b/');
+      expect(descA.socketPath).not.toBe(descB.socketPath);
+
+      const collidingGatewayA = new ControlMcpGateway({
+        control: { getState: vi.fn() } as unknown as AgentControlServiceType,
+        logger: createLogger('ControlMcpGatewayTestA2'),
+        profile: 'profile-a',
+      });
+      gateways.push(collidingGatewayA);
+      await expect(collidingGatewayA.start()).rejects.toThrow('Another Spawnea control runtime is active');
+    } finally {
+      if (origXdg === undefined) delete process.env.XDG_RUNTIME_DIR;
+      else process.env.XDG_RUNTIME_DIR = origXdg;
+    }
+  });
 });

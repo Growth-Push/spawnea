@@ -268,6 +268,14 @@ export interface Artifact {
 }
 ```
 
+### Named profile storage
+
+Named desktop profiles select separate user-data directories, MCP runtime paths,
+and tmux session name prefixes. Harness environments inherit the profile selector.
+A missing profile-specific catalog falls back to the default catalog unless the
+caller explicitly selects a user-data directory. This fallback shares catalog
+writes; database and session context remain specific to each profile.
+
 ### Local MCP control boundary
 
 The configurable MCP integration remains a main-process adapter, not a renderer or host concern. It is enabled by default on Unix-like systems and can be disabled explicitly for diagnostics or environments that do not want a local control socket; Windows remains disabled until named-pipe transport is implemented. A dedicated stdio bridge authenticates to an owner-only Unix-domain socket and delegates typed operations to `SessionApplicationService` (exported from the existing control-service module). Overlapping renderer file, Git, and artifact reads use the same boundary. Read DTOs are deliberately narrower than persisted host records and omit connection targets and credentials.
