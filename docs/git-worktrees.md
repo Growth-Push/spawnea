@@ -52,7 +52,7 @@ If `worktree.enabled` is `false` or omitted in `config.yaml`, the session runs d
 
 1. In Spawnea, click **New Session**.
 2. Select your host and project.
-3. Check the **Run in isolated Git Worktree** option.
+3. Check the **Run in isolated Git Worktree** option. It starts unchecked, including for projects with worktree support enabled.
 4. (Optional) Specify a **Base Branch** (defaults to the project's base branch or `main`).
 5. Enter your task description (e.g., `Update database migrations`) and click **Launch Session**.
 

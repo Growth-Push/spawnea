@@ -1590,7 +1590,13 @@ export class SessionManager {
         throw error;
       }
       if (!deleted) {
-        if (previousContext) await this.contextStore.save(previousContext);
+        if (previousContext) {
+          try {
+            await this.contextStore.save(previousContext);
+          } catch (restoreError) {
+            this.logger.error('Failed to restore session context after local deletion failed', restoreError, { sessionId });
+          }
+        }
         return false;
       }
       this.attachedSessions.delete(sessionId);
