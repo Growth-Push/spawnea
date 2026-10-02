@@ -18,11 +18,14 @@ import {
 import { AgentIcon } from './AgentIcon';
 import { OsIcon } from './OsIcon';
 
+const NUMBER_SHORTCUTS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+
 interface IconSelectOption {
   value: string;
   label: string;
   detail?: string;
   icon: React.ReactNode;
+  shortcut?: string;
 }
 
 interface IconSelectProps {
@@ -32,25 +35,167 @@ interface IconSelectProps {
   disabled?: boolean;
   emptyLabel: string;
   onChange: (value: string) => void;
+  triggerRef?: React.Ref<HTMLButtonElement>;
+  autoFocus?: boolean;
+  onSpecialKey?: (key: string) => boolean | void;
 }
 
-/** A native-select-compatible picker whose open list can render provider/OS icons. */
-function IconSelect({ id, value, options, disabled = false, emptyLabel, onChange }: IconSelectProps): React.JSX.Element {
+/** A native-select-compatible picker with rich keyboard navigation (arrows, enter, 1..0 keys). */
+function IconSelect({
+  id,
+  value,
+  options,
+  disabled = false,
+  emptyLabel,
+  onChange,
+  triggerRef,
+  autoFocus = false,
+  onSpecialKey,
+}: IconSelectProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  const setTriggerRef = useCallback(
+    (el: HTMLButtonElement | null) => {
+      buttonRef.current = el;
+      if (!triggerRef) return;
+      if (typeof triggerRef === 'function') {
+        triggerRef(el);
+      } else {
+        (triggerRef as React.MutableRefObject<HTMLButtonElement | null>).current = el;
+      }
+    },
+    [triggerRef]
+  );
+
+  const selectedIndex = options.findIndex((option) => option.value === value);
+  const [highlightedIndex, setHighlightedIndex] = useState<number>(selectedIndex >= 0 ? selectedIndex : 0);
   const selected = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    const idx = options.findIndex((option) => option.value === value);
+    setHighlightedIndex(idx >= 0 ? idx : 0);
+  }, [value, options]);
 
   useEffect(() => {
     if (!isOpen) return;
     const handlePointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setIsOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
     };
     document.addEventListener('pointerdown', handlePointerDown);
     return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, [isOpen]);
 
+  useEffect(() => {
+    if (isOpen && listRef.current) {
+      const activeEl = listRef.current.querySelector<HTMLElement>(`[data-index="${highlightedIndex}"]`);
+      activeEl?.scrollIntoView?.({ block: 'nearest' });
+    }
+  }, [isOpen, highlightedIndex]);
+
+  const selectOption = useCallback(
+    (optionValue: string) => {
+      onChange(optionValue);
+      setIsOpen(false);
+      buttonRef.current?.focus();
+    },
+    [onChange]
+  );
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (disabled || options.length === 0) return;
+
+    if (e.key === 'Escape' && isOpen) {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsOpen(false);
+      return;
+    }
+
+    if (e.ctrlKey || e.metaKey || e.altKey) {
+      return;
+    }
+
+    if (onSpecialKey && onSpecialKey(e.key)) {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsOpen(false);
+      return;
+    }
+
+    const numIdx = NUMBER_SHORTCUTS.indexOf(e.key);
+    if (numIdx !== -1 && numIdx < options.length) {
+      const targetOption = options[numIdx];
+      if (!targetOption.shortcut || targetOption.shortcut === NUMBER_SHORTCUTS[numIdx]) {
+        e.preventDefault();
+        e.stopPropagation();
+        selectOption(targetOption.value);
+        return;
+      }
+    }
+
+    const shortcutMatch = options.find(
+      (opt) => opt.shortcut && opt.shortcut.toLowerCase() === e.key.toLowerCase()
+    );
+    if (shortcutMatch) {
+      e.preventDefault();
+      e.stopPropagation();
+      selectOption(shortcutMatch.value);
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!isOpen) {
+        setIsOpen(true);
+        const idx = options.findIndex((opt) => opt.value === value);
+        setHighlightedIndex(idx >= 0 ? idx : 0);
+      } else {
+        setHighlightedIndex((prev) => Math.min(prev + 1, options.length - 1));
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!isOpen) {
+        setIsOpen(true);
+        const idx = options.findIndex((opt) => opt.value === value);
+        setHighlightedIndex(idx >= 0 ? idx : 0);
+      } else {
+        setHighlightedIndex((prev) => Math.max(prev - 1, 0));
+      }
+      return;
+    }
+
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isOpen) {
+        if (options[highlightedIndex]) {
+          selectOption(options[highlightedIndex].value);
+        }
+      } else {
+        setIsOpen(true);
+        const idx = options.findIndex((opt) => opt.value === value);
+        setHighlightedIndex(idx >= 0 ? idx : 0);
+      }
+      return;
+    }
+  };
+
+  const handleBlur = (e: React.FocusEvent) => {
+    if (!rootRef.current?.contains(e.relatedTarget as Node)) {
+      setIsOpen(false);
+    }
+  };
+
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} onBlur={handleBlur} className="relative">
       <select
         data-testid={id}
         value={value}
@@ -60,18 +205,34 @@ function IconSelect({ id, value, options, disabled = false, emptyLabel, onChange
         tabIndex={-1}
         className="sr-only"
       >
-        {options.length === 0 ? <option value="">{emptyLabel}</option> : options.map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
+        {options.length === 0 ? (
+          <option value="">{emptyLabel}</option>
+        ) : (
+          options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))
+        )}
       </select>
 
       <button
+        ref={setTriggerRef}
         type="button"
         data-testid={`${id}-trigger`}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         disabled={disabled}
-        onClick={() => setIsOpen((open) => !open)}
+        autoFocus={autoFocus}
+        onKeyDown={handleKeyDown}
+        onClick={() => {
+          if (options.length === 0) return;
+          if (!isOpen) {
+            const idx = options.findIndex((opt) => opt.value === value);
+            setHighlightedIndex(idx >= 0 ? idx : 0);
+          }
+          setIsOpen((open) => !open);
+        }}
         className="w-full min-h-[38px] px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200 focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 text-left"
       >
         {selected ? (
@@ -87,37 +248,57 @@ function IconSelect({ id, value, options, disabled = false, emptyLabel, onChange
 
       {isOpen && options.length > 0 && (
         <div
+          ref={listRef}
           role="listbox"
           aria-label={id}
           className="absolute left-0 right-0 top-[calc(100%+4px)] z-20 max-h-56 overflow-y-auto rounded-lg border border-[#30363d] bg-[#161b22] p-1 shadow-2xl"
         >
-          {options.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              onClick={() => {
-                onChange(option.value);
-                setIsOpen(false);
-              }}
-              className={`w-full flex items-center gap-2 rounded-md px-2 py-2 text-left transition-colors cursor-pointer ${
-                option.value === value ? 'bg-emerald-500/10 text-emerald-300' : 'text-zinc-200 hover:bg-[#21262d]'
-              }`}
-            >
-              {option.icon}
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs">{option.label}</span>
-                {option.detail && <span className="block truncate text-[10px] text-zinc-500">{option.detail}</span>}
-              </span>
-              {option.value === value && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
-            </button>
-          ))}
+          {options.map((option, index) => {
+            const isSelected = option.value === value;
+            const isHighlighted = index === highlightedIndex;
+            const shortcutBadge = option.shortcut || (index < 10 ? NUMBER_SHORTCUTS[index] : null);
+
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                tabIndex={-1}
+                data-index={index}
+                aria-selected={isSelected}
+                onMouseEnter={() => setHighlightedIndex(index)}
+                onClick={() => selectOption(option.value)}
+                className={`w-full flex items-center gap-2 rounded-md px-2 py-2 text-left transition-colors cursor-pointer ${
+                  isHighlighted
+                    ? isSelected
+                      ? 'bg-emerald-500/20 text-emerald-200'
+                      : 'bg-[#21262d] text-zinc-100'
+                    : isSelected
+                      ? 'bg-emerald-500/10 text-emerald-300'
+                      : 'text-zinc-200 hover:bg-[#21262d]'
+                }`}
+              >
+                {option.icon}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs">{option.label}</span>
+                  {option.detail && <span className="block truncate text-[10px] text-zinc-500">{option.detail}</span>}
+                </span>
+                {shortcutBadge && (
+                  <kbd className="text-[10px] font-mono text-zinc-400 bg-[#0d1117] border border-[#30363d] px-1.5 py-0.5 rounded shrink-0">
+                    {shortcutBadge}
+                  </kbd>
+                )}
+                {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
+
+export const NEW_PROJECT_OPTION_VALUE = '__new_project__';
 
 interface CreateSessionModalProps {
   isOpen: boolean;
@@ -128,6 +309,9 @@ interface CreateSessionModalProps {
   agents: Agent[];
   catalog?: import('@spawnea/domain').OperationalCatalog | null;
   hostHealthMap?: Record<string, import('@spawnea/domain').HostHealthResult>;
+  onOpenNewProject?: (targetServerId?: string) => void;
+  createdProject?: { serverId: string; projectId: string } | null;
+  hasChildModalOpen?: boolean;
 }
 
 export function CreateSessionModal({
@@ -139,6 +323,9 @@ export function CreateSessionModal({
   agents,
   catalog,
   hostHealthMap = {},
+  onOpenNewProject,
+  createdProject,
+  hasChildModalOpen = false,
 }: CreateSessionModalProps): React.JSX.Element | null {
   const [serverId, setServerId] = useState<string>('');
   const [projectId, setProjectId] = useState<string>('');
@@ -146,9 +333,11 @@ export function CreateSessionModal({
   const [task, setTask] = useState<string>('');
   const [isCustomTask, setIsCustomTask] = useState<boolean>(false);
   const [baseBranch, setBaseBranch] = useState<string>('');
-  const [useWorktree, setUseWorktree] = useState<boolean>(true);
+  const [useWorktree, setUseWorktree] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
+  const serverTriggerRef = useRef<HTMLButtonElement>(null);
 
   // Host connectivity testing state (FG-1.2, FG-2.1)
   const [hostTestStatus, setHostTestStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
@@ -186,11 +375,17 @@ export function CreateSessionModal({
     }
   }, []);
 
+  const lastConsumedCreatedProjectRef = useRef<string | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+
   // Escape key to dismiss modal
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isSubmitting) {
+      if (e.key === 'Escape' && !isSubmitting && !hasChildModalOpen) {
+        if (modalRef.current?.querySelector('[role="listbox"]')) {
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         onClose();
@@ -198,12 +393,13 @@ export function CreateSessionModal({
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [isOpen, isSubmitting, onClose]);
+  }, [isOpen, isSubmitting, hasChildModalOpen, onClose]);
 
   // Initialize or synchronize selections when modal opens or lists change
   useEffect(() => {
     if (isOpen) {
       setIsCustomTask(false);
+      lastConsumedCreatedProjectRef.current = null;
       const initialServerId = servers.length > 0 ? (serverId && servers.some((s) => s.id === serverId) ? serverId : servers[0].id) : '';
       if (initialServerId && initialServerId !== serverId) {
         setServerId(initialServerId);
@@ -211,9 +407,15 @@ export function CreateSessionModal({
       if (agents.length > 0 && (!agentId || !agents.some((a) => a.id === agentId))) {
         setAgentId(agents[0].id);
       }
+      setUseWorktree(false);
       setError(null);
       setHostTestStatus('idle');
       setHostTestResult(null);
+
+      const timer = setTimeout(() => {
+        serverTriggerRef.current?.focus();
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [isOpen, servers, agents]);
 
@@ -226,6 +428,25 @@ export function CreateSessionModal({
         return byName !== 0 ? byName : a.id.localeCompare(b.id);
       });
   }, [projects, serverId]);
+
+  useEffect(() => {
+    if (!createdProject) return;
+    const projectKey = `${createdProject.serverId}:${createdProject.projectId}`;
+    if (lastConsumedCreatedProjectRef.current === projectKey) return;
+
+    if (createdProject.serverId && createdProject.serverId !== serverId && servers.some((s) => s.id === createdProject.serverId)) {
+      setServerId(createdProject.serverId);
+    }
+
+    const fullId = createdProject.projectId.includes(':')
+      ? createdProject.projectId
+      : `${createdProject.serverId}:${createdProject.projectId}`;
+
+    if (availableProjects.some((p) => p.id === fullId)) {
+      setProjectId(fullId);
+      lastConsumedCreatedProjectRef.current = projectKey;
+    }
+  }, [createdProject, serverId, servers, availableProjects]);
 
   const availableAgents = useMemo(() => {
     return agents
@@ -274,7 +495,7 @@ export function CreateSessionModal({
     }
   }, [projectId, agentId, isCustomTask, availableProjects, availableAgents, projects, agents]);
 
-  // Synchronize useWorktree default state when selected project changes
+  // If the selected project does not support worktree, turn it off
   useEffect(() => {
     if (!projectId) {
       setUseWorktree(false);
@@ -288,8 +509,51 @@ export function CreateSessionModal({
         )?.[1]
       : undefined;
     const isConfigured = Boolean(catProj?.worktree?.enabled);
-    setUseWorktree(isConfigured);
+    if (!isConfigured) {
+      setUseWorktree(false);
+    }
   }, [projectId, serverId, catalog, projects]);
+
+  const projectOptions = useMemo<IconSelectOption[]>(() => {
+    const items: IconSelectOption[] = availableProjects.map((p) => ({
+      value: p.id,
+      label: p.name,
+      detail: p.rootPath,
+      icon: <FolderGit2 className="w-4 h-4 text-zinc-400" />,
+    }));
+    if (onOpenNewProject) {
+      items.push({
+        value: NEW_PROJECT_OPTION_VALUE,
+        label: '+ New Project...',
+        detail: 'Register or clone a repository on this host',
+        icon: <Sparkles className="w-4 h-4 text-emerald-400" />,
+        shortcut: 'N',
+      });
+    }
+    return items;
+  }, [availableProjects, onOpenNewProject]);
+
+  const handleProjectChange = useCallback(
+    (newVal: string) => {
+      if (newVal === NEW_PROJECT_OPTION_VALUE) {
+        onOpenNewProject?.(serverId);
+        return;
+      }
+      setProjectId(newVal);
+    },
+    [onOpenNewProject, serverId]
+  );
+
+  const handleProjectSpecialKey = useCallback(
+    (key: string) => {
+      if (key.toLowerCase() === 'n' && onOpenNewProject) {
+        onOpenNewProject(serverId);
+        return true;
+      }
+      return false;
+    },
+    [onOpenNewProject, serverId]
+  );
 
   useEffect(() => {
     const selectedProject = projects.find((project) => project.id === projectId);
@@ -397,6 +661,7 @@ export function CreateSessionModal({
 
   return (
     <div
+      ref={modalRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-title"
@@ -464,6 +729,7 @@ export function CreateSessionModal({
                         </span>
                         <button
                           type="button"
+                          tabIndex={-1}
                           data-testid="test-host-button"
                           onClick={() => testHostConnection(serverId)}
                           className="flex items-center gap-0.5 text-zinc-400 hover:text-emerald-300 font-mono transition-colors cursor-pointer px-1 py-0.5 bg-[#21262d] rounded border border-[#30363d]"
@@ -477,6 +743,7 @@ export function CreateSessionModal({
                     {hostTestStatus === 'failed' && (
                       <button
                         type="button"
+                        tabIndex={-1}
                         data-testid="retry-host-test"
                         onClick={() => testHostConnection(serverId)}
                         className="flex items-center gap-1 text-rose-400 hover:text-rose-300 font-mono cursor-pointer px-1.5 py-0.5 bg-rose-950/40 rounded border border-rose-500/30"
@@ -489,6 +756,7 @@ export function CreateSessionModal({
                     {hostTestStatus === 'idle' && (
                       <button
                         type="button"
+                        tabIndex={-1}
                         data-testid="test-host-button"
                         onClick={() => testHostConnection(serverId)}
                         className="flex items-center gap-1 text-zinc-400 hover:text-emerald-400 font-mono cursor-pointer px-1.5 py-0.5 bg-[#21262d] rounded border border-[#30363d]"
@@ -502,6 +770,8 @@ export function CreateSessionModal({
               </div>
               <IconSelect
                 id="select-server"
+                triggerRef={serverTriggerRef}
+                autoFocus={isOpen}
                 value={serverId}
                 onChange={handleServerChange}
                 disabled={isSubmitting}
@@ -525,23 +795,15 @@ export function CreateSessionModal({
                 <Layers className="w-3 h-3 text-zinc-400" />
                 <span>Project Root</span>
               </label>
-              <select
-                data-testid="select-project"
+              <IconSelect
+                id="select-project"
                 value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
+                onChange={handleProjectChange}
+                onSpecialKey={handleProjectSpecialKey}
                 disabled={isSubmitting}
-                className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200 focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50"
-              >
-                {availableProjects.length === 0 ? (
-                  <option value="">No projects for host</option>
-                ) : (
-                  availableProjects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))
-                )}
-              </select>
+                emptyLabel={availableProjects.length === 0 ? 'No projects for host' : 'Select project'}
+                options={projectOptions}
+              />
             </div>
           </div>
 

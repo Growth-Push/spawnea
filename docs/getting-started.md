@@ -73,6 +73,11 @@ By default, Spawnea includes standard harness profiles for local workstations. Y
 5. Enter a **Task Description** (e.g., `Refactor auth middleware`).
 6. Click **Launch Session**.
 
+The session dialog supports arrow keys and Enter in its host, project, and harness
+pickers. Number keys select the first ten options. Press `N` in the project
+picker to register a project on the selected host; the new project is selected
+when registration succeeds. Escape closes an open picker before closing the dialog.
+
 Spawnea creates a dedicated, persistent `tmux` session in the background and attaches the integrated terminal.
 
 ### 5. Work in the Integrated Terminal

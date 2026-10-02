@@ -1260,6 +1260,19 @@ hosts:
     expect(await repos.sessions.findById(session.id)).not.toBeNull();
   });
 
+  it('returns false and logs when database deletion returns false and context restoration fails', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'False deletion with restore failure',
+    });
+    vi.spyOn(repos.sessions, 'delete').mockResolvedValueOnce(false);
+    vi.spyOn(contextStore, 'save').mockRejectedValueOnce(new Error('Context restore error'));
+
+    await expect(sessionManager.forgetSessionLocally(session.id)).resolves.toBe(false);
+  });
+
   it('probes host system telemetry and caches result in memory for subsequent tabs/sessions', async () => {
     mockHost.customRules.push({
       pattern: '===UNAME===',

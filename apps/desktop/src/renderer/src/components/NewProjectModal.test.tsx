@@ -76,4 +76,48 @@ describe('NewProjectModal', () => {
     await waitFor(() => expect((screen.getByTestId('new-project-path') as HTMLInputElement).value).toBe('/selected/demo-project'));
     expect(chooseProjectPath).toHaveBeenCalledWith('local', undefined);
   });
+
+  it('pre-selects initialServerId when provided', () => {
+    const multiServers: Server[] = [
+      ...servers,
+      {
+        id: 'srv-remote',
+        name: 'Remote Box',
+        host: 'remote.example.com',
+        sshPort: 22,
+        enabled: true,
+        createdAt: new Date(),
+      },
+    ];
+
+    render(
+      <NewProjectModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={multiServers}
+        onOpenSettings={vi.fn()}
+        initialServerId="srv-remote"
+      />
+    );
+
+    const select = screen.getByTestId('new-project-server') as HTMLSelectElement;
+    expect(select.value).toBe('srv-remote');
+  });
+
+  it('closes when Escape key is pressed', () => {
+    const onClose = vi.fn();
+    render(
+      <NewProjectModal
+        isOpen={true}
+        onClose={onClose}
+        onSubmit={vi.fn()}
+        servers={servers}
+        onOpenSettings={vi.fn()}
+      />
+    );
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(onClose).toHaveBeenCalled();
+  });
 });

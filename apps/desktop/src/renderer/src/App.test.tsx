@@ -649,7 +649,7 @@ describe('App Desktop Shell', () => {
     expect(contextBar?.textContent?.split(duplicatedTitleSession.task)).toHaveLength(2);
 
     fireEvent.click(editButton);
-    const input = screen.getByRole('textbox', { name: 'Session title' });
+    const input = await screen.findByRole('textbox', { name: 'Session title' });
     fireEvent.change(input, { target: { value: 'JWT review' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -667,7 +667,7 @@ describe('App Desktop Shell', () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit session title' }));
-    const input = screen.getByRole('textbox', { name: 'Session title' });
+    const input = await screen.findByRole('textbox', { name: 'Session title' });
     fireEvent.change(input, { target: { value: '   ' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -1070,6 +1070,12 @@ describe('App Desktop Shell', () => {
     expect(screen.getByText('Create Agent Session')).toBeDefined();
     expect(screen.getByText('Worktree')).toBeDefined();
 
+    // Worktree is unchecked by default, check it to enable isolated worktree
+    const checkbox = screen.getByTestId('checkbox-use-worktree') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(true);
+
     // Fill form with custom base branch
     const taskInput = screen.getByTestId('input-task-name');
     fireEvent.change(taskInput, { target: { value: 'Worktree feature' } });
@@ -1092,7 +1098,7 @@ describe('App Desktop Shell', () => {
     });
   });
 
-  it('allows unchecking worktree toggle for a project configured with worktrees and runs on project root', async () => {
+  it('defaults to worktree unchecked for a project configured with worktrees and runs on project root', async () => {
     const createdSession: Session = {
       id: 'sess-new-root-1',
       name: 'Root feature',
@@ -1148,12 +1154,8 @@ describe('App Desktop Shell', () => {
     fireEvent.click(screen.getByTestId('sidebar-new-session-button'));
     expect(screen.getByText('Create Agent Session')).toBeDefined();
 
-    // Verify checkbox is present and checked by default
+    // Verify checkbox is present and unchecked by default
     const checkbox = screen.getByTestId('checkbox-use-worktree') as HTMLInputElement;
-    expect(checkbox.checked).toBe(true);
-
-    // Uncheck worktree
-    fireEvent.click(checkbox);
     expect(checkbox.checked).toBe(false);
 
     // Fill form task
@@ -1275,12 +1277,182 @@ describe('App Desktop Shell', () => {
       'Alpha Project',
       'beta project',
       'zeta project',
+      '+ New Project...',
     ]);
     expect(Array.from(projectSelect.options).map((option) => option.value)).toEqual([
       'proj-a',
       'proj-b',
       'proj-z',
+      '__new_project__',
     ]);
+  });
+
+  it('opens NewProjectModal from project select in CreateSessionModal, pre-selects host, and selects created project', async () => {
+    const addProjectMock = vi.fn().mockImplementation(async (input) => {
+      return {
+        success: true,
+        filePath: '/mock/config.yaml',
+        catalog: {
+          hosts: {
+            [input.serverId]: {
+              id: input.serverId,
+              name: 'Host',
+              enabled: true,
+              projects: {
+                [input.projectId]: { id: input.projectId, name: input.name, path: input.path },
+              },
+              harnesses: {},
+            },
+          },
+        },
+      };
+    });
+
+    const initialProjects = [...mockProjects];
+    const listProjectsMock = vi.fn()
+      .mockResolvedValueOnce(initialProjects)
+      .mockResolvedValue([
+        ...initialProjects,
+        {
+          id: 'srv-1:new-proj',
+          serverId: 'srv-1',
+          name: 'Newly Created Project',
+          rootPath: '/workspace/new-proj',
+          createdAt: new Date(),
+        },
+      ]);
+
+    window.spawneaApi = createMockSpawneaApi({
+      listProjects: listProjectsMock,
+      addProjectToCatalog: addProjectMock,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+    });
+
+    // 1. Open CreateSessionModal
+    fireEvent.click(screen.getByTestId('sidebar-new-session-button'));
+    expect(screen.getByText('Create Agent Session')).toBeDefined();
+
+    // 2. Select "+ New Project..." from project dropdown
+    const projectSelect = screen.getByTestId('select-project') as HTMLSelectElement;
+    fireEvent.change(projectSelect, { target: { value: '__new_project__' } });
+
+    // 3. NewProjectModal opens on top with host pre-selected
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Add Project' })).toBeDefined();
+    });
+    const serverSelect = screen.getByTestId('new-project-server') as HTMLSelectElement;
+    expect(serverSelect.value).toBe('srv-1');
+
+    // 4. Fill in new project details
+    fireEvent.change(screen.getByTestId('new-project-id'), { target: { value: 'new-proj' } });
+    fireEvent.change(screen.getByTestId('new-project-name'), { target: { value: 'Newly Created Project' } });
+    fireEvent.change(screen.getByTestId('new-project-path'), { target: { value: '/workspace/new-proj' } });
+
+    // 5. Submit Add Project
+    fireEvent.click(screen.getByTestId('new-project-submit'));
+
+    // 6. NewProjectModal closes, CreateSessionModal is still open and has new project selected
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: 'Add Project' })).toBeNull();
+    });
+    expect(screen.getByText('Create Agent Session')).toBeDefined();
+
+    await waitFor(() => {
+      const updatedSelect = screen.getByTestId('select-project') as HTMLSelectElement;
+      expect(updatedSelect.value).toBe('srv-1:new-proj');
+    });
+  });
+
+  it('pressing Escape in NewProjectModal closes only NewProjectModal and leaves CreateSessionModal open', async () => {
+    window.spawneaApi = createMockSpawneaApi();
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+    });
+
+    // Open CreateSessionModal
+    fireEvent.click(screen.getByTestId('sidebar-new-session-button'));
+    expect(screen.getByText('Create Agent Session')).toBeDefined();
+
+    // Open NewProjectModal via combo
+    const projectSelect = screen.getByTestId('select-project') as HTMLSelectElement;
+    fireEvent.change(projectSelect, { target: { value: '__new_project__' } });
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Add Project' })).toBeDefined();
+    });
+
+    // Press Escape -> Only Add Project closes
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: 'Add Project' })).toBeNull();
+    });
+    expect(screen.getByText('Create Agent Session')).toBeDefined();
+
+    // Press Escape again -> CreateSessionModal closes
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByText('Create Agent Session')).toBeNull();
+    });
+  });
+
+  it('supports end-to-end keyboard navigation and shortcuts in CreateSessionModal', async () => {
+    window.spawneaApi = createMockSpawneaApi();
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+    });
+
+    // Open CreateSessionModal
+    fireEvent.click(screen.getByTestId('sidebar-new-session-button'));
+    expect(screen.getByText('Create Agent Session')).toBeDefined();
+
+    // 1. Verify default focus on Target Host trigger
+    const hostTrigger = screen.getByTestId('select-server-trigger');
+    await waitFor(() => {
+      expect(document.activeElement).toBe(hostTrigger);
+    });
+
+    // 2. Select host with number key '1'
+    fireEvent.keyDown(hostTrigger, { key: '1' });
+    const serverSelect = screen.getByTestId('select-server') as HTMLSelectElement;
+    expect(serverSelect.value).toBe('srv-1');
+
+    // 3. Project Root trigger responds to 'n' key to open NewProjectModal
+    const projectTrigger = screen.getByTestId('select-project-trigger');
+    fireEvent.keyDown(projectTrigger, { key: 'n' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Add Project' })).toBeDefined();
+    });
+
+    // Close NewProjectModal with Escape
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: 'Add Project' })).toBeNull();
+    });
+
+    // 4. Select project with number key '1'
+    fireEvent.keyDown(projectTrigger, { key: '1' });
+    const projectSelect = screen.getByTestId('select-project') as HTMLSelectElement;
+    expect(projectSelect.value).toBe('proj-1');
+
+    // 5. Verify worktree is unchecked by default
+    const worktreeCheckbox = screen.getByTestId('checkbox-use-worktree') as HTMLInputElement;
+    expect(worktreeCheckbox.checked).toBe(false);
+
+    // 6. Select harness with number key '1'
+    const agentTrigger = screen.getByTestId('select-agent-trigger');
+    fireEvent.keyDown(agentTrigger, { key: '1' });
+    const agentSelect = screen.getByTestId('select-agent') as HTMLSelectElement;
+    expect(agentSelect.value).toBe('agent-claude');
   });
 
   it('renders friendly empty state when no sessions are returned', async () => {
@@ -1568,6 +1740,47 @@ describe('App Desktop Shell', () => {
       expect(deleteMock).toHaveBeenCalledWith('sess-1');
       expect(screen.getByText('Active Sessions (1)')).toBeDefined();
     });
+  });
+
+  it('preserves the session in UI state when backend deletion fails or returns false', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const deleteMock = vi.fn().mockRejectedValueOnce(new Error('Backend deletion failed'));
+    const doneSessions: Session[] = [
+      { ...mockSessions[0], status: 'done' },
+      mockSessions[1],
+    ];
+
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue(doneSessions),
+      deleteSession: deleteMock,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+
+    await waitFor(() => {
+      expect(deleteMock).toHaveBeenCalledWith('sess-1');
+    });
+
+    // Session must not be removed from state
+    expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+    expect(errorSpy).toHaveBeenCalledWith('Failed to delete session on backend:', expect.any(Error));
+
+    // Now test returning false
+    deleteMock.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+
+    await waitFor(() => {
+      expect(deleteMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+
+    errorSpy.mockRestore();
   });
 
   it('forgets a session locally from the connection error without trying remote deletion', async () => {

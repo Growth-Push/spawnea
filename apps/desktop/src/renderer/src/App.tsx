@@ -135,6 +135,8 @@ export function App(): React.JSX.Element {
   const [isQuickSwitcherOpen, setIsQuickSwitcherOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
+  const [newProjectInitialServerId, setNewProjectInitialServerId] = useState<string | undefined>();
+  const [createdProject, setCreatedProject] = useState<{ serverId: string; projectId: string } | null>(null);
   const [isLocalDiscoveryOpen, setIsLocalDiscoveryOpen] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [isAdoptModalOpen, setIsAdoptModalOpen] = useState(false);
@@ -572,6 +574,7 @@ export function App(): React.JSX.Element {
     setServers(loadedServers);
     setProjects(loadedProjects);
     setAgents(loadedAgents);
+    setCreatedProject({ serverId: input.serverId, projectId: input.projectId });
     return { success: true };
   };
 
@@ -780,10 +783,12 @@ export function App(): React.JSX.Element {
 
     if (window.spawneaApi?.deleteSession) {
       try {
-        if (childAction === 'close-all') {
-          await window.spawneaApi.deleteSession(sessionId, childAction);
-        } else {
-          await window.spawneaApi.deleteSession(sessionId);
+        const result = childAction === 'close-all'
+          ? await window.spawneaApi.deleteSession(sessionId, childAction)
+          : await window.spawneaApi.deleteSession(sessionId);
+        if (result === false || (typeof result === 'object' && result !== null && 'success' in result && !(result as any).success)) {
+          console.error('Session deletion failed on backend for session:', sessionId);
+          return;
         }
       } catch (err) {
         console.error('Failed to delete session on backend:', err);
@@ -827,6 +832,9 @@ export function App(): React.JSX.Element {
     if (!session) return;
     if (!window.confirm(`Forget "${session.name}" locally? Its remote tmux session and worktree may still be running and will not be changed.`)) return;
     try {
+      if (!window.spawneaApi?.forgetSessionLocally) {
+        throw new Error('Local session removal is unavailable in this app runtime.');
+      }
       const removed = await window.spawneaApi.forgetSessionLocally(sessionId);
       if (!removed) return;
       setSessions((previous) => {
@@ -1223,7 +1231,10 @@ export function App(): React.JSX.Element {
             null;
           if (target) setSessionToCreateChildFor(target);
         }}
-        onOpenNewProject={() => setIsNewProjectModalOpen(true)}
+        onOpenNewProject={() => {
+          setNewProjectInitialServerId(undefined);
+          setIsNewProjectModalOpen(true);
+        }}
         onOpenLocalDiscovery={() => setIsLocalDiscoveryOpen(true)}
         onOpenSettings={() => { void handleOpenSettings(); }}
         onOpenAdoptModal={() => setIsAdoptModalOpen(true)}
@@ -1371,13 +1382,22 @@ export function App(): React.JSX.Element {
       {/* Create Session Modal */}
       <CreateSessionModal
         isOpen={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
+        onClose={() => {
+          setIsCreateModalOpen(false);
+          setCreatedProject(null);
+        }}
         onSubmit={handleCreateSession}
         servers={servers}
         projects={projects}
         agents={agents}
         catalog={catalog}
         hostHealthMap={hostHealthMap}
+        onOpenNewProject={(targetServerId) => {
+          setNewProjectInitialServerId(targetServerId);
+          setIsNewProjectModalOpen(true);
+        }}
+        createdProject={createdProject}
+        hasChildModalOpen={isNewProjectModalOpen}
       />
 
       <NewProjectModal
@@ -1386,6 +1406,7 @@ export function App(): React.JSX.Element {
         onSubmit={handleAddProject}
         servers={servers}
         onOpenSettings={handleOpenSettings}
+        initialServerId={newProjectInitialServerId}
       />
 
       <LocalDiscoveryModal
