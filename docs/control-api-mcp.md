@@ -11,7 +11,11 @@ of the running desktop process and are not restored after Spawnea restarts.
 Start the desktop with `--profile <name>` (or `SPAWNEA_PROFILE=<name>`) to keep
 its database, artifacts, logs, snippets, and MCP socket separate from the default
 instance. Profile names accept letters, numbers, hyphens, and underscores, start
-and end with a letter or number, and have at most 32 characters. The window title
+and end with a letter or number, and have at most 32 characters. Names are trimmed
+and normalized to lowercase everywhere, so `Work` and `work` select the same
+identity. On Windows, device names `CON`, `PRN`, `AUX`, `NUL`, `COM1` through
+`COM9`, and `LPT1` through `LPT9` are rejected regardless of case. Existing profile
+directories are not renamed or migrated automatically. The window title
 and newly created tmux session names identify the profile. Child harnesses inherit
 `SPAWNEA_PROFILE` so their MCP helper selects the same runtime.
 

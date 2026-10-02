@@ -270,8 +270,11 @@ export interface Artifact {
 
 ### Named profile storage
 
-Named desktop profiles select separate user-data directories, MCP runtime paths,
-and tmux session name prefixes. Harness environments inherit the profile selector.
+Named desktop profiles use trimmed, lowercase identities so case variants select
+the same user-data directory, MCP runtime paths, and session prefix. Windows
+reserved device names are rejected on Windows. Existing directories are not
+automatically migrated. Profiles select separate user-data directories, MCP
+runtime paths, and tmux session name prefixes. Harness environments inherit the profile selector.
 A missing profile-specific catalog falls back to the default catalog unless the
 caller explicitly selects a user-data directory. This fallback shares catalog
 writes; database and session context remain specific to each profile.

@@ -50,6 +50,28 @@ describe('Spawnea user data compatibility', () => {
       .toThrow(`exceeds maximum length of ${MAX_PROFILE_NAME_LENGTH} characters`);
   });
 
+  it('uses one lowercase identity for case variants and preserves explicit data paths', () => {
+    expect(sanitizeProfileName(' Work_Profile ')).toBe('work_profile');
+    expect(resolveSpawneaUserDataPath('/tmp/app', '/tmp/derived', undefined, ' Work '))
+      .toBe(resolveSpawneaUserDataPath('/tmp/app', '/tmp/derived', undefined, 'work'));
+    expect(resolveSpawneaUserDataPath('/tmp/app', '/tmp/derived', '/tmp/Explicit', 'invalid/name'))
+      .toBe('/tmp/Explicit');
+    expect(parseProfileFromArgs(['--profile', ' Work '], { SPAWNEA_PROFILE: 'Other' })).toBe('work');
+    expect(parseProfileFromArgs(['--profile=Work'], {})).toBe('work');
+    expect(parseProfileFromArgs([], { SPAWNEA_PROFILE: ' Work ' })).toBe('work');
+  });
+
+  it.each(['CON', 'PrN', 'AUX', 'nul', ...Array.from({ length: 9 }, (_, i) => `COM${i + 1}`),
+    ...Array.from({ length: 9 }, (_, i) => `LPT${i + 1}`)])('rejects reserved Windows profile %s only on Windows', (name) => {
+    expect(() => sanitizeProfileName(name, 'win32')).toThrow('Windows device names are reserved');
+    expect(sanitizeProfileName(name, 'linux')).toBe(name.toLowerCase());
+    expect(sanitizeProfileName(name, 'darwin')).toBe(name.toLowerCase());
+  });
+
+  it.each(['com0', 'com10', 'lpt0', 'lpt10', 'con-profile'])('accepts non-reserved Windows profile %s', (name) => {
+    expect(sanitizeProfileName(name, 'win32')).toBe(name);
+  });
+
   it('parses profile name from CLI args or environment', () => {
     expect(parseProfileFromArgs(['--foo', '--profile', 'project-x'])).toBe('project-x');
     expect(parseProfileFromArgs(['--profile=project-y'])).toBe('project-y');

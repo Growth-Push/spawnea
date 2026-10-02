@@ -13,18 +13,18 @@ describe('MCP runtimeFilesFromArgs', () => {
 
   it('resolves profile candidates when --profile is provided', () => {
     const env = { XDG_RUNTIME_DIR: '/run/user/1000' };
-    const candidates = runtimeFilesFromArgs(['--profile', 'agent-worker'], env);
+    const candidates = runtimeFilesFromArgs(['--profile', ' Agent-Worker '], env);
     expect(candidates[0]).toBe('/run/user/1000/spawnea/profiles/agent-worker/control-runtime.json');
   });
 
   it('resolves profile candidates when --profile= is provided', () => {
     const env = { XDG_RUNTIME_DIR: '/run/user/1000' };
-    const candidates = runtimeFilesFromArgs(['--profile=agent-worker'], env);
+    const candidates = runtimeFilesFromArgs(['--profile=Agent-Worker'], env);
     expect(candidates[0]).toBe('/run/user/1000/spawnea/profiles/agent-worker/control-runtime.json');
   });
 
   it('resolves profile candidates from SPAWNEA_PROFILE environment variable', () => {
-    const env = { XDG_RUNTIME_DIR: '/run/user/1000', SPAWNEA_PROFILE: 'chatgpt' };
+    const env = { XDG_RUNTIME_DIR: '/run/user/1000', SPAWNEA_PROFILE: ' ChatGPT ' };
     const candidates = runtimeFilesFromArgs([], env);
     expect(candidates[0]).toBe('/run/user/1000/spawnea/profiles/chatgpt/control-runtime.json');
   });

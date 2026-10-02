@@ -339,13 +339,23 @@ hosts:
     expect(session.creationSource).toBe('ui');
   });
 
+  it('rejects invalid directly supplied profile identities before starting sessions', () => {
+    expect(() => new SessionManager({
+      repositories: repos,
+      catalogManager: catManager,
+      contextStore,
+      ptyBroker,
+      profile: 'invalid/profile',
+    })).toThrow('Invalid profile name');
+  });
+
   it('incorporates the profile into tmux session name when configured', async () => {
     const profiledManager = new SessionManager({
       repositories: repos,
       catalogManager: catManager,
       contextStore,
       ptyBroker,
-      profile: 'project-a',
+      profile: ' Project-A ',
       hostAdapterFactory: async () => mockHost,
     });
 
@@ -362,6 +372,7 @@ hosts:
       command.includes('SPAWNEA_PROFILE') && command.includes('project-a')
     );
     expect(launch).toBeDefined();
+    expect(launch?.command).not.toContain('Project-A');
 
     const child = await profiledManager.createChildSession({
       parentSessionId: session.id,

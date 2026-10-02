@@ -60,6 +60,7 @@ import { StateDetector } from '@spawnea/state';
 import type { CatalogManager } from './catalog-manager.js';
 import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
+import { sanitizeProfileName } from './product-paths.js';
 import { HarnessLaunchRegistry } from './harness-launch-registry.js';
 
 function normalizeWorktreePathForComparison(path: string): string {
@@ -126,7 +127,7 @@ export class SessionManager {
     this.catalogManager = options.catalogManager;
     this.contextStore = options.contextStore;
     this.ptyBroker = options.ptyBroker;
-    this.profile = options.profile;
+    this.profile = options.profile === undefined ? undefined : sanitizeProfileName(options.profile);
     this.customHostFactory = options.hostAdapterFactory;
     this.logger = options.logger || createLogger('SessionManager');
 

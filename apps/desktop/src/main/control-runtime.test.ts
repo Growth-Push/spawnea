@@ -38,6 +38,19 @@ describe('Spawnea control runtime paths', () => {
       .toBe('/tmp/legacy.sock');
   });
 
+  it('canonicalizes identities across all runtime paths and candidates', () => {
+    const env = { XDG_RUNTIME_DIR: '/run/user/1000', SPAWNEA_PROFILE: ' Work ' };
+    expect(resolveControlRuntimeDirectory(env)).toBe('/run/user/1000/spawnea/profiles/work');
+    expect(resolveControlRuntimeFile(env, 'Work')).toBe('/run/user/1000/spawnea/profiles/work/control-runtime.json');
+    expect(resolveControlSocketPath(env, 'Work')).toBe('/run/user/1000/spawnea/profiles/work/control.sock');
+    expect(resolveControlRuntimeFileCandidates(env, 'Work'))
+      .toEqual(resolveControlRuntimeFileCandidates(env, 'work'));
+    expect(resolveControlRuntimeFile({ SPAWNEA_CONTROL_RUNTIME_FILE: '/tmp/Explicit.json' }, 'invalid/name'))
+      .toBe('/tmp/Explicit.json');
+    expect(resolveControlSocketPath({ SPAWNEA_CONTROL_SOCKET: '/tmp/Explicit.sock' }, 'invalid/name'))
+      .toBe('/tmp/Explicit.sock');
+  });
+
   it('resolves profile-scoped runtime paths when profile parameter or environment variable is set', () => {
     const env = { XDG_RUNTIME_DIR: '/run/user/1000' };
     expect(resolveControlRuntimeDirectory(env, 'project-a')).toBe('/run/user/1000/spawnea/profiles/project-a');

@@ -14,7 +14,7 @@ import {
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
 import { createLogger, type Session } from '@spawnea/domain';
 import { AgentControlService, type AgentControlService as AgentControlServiceType } from './agent-control-service.js';
-import { ControlMcpGateway } from './control-mcp-gateway.js';
+import { canConnectToControlSocket, ControlMcpGateway } from './control-mcp-gateway.js';
 
 class AuthenticatedSocketTransport implements Transport {
   onclose?: () => void;
@@ -388,10 +388,27 @@ describe('ControlMcpGateway security boundary', () => {
       const collidingGatewayA = new ControlMcpGateway({
         control: { getState: vi.fn() } as unknown as AgentControlServiceType,
         logger: createLogger('ControlMcpGatewayTestA2'),
-        profile: 'profile-a',
+        profile: ' Profile-A ',
       });
       gateways.push(collidingGatewayA);
       await expect(collidingGatewayA.start()).rejects.toThrow('Another Spawnea control runtime is active');
+      const originalDescriptor = await readFile(gatewayA.runtimeFilePath, 'utf8');
+      await collidingGatewayA.close();
+      expect(await readFile(gatewayA.runtimeFilePath, 'utf8')).toBe(originalDescriptor);
+      expect(await canConnectToControlSocket(gatewayA.socketPath)).toBe(true);
+
+      await gatewayA.close();
+      const replacement = new ControlMcpGateway({
+        control: { getState: vi.fn() } as unknown as AgentControlServiceType,
+        logger: createLogger('ControlMcpGatewayReplacement'),
+        profile: 'profile-a',
+      });
+      gateways.push(replacement);
+      await replacement.start();
+      const replacementDescriptor = await readFile(replacement.runtimeFilePath, 'utf8');
+      await gatewayA.close();
+      expect(await readFile(replacement.runtimeFilePath, 'utf8')).toBe(replacementDescriptor);
+      expect(await canConnectToControlSocket(replacement.socketPath)).toBe(true);
     } finally {
       if (origXdg === undefined) delete process.env.XDG_RUNTIME_DIR;
       else process.env.XDG_RUNTIME_DIR = origXdg;

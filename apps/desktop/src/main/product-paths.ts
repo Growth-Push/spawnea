@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 
 export const MAX_PROFILE_NAME_LENGTH = 32;
 
-export function sanitizeProfileName(profile: string): string {
+export function sanitizeProfileName(profile: string, platform: NodeJS.Platform = process.platform): string {
   const trimmed = profile.trim();
   if (!trimmed) {
     throw new Error('Profile name cannot be empty');
@@ -14,7 +14,11 @@ export function sanitizeProfileName(profile: string): string {
   if (!/^[a-zA-Z0-9](?:[a-zA-Z0-9_-]*[a-zA-Z0-9])?$/.test(trimmed)) {
     throw new Error(`Invalid profile name '${profile}'. Must start and end with an alphanumeric character and contain only letters, numbers, hyphens, and underscores.`);
   }
-  return trimmed;
+  const canonical = trimmed.toLowerCase();
+  if (platform === 'win32' && /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(canonical)) {
+    throw new Error(`Invalid profile name '${profile}'. Windows device names are reserved.`);
+  }
+  return canonical;
 }
 
 export function parseProfileFromArgs(
