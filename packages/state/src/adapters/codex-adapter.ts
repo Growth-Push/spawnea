@@ -70,7 +70,24 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
       const cleaned = tailLines.map((l) => stripAnsi(l).trimEnd());
       const nonEmptyLines = cleaned.filter((l) => l.trim().length > 0);
       const recentLines = nonEmptyLines.slice(-30);
-      const combinedTail = recentLines.join('\n');
+      // Turn completion & active turn slicing:
+      // If a completion marker ('Worked for ...') is present, lines prior to it belong to a finished turn.
+      // Filter them out so historical prompts (e.g. previous questions, approvals) do not leak into the current turn.
+      const activeStatusPattern = /^\s*(?:•|Working\b)[^\n]*\besc\s+to\s+interrupt\b/i;
+      const completionPattern = /(?:^\s*─\s+Worked for\b|Worked for \d+(?:\.\d+)?(?:s|m|h))/i;
+      const lastActiveStatusIndex = [...recentLines].reverse().findIndex((line) => activeStatusPattern.test(line));
+      const lastCompletionIndex = [...recentLines].reverse().findIndex((line) => completionPattern.test(line));
+      const activeStatusIndex = lastActiveStatusIndex === -1 ? -1 : recentLines.length - 1 - lastActiveStatusIndex;
+      const completionIndex = lastCompletionIndex === -1 ? -1 : recentLines.length - 1 - lastCompletionIndex;
+      const hasRecentCompletion = completionIndex >= 0 && completionIndex > activeStatusIndex;
+      const hasInterruptFooter = activeStatusIndex >= 0 && !hasRecentCompletion;
+
+      const activeLines = completionIndex >= 0
+        ? (recentLines.slice(completionIndex + 1).length > 0
+            ? recentLines.slice(completionIndex + 1)
+            : [recentLines[completionIndex]])
+        : recentLines;
+      const combinedTail = activeLines.join('\n');
 
       const promptResult = detectPromptInTail(tailLines, {
         harness: 'codex',
@@ -87,10 +104,13 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         /(?:Allow\s*\/\s*Deny|\[A\]llow\s*\/\s*\[D\]eny|(?:^|\n)\s*[>›❯]\s*(?:\d+\.\s*)?(?:Allow|Deny)\b|^\s*Approval required:)/im.test(
           combinedTail
         );
-      const hasPlanConfirm = /(?:approve|confirm|proceed\s+with|accept|apply)\s+(?:the\s+|this\s+)?plan\b/i.test(combinedTail);
+      const hasPlanConfirm =
+        /(?:^|\n)\s*[>›❯]\s*(?:approve|confirm|proceed\s+with|accept|apply)\s+(?:the\s+|this\s+)?plan\b|(?:approve|confirm|proceed\s+with|accept|apply)\s+(?:the\s+|this\s+)?plan\s*(?:\?|\[[yY]\/[nN]\]|\([yY]\/[nN]\))/i.test(
+          combinedTail
+        );
       const hasArrowMenu =
         /(?:^|\n)\s*[>›❯]\s+(?!(?:Ask (?:Codex|anything)|Type|Send\b))[^\n]+/i.test(combinedTail) &&
-        /(?:↑\/↓|arrow\s+keys?|enter\s+(?:to\s+)?(?:select|confirm|submit)|ctrl\+\]\s*skip|to\s+navigate)/i.test(
+        /(?:↑\/↓|arrow\s+keys?|enter\s+(?:to\s+)?(?:select|confirm|submit)|ctrl\+\]\s*skip|shift\s*[+-]\s*→\s*main\s*prompt|to\s+navigate)/i.test(
           combinedTail
         );
       const hasQuestionnaire =
@@ -99,7 +119,7 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
           combinedTail
         );
       const hasQueuedFollowup =
-        /(?:Queued\s+follow-up\s+inputs?|shift\s*[+-]\s*(?:←|→|<[-–]|left|right)\s+to\s+answer|(?:^|\n)\s*\?\s*\d+\s+questions?\b|enter\s+submit|ctrl\+\]\s*skip|shift\s*[+-]\s*→\s*main\s*prompt)/i.test(
+        /(?:Queued\s+follow-up\s+inputs?|shift\s*[+-]\s*(?:←|→|<[-–]|left|right)\s+to\s+answer|(?:^|\n)\s*\?\s*\d+\s+questions?\b)/i.test(
           combinedTail
         );
       const hasBulletListOptions =
@@ -120,10 +140,10 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         promptResult.kind === 'choice' ||
         promptResult.kind === 'question'
       ) {
-        let promptLine = promptResult.promptLine || nonEmptyLines[nonEmptyLines.length - 1];
+        let promptLine = promptResult.promptLine || activeLines[activeLines.length - 1];
         if (!promptResult.promptLine) {
-          for (let i = nonEmptyLines.length - 1; i >= 0; i--) {
-            const l = nonEmptyLines[i].trim();
+          for (let i = activeLines.length - 1; i >= 0; i--) {
+            const l = activeLines[i].trim();
             if (
               /\[[yY]\/[nN]\]|proceed|confirm|option|Allow|Deny|plan|Question|shift.*answer|queued.*input|enter.*submit|ctrl\+\]/i.test(l) ||
               l.startsWith('-') ||
@@ -160,14 +180,6 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
       const hasReasoningHeader = /(?:^|\n)\s*[┌╭•*·-]\s*(?:Reasoning|Thinking)\b[^\n]*/i.test(combinedTail);
       const hasCodexIdlePrompt =
         /(?:^[>›❯]\s*(?:Ask (?:Codex|anything)|Type|Send|What would you like|$)|Ask Codex to do anything)/im.test(combinedTail);
-      const activeStatusPattern = /^\s*(?:•|Working\b)[^\n]*\besc\s+to\s+interrupt\b/i;
-      const completionPattern = /(?:^\s*─\s+Worked for\b|Worked for \d+(?:\.\d+)?(?:s|m|h))/i;
-      const lastActiveStatusIndex = [...recentLines].reverse().findIndex((line) => activeStatusPattern.test(line));
-      const lastCompletionIndex = [...recentLines].reverse().findIndex((line) => completionPattern.test(line));
-      const activeStatusIndex = lastActiveStatusIndex === -1 ? -1 : recentLines.length - 1 - lastActiveStatusIndex;
-      const completionIndex = lastCompletionIndex === -1 ? -1 : recentLines.length - 1 - lastCompletionIndex;
-      const hasRecentCompletion = completionIndex >= 0 && completionIndex > activeStatusIndex;
-      const hasInterruptFooter = activeStatusIndex >= 0 && !hasRecentCompletion;
 
       // Codex keeps the ready prompt visible while showing the transcript from
       // the previous turn. A historical "Working" or "Reasoning" line must not keep the

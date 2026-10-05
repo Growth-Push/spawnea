@@ -473,14 +473,14 @@ describe('CodexStatusAdapter', () => {
         '  Greetings, fellow tinkerer.',
         '',
         '',
-        '› para hacer un test, neceisto que me hagas una pregunta. y esperes la respuesta. aca en codex hay q apretar shift-left para responder',
+        '› to run a test, please ask me a question and wait for the response. In Codex you press shift-left to answer',
         '',
         '',
-        '• ¿Qué color prefieres para esta prueba?',
+        '• Which color do you prefer for this test?',
         '',
-        '  • Azul',
-        '  • Verde',
-        '  • Rojo',
+        '  • Blue',
+        '  • Green',
+        '  • Red',
         '',
         'Working (19s • esc to interrupt)',
         '',
@@ -543,25 +543,25 @@ describe('CodexStatusAdapter', () => {
         '  Greetings, fellow tinkerer.',
         '',
         '',
-        '› para hacer un test, neceisto que me hagas una pregunta. y esperes la respuesta. aca en codex hay q apretar shift-left para responder',
+        '› to run a test, please ask me a question and wait for the response. In Codex you press shift-left to answer',
         '',
         '',
-        '• ¿Qué color prefieres para esta prueba?',
+        '• Which color do you prefer for this test?',
         '',
-        '  • Azul',
-        '  • Verde',
-        '  • Rojo',
+        '  • Blue',
+        '  • Green',
+        '  • Red',
         '',
         'Working (1m 08s • esc to interrupt)',
         '',
         '• Queued follow-up inputs',
         '',
         '',
-        '  ¿Qué color prefieres para esta prueba?',
+        '  Which color do you prefer for this test?',
         '',
-        '  › 1. Azul',
-        '    2. Verde',
-        '    3. Rojo',
+        '  › 1. Blue',
+        '    2. Green',
+        '    3. Red',
         '    4. Other',
         '',
         '  enter submit   ctrl+] skip   shift+→ main prompt',
@@ -573,7 +573,7 @@ describe('CodexStatusAdapter', () => {
     const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('needs_input');
     expect(res.source).toBe('terminal_prompt');
-    expect(res.detectedPrompt).toMatch(/Azul|submit|Queued follow-up/i);
+    expect(res.detectedPrompt).toMatch(/Blue|submit|Queued follow-up/i);
   });
 
   it('detects NEEDS_INPUT for queued questions with minutes/hours duration and multiple questions', () => {
@@ -661,16 +661,85 @@ describe('CodexStatusAdapter', () => {
       isPtyAttached: true,
       paneCurrentCommand: 'codex',
       tailLines: [
-        '• ¿Cuál es el entorno que deseas configurar?',
-        '  • Desarrollo local',
+        '• Which environment would you like to configure?',
+        '  • Local development',
         '  • Staging',
-        '  • Producción',
+        '  • Production',
       ],
     };
 
     const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('needs_input');
     expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('clears historical queued-input indicators after a completed turn', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-answered-queue',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        '• Queued follow-up inputs',
+        '  ? 1 question · 14s',
+        '    shift+← to answer',
+        'Working (15s • esc to interrupt)',
+        '─ Worked for 16s ─────────────────────────────',
+        '',
+        '› Ask Codex to do anything',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('needs_input');
+  });
+
+  it('does not trigger NEEDS_INPUT when prose mentions approving or applying a plan', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-neg-plan-prose',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Implemented the endpoint to approve the plan in production.',
+        '─ Worked for 4s ─────────────────────────────',
+        '',
+        '› Ask Codex to do anything',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('needs_input');
+  });
+
+  it('does not trigger CHOICE when ready prompt is followed by navigation tips', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-neg-arrow-tips',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        '─ Worked for 2s ─────────────────────────────',
+        '',
+        '› Ask Codex to do anything',
+        'Use arrow keys to navigate history',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('needs_input');
   });
 
   it('does not trigger NEEDS_INPUT when transcript prose mentions Allow and Deny', () => {
