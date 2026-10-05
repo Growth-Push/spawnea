@@ -13,6 +13,7 @@ export default defineConfig({
           index: resolve(__dirname, 'src/main/entry.ts'),
           'spawnea-mcp': resolve(__dirname, 'src/mcp/index.ts'),
           'spawnea-mcp-watchdog': resolve(__dirname, 'src/mcp/watchdog.ts'),
+          'spawnea-cli': resolve(__dirname, 'src/cli/index.ts'),
         },
       },
     },

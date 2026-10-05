@@ -209,6 +209,20 @@ export class AgentControlService {
     return this.sessionManager.closeSharedChildSession(sessionId, force);
   }
 
+  async closeSession(
+    sessionId: string,
+    force = false,
+  ): Promise<{ apiVersion: typeof SPAWNEA_CONTROL_API_VERSION; sessionId: string; removed: boolean }> {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session) throw new Error(`Session '${sessionId}' not found`);
+    if (!force && ['working', 'starting'].includes(session.status)) {
+      throw new Error(`Session '${sessionId}' is currently ${session.status}; pass force=true to close`);
+    }
+    await this.sessionManager.deleteSession(sessionId, 'close-all');
+    this.notifyDataChanged?.();
+    return { apiVersion: SPAWNEA_CONTROL_API_VERSION, sessionId, removed: true };
+  }
+
   createBootstrapControl(): BootstrapAgentControlService {
     return {
       getState: () => this.getBootstrapState(),
@@ -679,7 +693,7 @@ export class AgentControlService {
     }
   }
 
-  private async createRootSession(request: ControlCreateSessionRequest): Promise<ControlCreateSessionResult> {
+  async createRootSession(request: ControlCreateSessionRequest): Promise<ControlCreateSessionResult> {
     const fingerprint = JSON.stringify({
       serverId: request.serverId,
       projectId: request.projectId,

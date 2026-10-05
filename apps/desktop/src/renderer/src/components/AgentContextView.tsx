@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import type { ControlAgentContextCall, ControlAgentContextSnapshot } from '@spawnea/domain';
+import { getAgentSkillPrompt } from '@spawnea/domain';
+import { Check, Copy } from 'lucide-react';
 
 interface AgentContextViewProps {
   sessionId: string;
@@ -11,8 +13,19 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
   const [selected, setSelected] = useState<ControlAgentContextCall | null>(null);
   const [output, setOutput] = useState<string | null>(null);
   const [outputMode, setOutputMode] = useState<'compact' | 'raw'>('compact');
+  const [copied, setCopied] = useState(false);
   const response = selected?.response as { turnId?: string; sessionId?: string } | undefined;
   const turnId = response?.turnId;
+
+  const handleCopyPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(getAgentSkillPrompt());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Ignore clipboard write failure
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -53,7 +66,19 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
   return (
     <div data-testid="agent-context-view" className="h-full grid grid-cols-[minmax(220px,30%)_1fr] overflow-hidden rounded-lg border border-[#30363d] bg-[#161b22]">
       <aside className="overflow-y-auto border-r border-[#30363d] p-3">
-        <div className="mb-3 text-[11px] text-zinc-500">Root · {snapshot.rootSessionId}</div>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <span className="text-[11px] text-zinc-500 truncate" title={`Root · ${snapshot.rootSessionId}`}>Root · {snapshot.rootSessionId}</span>
+          <button
+            type="button"
+            data-testid="copy-agent-prompt-button"
+            onClick={handleCopyPrompt}
+            className="flex items-center gap-1 shrink-0 rounded bg-[#21262d] px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-[#30363d] hover:text-white transition-colors"
+            title="Copy Spawnea CLI orchestration prompt for AI agents"
+          >
+            {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+            <span>{copied ? 'Copied' : 'Copy Prompt'}</span>
+          </button>
+        </div>
         {snapshot.calls.length === 0 ? (
           <div data-testid="agent-context-unavailable" className="rounded border border-amber-800/50 bg-amber-950/20 p-3 text-xs text-amber-200">
             {snapshot.volatileNotice}

@@ -15,6 +15,7 @@
     "package": "pnpm third-party-notices && pnpm build && electron-builder --config electron-builder.yml --publish never",
     "package:host": "pnpm package",
     "mcp": "node out/main/spawnea-mcp.js",
+    "cli": "node out/main/spawnea-cli.js",
     "smoke": "electron-rebuild -f --only better-sqlite3,node-pty && electron-vite build && SPAWNEA_SMOKE_TEST=1 ./node_modules/.bin/electron --no-sandbox --ozone-platform-hint=auto --headless --disable-gpu out/main/index.js --smoke-test",
     "smoke:release": "node scripts/desktop-release-smoke.mjs",
     "test:smoke": "pnpm smoke",

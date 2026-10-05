@@ -44,6 +44,8 @@ mac:
   extraResources:
     - from: build/spawnea-mcp
       to: spawnea-mcp
+    - from: build/spawnea
+      to: spawnea
 win:
   target:
     - nsis
@@ -60,3 +62,5 @@ linux:
   extraResources:
     - from: build/spawnea-mcp
       to: spawnea-mcp
+    - from: build/spawnea
+      to: spawnea

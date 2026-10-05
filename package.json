@@ -9,6 +9,9 @@
   "engines": {
     "node": ">=24.0.0"
   },
+  "bin": {
+    "spawnea": "./bin/spawnea.mjs"
+  },
   "scripts": {
     "dev": "pnpm --filter @spawnea/desktop dev",
     "start": "pnpm build && ./apps/desktop/node_modules/.bin/electron --ozone-platform-hint=auto apps/desktop/out/main/index.js",

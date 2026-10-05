@@ -10,6 +10,7 @@
     "vitest.config.ts",
     "src/main/**/*",
     "src/mcp/**/*",
+    "src/cli/**/*",
     "src/preload/**/*"
   ]
 }

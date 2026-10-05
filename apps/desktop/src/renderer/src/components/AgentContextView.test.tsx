@@ -20,3 +20,29 @@ it('loads compact turn output by default and raw output only on explicit selecti
   await screen.findByText(/raw result/);
   view.unmount();
 });
+
+it('copies agent skill prompt to clipboard when copy button is clicked', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.assign(navigator, {
+    clipboard: { writeText },
+  });
+
+  window.spawneaApi = {
+    getAgentContext: vi.fn().mockResolvedValue({
+      rootSessionId: 'root-session-123',
+      calls: [],
+      volatileNotice: 'Volatile context notice',
+    }),
+  } as unknown as typeof window.spawneaApi;
+
+  const view = render(<AgentContextView sessionId="root-session-123" />);
+  const copyBtn = await screen.findByTestId('copy-agent-prompt-button');
+  expect(copyBtn).toBeDefined();
+
+  fireEvent.click(copyBtn);
+  await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+  expect(writeText.mock.calls[0][0]).toContain('Spawnea Agent Orchestration');
+  expect(copyBtn.textContent).toContain('Copied');
+
+  view.unmount();
+});

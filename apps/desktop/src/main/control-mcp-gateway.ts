@@ -11,7 +11,11 @@ import {
   type Logger,
 } from '@spawnea/domain';
 import type { AgentControlService } from './agent-control-service.js';
-import { createBootstrapSpawneaMcpServer, createSpawneaMcpServer } from './control-mcp-server.js';
+import {
+  createBootstrapSpawneaMcpServer,
+  createCliSpawneaMcpServer,
+  createSpawneaMcpServer,
+} from './control-mcp-server.js';
 import { resolveControlRuntimeFile, resolveControlSocketPath } from './control-runtime.js';
 
 const AUTH_TIMEOUT_MS = 3_000;
@@ -184,7 +188,7 @@ export class ControlMcpGateway {
       const newline = buffered.indexOf(0x0a);
       if (newline === -1) return;
 
-      let auth: { type?: unknown; token?: unknown; sessionId?: unknown };
+      let auth: { type?: unknown; token?: unknown; sessionId?: unknown; mode?: unknown };
       try {
         auth = JSON.parse(buffered.subarray(0, newline).toString('utf8'));
       } catch {
@@ -196,7 +200,9 @@ export class ControlMcpGateway {
       socket.pause();
       socket.removeListener('data', onData);
       let createServer: () => ReturnType<typeof createSpawneaMcpServer>;
-      if (typeof auth.sessionId === 'string') {
+      if (auth.mode === 'cli') {
+        createServer = () => createCliSpawneaMcpServer(this.control);
+      } else if (typeof auth.sessionId === 'string') {
         let scopedControl: Awaited<ReturnType<AgentControlService['createScopedControl']>>;
         const deadline = Date.now() + AUTH_TIMEOUT_MS;
         while (true) {
