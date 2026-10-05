@@ -303,6 +303,28 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('codex-queued-followup');
   });
 
+  it('detects modern Codex queued follow-up with multiple questions and minute/hour durations', () => {
+    const tailMinutes = [
+      '• Queued follow-up inputs',
+      '  ? 3 questions · 4m 12s',
+      '    shift+← to answer',
+    ];
+    const resMin = detectPromptInTail(tailMinutes, { harness: 'codex' });
+    expect(resMin.isPrompt).toBe(true);
+    expect(resMin.kind).toBe('question');
+    expect(resMin.matchedRuleId).toBe('codex-queued-followup');
+
+    const tailHours = [
+      '• Queued follow-up inputs',
+      '  ? 2 questions · 1h 30m',
+      '    shift+← to answer',
+    ];
+    const resHr = detectPromptInTail(tailHours, { harness: 'codex' });
+    expect(resHr.isPrompt).toBe(true);
+    expect(resHr.kind).toBe('question');
+    expect(resHr.matchedRuleId).toBe('codex-queued-followup');
+  });
+
   it('detects modern Codex question with bullet options', () => {
     const tail = [
       '• Which deployment target would you prefer?',

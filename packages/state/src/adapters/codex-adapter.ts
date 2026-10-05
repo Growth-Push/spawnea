@@ -96,7 +96,7 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
           combinedTail
         );
       const hasQueuedFollowup =
-        /(?:Queued\s+follow-up\s+inputs?|shift\s*[+-]\s*(?:←|→|<[-–]|left|right)\s+to\s+answer|(?:\?|\b)\s*\d+\s+questions?\b[\s\S]*?to\s+answer|enter\s+submit|ctrl\+\]\s*skip|shift\s*[+-]\s*→\s*main\s*prompt)/i.test(
+        /(?:Queued\s+follow-up\s+inputs?|shift\s*[+-]\s*(?:←|→|<[-–]|left|right)\s+to\s+answer|(?:\?|\b)\s*\d+\s+questions?\b|enter\s+submit|ctrl\+\]\s*skip|shift\s*[+-]\s*→\s*main\s*prompt)/i.test(
           combinedTail
         );
       const hasBulletListOptions =

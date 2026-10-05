@@ -575,4 +575,28 @@ describe('CodexStatusAdapter', () => {
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toMatch(/Azul|submit|Queued follow-up/i);
   });
+
+  it('detects NEEDS_INPUT for queued questions with minutes/hours duration and multiple questions', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-multi-q',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Working (3m 22s • esc to interrupt)',
+        '• Queued follow-up inputs',
+        '  ? 3 questions · 1h 15m',
+        '    shift+← to answer',
+        '› Ask Codex to do anything',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toMatch(/shift\+← to answer|\? 3 questions/i);
+  });
 });

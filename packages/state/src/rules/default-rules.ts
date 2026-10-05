@@ -196,7 +196,7 @@ export const DEFAULT_PATTERN_RULES: PatternRule[] = [
     name: 'Codex Queued Follow-up Input',
     category: 'question',
     harness: 'codex',
-    pattern: /(?:Queued\s+follow-up\s+inputs?|shift\s*[+-]\s*(?:←|→|<[-–]|left|right)\s+to\s+answer|(?:\?|\b)\s*\d+\s+questions?\b[\s\S]*?to\s+answer)/i,
+    pattern: /(?:Queued\s+follow-up\s+inputs?|shift\s*[+-]\s*(?:←|→|<[-–]|left|right)\s+to\s+answer|(?:^|\n)\s*\?\s*\d+\s+questions?\b|(?:\?|\b)\s*\d+\s+questions?\b[\s\S]*?(?:shift|to\s+answer))/i,
     confidence: 0.98,
     description: 'Matches modern Codex CLI queued follow-up questions awaiting shift+← to answer',
   },
