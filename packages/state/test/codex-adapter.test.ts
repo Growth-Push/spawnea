@@ -468,7 +468,7 @@ describe('CodexStatusAdapter', () => {
       tailLines: [
         '',
         '  >_ OpenAI Codex (v0.160.0)',
-        '     /mnt/data4/matt/code/growth/agents',
+        '     /workspace/project',
         '',
         '  Greetings, fellow tinkerer.',
         '',
@@ -538,7 +538,7 @@ describe('CodexStatusAdapter', () => {
       tailLines: [
         '',
         '  >_ OpenAI Codex (v0.160.0)',
-        '     /mnt/data4/matt/code/growth/agents',
+        '     /workspace/project',
         '',
         '  Greetings, fellow tinkerer.',
         '',
@@ -671,5 +671,95 @@ describe('CodexStatusAdapter', () => {
     const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('needs_input');
     expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('does not trigger NEEDS_INPUT when transcript prose mentions Allow and Deny', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-neg-allow-deny',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Updated the Allow list and Deny list in security policy.',
+        '─ Worked for 12s ─────────────────────────────',
+        '',
+        '› Ask Codex to do anything',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('needs_input');
+  });
+
+  it('does not trigger NEEDS_INPUT when transcript prose mentions question counts without queued badge', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-neg-q-count',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Added 2 questions to the project documentation.',
+        '─ Worked for 5s ─────────────────────────────',
+        '',
+        '› Ask Codex to do anything',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('needs_input');
+  });
+
+  it('does not trigger WORKING when prose mentions Reasoning without a header glyph', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-neg-reasoning',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Reasoning about the system architecture is now complete.',
+        '─ Worked for 3s ─────────────────────────────',
+        '',
+        '› Ask Codex to do anything',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('working');
+  });
+
+  it('does not trigger NEEDS_INPUT when a numbered list exists in transcript followed by ready prompt', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-neg-numbered-list',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Completed tasks:',
+        '1. Added schema validation.',
+        '2. Added automated tests.',
+        '─ Worked for 10s ─────────────────────────────',
+        '',
+        '› Ask Codex to do anything',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('needs_input');
   });
 });
