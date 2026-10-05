@@ -89,6 +89,9 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         : recentLines;
       const combinedTail = activeLines.join('\n');
 
+      const hasCodexIdlePrompt =
+        /(?:^[>›❯]\s*(?:Ask (?:Codex|anything)|Type|Send|What would you like|$)|Ask Codex to do anything)/im.test(combinedTail);
+
       const promptResult = detectPromptInTail(activeLines, {
         harness: 'codex',
         customRules: options.customRules,
@@ -122,7 +125,9 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         /(?:Queued\s+follow-up\s+inputs?|shift\s*[+-]\s*(?:←|→|<[-–]|left|right)\s+to\s+answer|(?:^|\n)\s*\?\s*\d+\s+questions?\b)/i.test(
           combinedTail
         );
+      const suppressBulletQuestion = hasCodexIdlePrompt && !hasQueuedFollowup;
       const hasBulletListOptions =
+        !suppressBulletQuestion &&
         /(?:^|\n)\s*[•*·-]?\s*[¿]?[^\n]+\?\s*\n(?:\s*[•*·-]\s+[^\n]+\n?){2,}/.test(combinedTail);
 
       if (
@@ -138,7 +143,8 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         hasQueuedFollowup ||
         promptResult.kind === 'confirmation' ||
         promptResult.kind === 'choice' ||
-        promptResult.kind === 'question'
+        (promptResult.kind === 'question' &&
+          !(suppressBulletQuestion && promptResult.matchedRuleId === 'codex-question-bullet-options'))
       ) {
         let promptLine = promptResult.promptLine || activeLines[activeLines.length - 1];
         if (!promptResult.promptLine) {
@@ -178,8 +184,6 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
       const hasBrailleSpinner = /(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|[\u2800-\u28FF])/.test(combinedTail);
       const hasActiveProgressBullets = /(?:^|\n)\s*•\s*(?:Working|Thinking|Reasoning|Searching|Running|Executing|Exploring|Reading)\b[^\n]*/i.test(combinedTail);
       const hasReasoningHeader = /(?:^|\n)\s*[┌╭•*·-]\s*(?:Reasoning|Thinking)\b[^\n]*/i.test(combinedTail);
-      const hasCodexIdlePrompt =
-        /(?:^[>›❯]\s*(?:Ask (?:Codex|anything)|Type|Send|What would you like|$)|Ask Codex to do anything)/im.test(combinedTail);
 
       // Codex keeps the ready prompt visible while showing the transcript from
       // the previous turn. A historical "Working" or "Reasoning" line must not keep the

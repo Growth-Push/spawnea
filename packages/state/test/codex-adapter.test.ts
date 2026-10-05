@@ -853,4 +853,29 @@ describe('CodexStatusAdapter', () => {
     expect(res.status).toBe('idle');
     expect(res.status).not.toBe('needs_input');
   });
+
+  it('does not trigger NEEDS_INPUT for bullet questions when ready prompt is visible without queued follow-up', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-bullet-answered',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        '• Which environment would you like to configure?',
+        '  • Local development',
+        '  • Staging',
+        '  • Production',
+        'Staging',
+        '',
+        '› Ask Codex to do anything',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('needs_input');
+  });
 });
