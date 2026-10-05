@@ -66,9 +66,7 @@ export function detectPromptInTail(
     if (lastCompIdx !== -1) {
       const compIdx = recentLines.length - 1 - lastCompIdx;
       const linesAfter = recentLines.slice(compIdx + 1);
-      if (linesAfter.length > 0) {
-        effectiveTailLines = linesAfter;
-      }
+      effectiveTailLines = linesAfter.length > 0 ? linesAfter : [recentLines[compIdx]];
     }
   }
 

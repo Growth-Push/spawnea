@@ -831,4 +831,26 @@ describe('CodexStatusAdapter', () => {
     expect(res.status).toBe('idle');
     expect(res.status).not.toBe('needs_input');
   });
+
+  it('does not trigger NEEDS_INPUT when tail ends at completion marker with historical confirmation above', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-comp-marker-end',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Do you want to proceed? [y/N]',
+        'y',
+        'Working (4s • esc to interrupt)',
+        '─ Worked for 4s ─────────────────────────────',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('needs_input');
+  });
 });

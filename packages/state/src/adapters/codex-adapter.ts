@@ -89,7 +89,7 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         : recentLines;
       const combinedTail = activeLines.join('\n');
 
-      const promptResult = detectPromptInTail(tailLines, {
+      const promptResult = detectPromptInTail(activeLines, {
         harness: 'codex',
         customRules: options.customRules,
         tailLinesCount: 30,
