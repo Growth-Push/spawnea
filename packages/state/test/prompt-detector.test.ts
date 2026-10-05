@@ -357,6 +357,46 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('codex-questionnaire-menu');
   });
 
+  it('detects modern Codex queued question with no time suffix', () => {
+    const tail = [
+      '• Queued follow-up inputs',
+      '  ? 4 questions',
+      '    shift+← to answer',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('codex-queued-followup');
+  });
+
+  it('detects modern Codex queued question with ascii arrow shift+<- to answer', () => {
+    const tail = [
+      '• Queued follow-up inputs',
+      '  ? 1 question · 10s',
+      '    shift+<- to answer',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('codex-queued-followup');
+  });
+
+  it('detects modern Codex questionnaire when option 2 or 3 is selected', () => {
+    const tail = [
+      '• Queued follow-up inputs',
+      '  Which architecture pattern to use?',
+      '    1. Monolith',
+      '  › 2. Microservices',
+      '    3. Modular Monolith',
+      '  enter submit   ctrl+] skip   shift+→ main prompt',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('choice');
+    expect(res.matchedRuleId).toBe('codex-questionnaire-menu');
+    expect(res.promptLine).toContain('Microservices');
+  });
+
   it('detects modern Hermes idle input prompt with ❯ and Ask anything', () => {
     const tail = [
       'All changes applied.',

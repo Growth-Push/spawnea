@@ -599,4 +599,77 @@ describe('CodexStatusAdapter', () => {
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toMatch(/shift\+← to answer|\? 3 questions/i);
   });
+
+  it('reports NEEDS_INPUT for background session (isPtyAttached: false) with queued follow-up questions', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-bg-q',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Working (45s • esc to interrupt)',
+        '• Queued follow-up inputs',
+        '  ? 1 question · 30s',
+        '    shift+← to answer',
+        '› Ask Codex to do anything',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.status).not.toBe('disconnected');
+    expect(res.status).not.toBe('idle');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('reports NEEDS_INPUT for background session (isPtyAttached: false) with open questionnaire menu', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-bg-menu',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Working (1m 15s • esc to interrupt)',
+        '• Queued follow-up inputs',
+        '  Choose an option:',
+        '    1. First',
+        '  › 2. Second',
+        '  enter submit   ctrl+] skip   shift+→ main prompt',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.status).not.toBe('disconnected');
+    expect(res.status).not.toBe('idle');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('detects NEEDS_INPUT when question has bullet options in terminal transcript', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-bullet-q',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        '• ¿Cuál es el entorno que deseas configurar?',
+        '  • Desarrollo local',
+        '  • Staging',
+        '  • Producción',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+  });
 });
