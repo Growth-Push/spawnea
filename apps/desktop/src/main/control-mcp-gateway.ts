@@ -200,9 +200,7 @@ export class ControlMcpGateway {
       socket.pause();
       socket.removeListener('data', onData);
       let createServer: () => ReturnType<typeof createSpawneaMcpServer>;
-      if (auth.mode === 'cli') {
-        createServer = () => createCliSpawneaMcpServer(this.control);
-      } else if (typeof auth.sessionId === 'string') {
+      if (typeof auth.sessionId === 'string') {
         let scopedControl: Awaited<ReturnType<AgentControlService['createScopedControl']>>;
         const deadline = Date.now() + AUTH_TIMEOUT_MS;
         while (true) {
@@ -214,7 +212,11 @@ export class ControlMcpGateway {
             await new Promise((resolve) => setTimeout(resolve, AUTH_SCOPE_RETRY_INTERVAL_MS));
           }
         }
-        createServer = () => createSpawneaMcpServer(scopedControl);
+        createServer = auth.mode === 'cli'
+          ? () => createCliSpawneaMcpServer(scopedControl)
+          : () => createSpawneaMcpServer(scopedControl);
+      } else if (auth.mode === 'cli') {
+        createServer = () => createCliSpawneaMcpServer(this.control);
       } else {
         const bootstrapControl = this.control.createBootstrapControl();
         createServer = () => createBootstrapSpawneaMcpServer(

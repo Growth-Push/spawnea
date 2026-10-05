@@ -14,14 +14,22 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
   const [output, setOutput] = useState<string | null>(null);
   const [outputMode, setOutputMode] = useState<'compact' | 'raw'>('compact');
   const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const response = selected?.response as { turnId?: string; sessionId?: string } | undefined;
   const turnId = response?.turnId;
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
 
   const handleCopyPrompt = async () => {
     try {
       await navigator.clipboard.writeText(getAgentSkillPrompt());
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       // Ignore clipboard write failure
     }

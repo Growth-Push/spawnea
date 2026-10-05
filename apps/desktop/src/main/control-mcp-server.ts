@@ -385,7 +385,9 @@ export function createBootstrapSpawneaMcpServer(
   return server;
 }
 
-export function createCliSpawneaMcpServer(control: AgentControlService): McpServer {
+export function createCliSpawneaMcpServer(
+  control: AgentControlService | ScopedAgentControlService,
+): McpServer {
   const server = new McpServer({
     name: 'spawnea-control-cli',
     version: '1.0.0',
@@ -415,9 +417,16 @@ export function createCliSpawneaMcpServer(control: AgentControlService): McpServ
     },
     async ({ sessionId }) => safeTool(async () => {
       const state = await control.getState();
-      const session = state.sessions.find(
-        (s) => s.id === sessionId || s.id.startsWith(sessionId) || s.name.toLowerCase() === sessionId.toLowerCase()
-      );
+      let session = state.sessions.find((s) => s.id === sessionId);
+      if (!session) {
+        const matches = state.sessions.filter(
+          (s) => s.id.startsWith(sessionId) || s.name.toLowerCase() === sessionId.toLowerCase()
+        );
+        if (matches.length > 1) {
+          throw new Error(`Ambiguous session identifier '${sessionId}': matches ${matches.map((m) => m.id).join(', ')}`);
+        }
+        session = matches[0];
+      }
       if (!session) {
         throw new Error(`Session '${sessionId}' not found`);
       }
@@ -442,6 +451,9 @@ export function createCliSpawneaMcpServer(control: AgentControlService): McpServ
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async (request) => safeTool(async () => {
+      if (!('createRootSession' in control)) {
+        throw new Error('Creating root sessions is not permitted from a scoped session context');
+      }
       const serverId = request.serverId ?? 'local';
       const state = await control.getState();
       const availableHarnesses = state.harnesses.filter((h) => !h.id.includes(':') || h.id.startsWith(`${serverId}:`));
@@ -558,7 +570,12 @@ export function createCliSpawneaMcpServer(control: AgentControlService): McpServ
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
-    async ({ sessionId, force }) => safeTool(() => control.closeSession(sessionId, force))()
+    async ({ sessionId, force }) => safeTool(async () => {
+      if ('closeSession' in control) {
+        return control.closeSession(sessionId, force);
+      }
+      return control.closeSharedChildSession(sessionId, force);
+    })()
   );
 
   server.registerTool(

@@ -95,6 +95,21 @@ describe('Spawnea Control CLI', () => {
       expect(parsed.positional).toEqual(['child-1']);
       expect(parsed.flags.force).toBe(true);
     });
+
+    it('parses boolean flags without consuming following positional arguments', () => {
+      const parsed = parseArgs(['prompt', 'send', '--session', 'child-1', '--json', 'Run tests']);
+      expect(parsed.command).toBe('prompt');
+      expect(parsed.subcommand).toBe('send');
+      expect(parsed.flags.session).toBe('child-1');
+      expect(parsed.flags.json).toBe(true);
+      expect(parsed.positional).toEqual(['Run tests']);
+
+      const parsedForceFirst = parseArgs(['session', 'close', '--force', 'child-1']);
+      expect(parsedForceFirst.command).toBe('session');
+      expect(parsedForceFirst.subcommand).toBe('close');
+      expect(parsedForceFirst.flags.force).toBe(true);
+      expect(parsedForceFirst.positional).toEqual(['child-1']);
+    });
   });
 
   describe('skill prompt generation', () => {

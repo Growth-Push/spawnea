@@ -178,6 +178,7 @@ export async function waitTurn(client: ControlCliClient, options: WaitTurnOption
   const deadline = Date.now() + timeoutSec * 1000;
   let cursor: string | undefined;
   let version = 0;
+  let accumulatedOutput = '';
 
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1000, deadline - Date.now());
@@ -190,24 +191,30 @@ export async function waitTurn(client: ControlCliClient, options: WaitTurnOption
       outputMode: 'compact',
     });
 
+    if (turn.output) {
+      accumulatedOutput += turn.output;
+    }
+
     cursor = turn.cursor ?? cursor;
     version = turn.version ?? version;
 
     if (turn.status === 'completed' || turn.status === 'needs_input') {
+      const finalTurn = { ...turn, output: accumulatedOutput || turn.output };
       if (options.json) {
-        console.log(JSON.stringify(turn, null, 2));
+        console.log(JSON.stringify(finalTurn, null, 2));
       } else {
         console.log(`Turn ${options.turn} ${turn.status}:`);
-        console.log(turn.output || '(No response text)');
+        console.log(finalTurn.output || '(No response text)');
       }
       return;
     }
 
     if (turn.status === 'failed') {
+      const finalTurn = { ...turn, output: accumulatedOutput || turn.output };
       if (options.json) {
-        console.log(JSON.stringify(turn, null, 2));
+        console.log(JSON.stringify(finalTurn, null, 2));
       } else {
-        console.error(`Turn ${options.turn} failed: ${turn.error || turn.output || 'Unknown error'}`);
+        console.error(`Turn ${options.turn} failed: ${finalTurn.error || finalTurn.output || 'Unknown error'}`);
       }
       process.exitCode = 1;
       return;
@@ -238,6 +245,7 @@ export async function sendAndWaitPrompt(client: ControlCliClient, options: SendA
   const deadline = Date.now() + timeoutSec * 1000;
   let cursor: string | undefined;
   let version = sent.version ?? 0;
+  let accumulatedOutput = '';
 
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1000, deadline - Date.now());
@@ -250,23 +258,29 @@ export async function sendAndWaitPrompt(client: ControlCliClient, options: SendA
       outputMode: 'compact',
     });
 
+    if (turn.output) {
+      accumulatedOutput += turn.output;
+    }
+
     cursor = turn.cursor ?? cursor;
     version = turn.version ?? version;
 
     if (turn.status === 'completed' || turn.status === 'needs_input') {
+      const finalTurn = { ...turn, output: accumulatedOutput || turn.output };
       if (options.json) {
-        console.log(JSON.stringify(turn, null, 2));
+        console.log(JSON.stringify(finalTurn, null, 2));
       } else {
-        console.log(turn.output || '');
+        console.log(finalTurn.output || '');
       }
       return;
     }
 
     if (turn.status === 'failed') {
+      const finalTurn = { ...turn, output: accumulatedOutput || turn.output };
       if (options.json) {
-        console.log(JSON.stringify(turn, null, 2));
+        console.log(JSON.stringify(finalTurn, null, 2));
       } else {
-        console.error(`Prompt execution failed: ${turn.error || turn.output || 'Unknown failure'}`);
+        console.error(`Prompt execution failed: ${finalTurn.error || finalTurn.output || 'Unknown failure'}`);
       }
       process.exitCode = 1;
       return;

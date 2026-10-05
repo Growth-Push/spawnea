@@ -66,7 +66,7 @@ export class ControlCliClient {
 
   static async connect(options: ControlCliClientOptions = {}): Promise<ControlCliClient> {
     const descriptor = await loadControlRuntime(options);
-    const client = new ControlCliClient(descriptor, options.sessionId ?? options.env?.SPAWNEA_SESSION_ID ?? process.env.SPAWNEA_SESSION_ID);
+    const client = new ControlCliClient(descriptor, options.sessionId);
     await client.init();
     return client;
   }
@@ -85,12 +85,17 @@ export class ControlCliClient {
 
       socket.once('connect', () => {
         socket.removeListener('error', onError);
-        socket.on('error', (err) => {
+
+        const handleSocketClose = (reason: string) => {
           for (const { reject } of this.pending.values()) {
-            reject(new Error(`Control socket error: ${err.message}`));
+            reject(new Error(`Control socket connection closed: ${reason}`));
           }
           this.pending.clear();
-        });
+        };
+
+        socket.on('error', (err) => handleSocketClose(`socket error: ${err.message}`));
+        socket.on('close', () => handleSocketClose('socket closed'));
+        socket.on('end', () => handleSocketClose('socket ended'));
 
         socket.on('data', (chunk) => this.handleData(chunk));
 
@@ -142,13 +147,29 @@ export class ControlCliClient {
     }
   }
 
-  private sendRequest(method: string, params: Record<string, unknown> = {}): Promise<any> {
+  private sendRequest(method: string, params: Record<string, unknown> = {}, timeoutMs = 30000): Promise<any> {
     return new Promise((resolve, reject) => {
       if (!this.socket || this.socket.destroyed) {
         return reject(new Error('Connection to Spawnea control socket was closed'));
       }
       const id = this.nextId++;
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new Error(`Request '${method}' timed out after ${timeoutMs}ms`));
+        }
+      }, timeoutMs);
+
+      this.pending.set(id, {
+        resolve: (val) => {
+          clearTimeout(timer);
+          resolve(val);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
       const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params });
       this.socket.write(`${payload}\n`);
     });

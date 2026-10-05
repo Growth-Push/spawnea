@@ -7,7 +7,7 @@ Unlike complex persistent MCP stdio bridges that can drop connections unexpected
 ## Prerequisites
 
 1. Spawnea desktop app is running on the local machine.
-2. The CLI discovers the running instance via `${XDG_RUNTIME_DIR}/spawnea/control-runtime.json` (or `/run/user/<uid>/spawnea/control-runtime.json`).
+2. The CLI discovers the running instance via `${XDG_RUNTIME_DIR}/spawnea/control-runtime.json` (or `/run/user/<uid>/spawnea/control-runtime.json` or `~/.config/spawnea/control-runtime.json` on Linux, and `~/Library/Application Support/Spawnea/control-runtime.json` on macOS).
 
 ## Commands
 

@@ -1,7 +1,16 @@
 #!/bin/sh
 set -eu
 
-resource_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PRG="$0"
+while [ -L "$PRG" ]; do
+  target=$(readlink "$PRG")
+  case "$target" in
+    /*) PRG="$target" ;;
+    *) PRG="$(dirname "$PRG")/$target" ;;
+  esac
+done
+
+resource_dir=$(CDPATH= cd -- "$(dirname -- "$PRG")" && pwd)
 app_dir=$(CDPATH= cd -- "$resource_dir/.." && pwd)
 if [ -x "$app_dir/MacOS/Spawnea" ]; then
   electron_binary="$app_dir/MacOS/Spawnea"

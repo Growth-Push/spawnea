@@ -70,6 +70,20 @@ interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
+const BOOLEAN_FLAGS = new Set([
+  'json',
+  'force',
+  'no-worktree',
+  'help',
+  'h',
+  'version',
+  'v',
+  'sync',
+  'activate',
+  'uncommitted',
+  'verbose',
+]);
+
 export function parseArgs(rawArgs: string[]): ParsedArgs {
   const flags: Record<string, string | boolean> = {};
   const positional: string[] = [];
@@ -88,12 +102,16 @@ export function parseArgs(rawArgs: string[]): ParsedArgs {
         flags[key] = val;
       } else {
         const key = arg.slice(2);
-        const next = rawArgs[i + 1];
-        if (next && !next.startsWith('-')) {
-          flags[key] = next;
-          i++;
-        } else {
+        if (BOOLEAN_FLAGS.has(key)) {
           flags[key] = true;
+        } else {
+          const next = rawArgs[i + 1];
+          if (next !== undefined && !next.startsWith('--')) {
+            flags[key] = next;
+            i++;
+          } else {
+            flags[key] = true;
+          }
         }
       }
     } else if (arg.startsWith('-') && arg.length > 1) {
@@ -254,7 +272,14 @@ export async function runCli(argv: string[]): Promise<void> {
 }
 
 // Auto-run if executed directly as main module in Node.js
-if (process.argv[1] && (process.argv[1].endsWith('spawnea-cli.js') || process.argv[1].endsWith('src/cli/index.ts'))) {
+if (
+  process.argv[1] &&
+  (process.argv[1].endsWith('spawnea-cli.js') ||
+    process.argv[1].endsWith('src/cli/index.ts') ||
+    process.argv[1].endsWith('spawnea.mjs') ||
+    process.argv[1].endsWith('/spawnea')) &&
+  !process.argv.includes('--spawnea-cli')
+) {
   runCli(process.argv.slice(2)).catch((err) => {
     console.error(`spawnea error: ${err.message || String(err)}`);
     process.exit(1);
