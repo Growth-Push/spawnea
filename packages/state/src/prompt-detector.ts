@@ -90,9 +90,22 @@ export function detectPromptInTail(
         let promptLine = lastLine.trim();
         for (let i = recentLines.length - 1; i >= 0; i--) {
           const line = recentLines[i].trim();
+          if (rule.id === 'codex-questionnaire') {
+            if (line.startsWith('Question')) {
+              promptLine = line;
+              break;
+            }
+            continue;
+          }
           if (
             reg.test(line) ||
-            (category === 'choice' && (line.startsWith('Question') || line.startsWith('>') || line.startsWith('1.'))) ||
+            (category === 'choice' && (
+              line.startsWith('Question') ||
+              (line.startsWith('>') && !line.startsWith('>_')) ||
+              line.startsWith('›') ||
+              line.startsWith('❯') ||
+              line.startsWith('1.')
+            )) ||
             (category === 'question' && (
               line.startsWith('?') ||
               line.endsWith('?') ||

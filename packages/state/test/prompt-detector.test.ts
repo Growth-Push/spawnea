@@ -268,6 +268,73 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('codex-idle-prompt');
   });
 
+  it('detects modern Codex v0.160+ queued follow-up question requiring shift+← to answer', () => {
+    const tail = [
+      '• ¿Qué color prefieres para esta prueba?',
+      '',
+      '  • Azul',
+      '  • Verde',
+      '  • Rojo',
+      '',
+      'Working (19s • esc to interrupt)',
+      '',
+      '• Queued follow-up inputs',
+      '  ? 1 question · 14s',
+      '    shift+← to answer',
+      '',
+      '› Ask Codex to do anything',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('codex-queued-followup');
+    expect(res.promptLine).toMatch(/shift\+← to answer|\? 1 question/);
+  });
+
+  it('detects modern Codex queued follow-up with shift-left to answer variation', () => {
+    const tail = [
+      '• Queued follow-up inputs',
+      '  ? 2 questions · 5s',
+      '    shift-left to answer',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('codex-queued-followup');
+  });
+
+  it('detects modern Codex question with bullet options', () => {
+    const tail = [
+      '• Which deployment target would you prefer?',
+      '  • Staging',
+      '  • Production',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('codex-question-bullet-options');
+  });
+
+  it('detects modern Codex v0.160+ open questionnaire menu after pressing shift-left', () => {
+    const tail = [
+      'Working (1m 08s • esc to interrupt)',
+      '• Queued follow-up inputs',
+      '',
+      '  ¿Qué color prefieres para esta prueba?',
+      '',
+      '  › 1. Azul',
+      '    2. Verde',
+      '    3. Rojo',
+      '    4. Other',
+      '',
+      '  enter submit   ctrl+] skip   shift+→ main prompt',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('choice');
+    expect(res.matchedRuleId).toBe('codex-questionnaire-menu');
+  });
+
   it('detects modern Hermes idle input prompt with ❯ and Ask anything', () => {
     const tail = [
       'All changes applied.',

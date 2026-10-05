@@ -69,34 +69,50 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
     if (tailLines.length > 0) {
       const cleaned = tailLines.map((l) => stripAnsi(l).trimEnd());
       const nonEmptyLines = cleaned.filter((l) => l.trim().length > 0);
-      const recentLines = nonEmptyLines.slice(-20);
+      const recentLines = nonEmptyLines.slice(-30);
       const combinedTail = recentLines.join('\n');
 
       const promptResult = detectPromptInTail(tailLines, {
         harness: 'codex',
         customRules: options.customRules,
-        tailLinesCount: 20,
+        tailLinesCount: 30,
       });
 
-      // A. NEEDS_INPUT: Interactive user prompt (e.g. [y/N], option choice, confirmation, tool approval, questionnaire)
+      // A. NEEDS_INPUT: Interactive user prompt (e.g. [y/N], option choice, confirmation, tool approval, questionnaire, queued follow-up)
       const hasBracketConfirm = /\[[yY]\/[nN]\]|\([yY]\/[nN]\)|\[yes\/no\]|\(yes\/no\)/i.test(combinedTail);
       const hasProceedConfirm = /(?:do you want to (?:continue|proceed|run|execute|apply)|proceed\?|confirm\?)/i.test(combinedTail);
       const hasOptionConfirm = /(?:Please confirm one option|Which should I proceed with|Choose one of the following)/i.test(combinedTail);
       const hasBulletOption = /-\s+[A-Z]:\s+[^\n]+\n\s*-\s+[A-Z]:/i.test(combinedTail);
       const hasToolApproval = /(?:Allow\s*\/\s*Deny|\[A\]llow\s*\/\s*\[D\]eny|❯\s*(?:Allow|Deny)|\bAllow\b[\s\S]*?\bDeny\b|tool\s+approval|approval\s+required|requesting\s+permission|permission\s+request)/i.test(combinedTail);
       const hasPlanConfirm = /(?:approve|confirm|proceed\s+with|accept|apply)\s+(?:the\s+|this\s+)?plan\b/i.test(combinedTail);
-      const hasArrowMenu = /(?:^|\n)\s*❯\s+[^\n]+/i.test(combinedTail) && /(?:↑\/↓|arrow\s+keys?|enter\s+to\s+(?:select|confirm|submit)|to\s+navigate|\bAllow\b|\bDeny\b|\d+\.\s+)/i.test(combinedTail);
-      const hasQuestionnaire = /Question\s+\d+\s*(?:\/|of)\s*\d+/i.test(combinedTail);
+      const hasArrowMenu =
+        /(?:^|\n)\s*[>›❯]\s+[^\n]+/i.test(combinedTail) &&
+        /(?:↑\/↓|arrow\s+keys?|enter\s+(?:to\s+)?(?:select|confirm|submit)|ctrl\+\]\s*skip|main\s+prompt|to\s+navigate|\bAllow\b|\bDeny\b|\d+\.\s+)/i.test(
+          combinedTail
+        );
+      const hasQuestionnaire =
+        /Question\s+\d+\s*(?:\/|of)\s*\d+/i.test(combinedTail) ||
+        /(?:^|\n)\s*[>›❯]\s*\d+\.\s+[^\n]+[\s\S]*?(?:enter\s+(?:to\s+)?submit|ctrl\+\]\s*skip|shift\s*[+-]\s*→\s*main\s*prompt)/i.test(
+          combinedTail
+        );
+      const hasQueuedFollowup =
+        /(?:Queued\s+follow-up\s+inputs?|shift\s*[+-]\s*(?:←|→|<[-–]|left|right)\s+to\s+answer|(?:\?|\b)\s*\d+\s+questions?\b[\s\S]*?to\s+answer|enter\s+submit|ctrl\+\]\s*skip|shift\s*[+-]\s*→\s*main\s*prompt)/i.test(
+          combinedTail
+        );
+      const hasBulletListOptions =
+        /(?:^|\n)\s*[•*·-]?\s*[¿]?[^\n]+\?\s*\n(?:\s*[•*·-]\s+[^\n]+\n?){2,}/.test(combinedTail);
 
       if (
         hasBracketConfirm ||
         hasProceedConfirm ||
         hasOptionConfirm ||
         hasBulletOption ||
+        hasBulletListOptions ||
         hasToolApproval ||
         hasPlanConfirm ||
         hasArrowMenu ||
         hasQuestionnaire ||
+        hasQueuedFollowup ||
         promptResult.kind === 'confirmation' ||
         promptResult.kind === 'choice' ||
         promptResult.kind === 'question'
@@ -105,7 +121,12 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         if (!promptResult.promptLine) {
           for (let i = nonEmptyLines.length - 1; i >= 0; i--) {
             const l = nonEmptyLines[i].trim();
-            if (/\[[yY]\/[nN]\]|proceed|confirm|option|Allow|Deny|plan|Question/i.test(l) || l.startsWith('-') || l.startsWith('❯')) {
+            if (
+              /\[[yY]\/[nN]\]|proceed|confirm|option|Allow|Deny|plan|Question|shift.*answer|queued.*input|enter.*submit|ctrl\+\]/i.test(l) ||
+              l.startsWith('-') ||
+              l.startsWith('❯') ||
+              l.startsWith('›')
+            ) {
               promptLine = l;
               break;
             }
@@ -124,6 +145,7 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
       // B. WORKING: Active working indicator, 'esc to interrupt', Braille spinner, reasoning, or active progress
       // Matches:
       // - • Working (1m 02s • esc to interrupt)
+      // - Working (30s • esc to interrupt)
       // - Working (30s)
       // - esc to interrupt / ctrl+c to cancel
       // - • Thinking, • Searching, • Running, • Reasoning, • Exploring, • Reading
@@ -135,7 +157,7 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
       const hasReasoningHeader = /(?:^|\n)\s*(?:[┌╭•*·-]\s*|\b)(?:Reasoning|Thinking)\b[^\n]*/i.test(combinedTail);
       const hasCodexIdlePrompt =
         /(?:^[>›❯]\s*(?:Ask (?:Codex|anything)|Type|Send|What would you like|$)|Ask Codex to do anything)/im.test(combinedTail);
-      const activeStatusPattern = /^\s*•\s*[^\n]*\besc\s+to\s+interrupt\b/i;
+      const activeStatusPattern = /^\s*(?:•|Working\b)[^\n]*\besc\s+to\s+interrupt\b/i;
       const completionPattern = /(?:^\s*─\s+Worked for\b|Worked for \d+(?:\.\d+)?(?:s|m|h))/i;
       const lastActiveStatusIndex = [...recentLines].reverse().findIndex((line) => activeStatusPattern.test(line));
       const lastCompletionIndex = [...recentLines].reverse().findIndex((line) => completionPattern.test(line));
@@ -188,11 +210,14 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         };
       }
 
-      // C. IDLE: Ready prompt (e.g. › Ask Codex to do anything) when NOT working
+      // C. IDLE: Ready prompt (e.g. › Ask Codex to do anything) when NOT working and NOT waiting for queued input
       if (
-        ((hasCodexIdlePrompt || hasRecentCompletion) && !hasActiveWorkingStatus) ||
-        promptResult.kind === 'idle_prompt' ||
-        promptResult.kind === 'shell_prompt'
+        !hasQueuedFollowup &&
+        !hasActiveWorkingStatus &&
+        (hasCodexIdlePrompt ||
+          hasRecentCompletion ||
+          promptResult.kind === 'idle_prompt' ||
+          promptResult.kind === 'shell_prompt')
       ) {
         return {
           status: 'idle',

@@ -455,4 +455,124 @@ describe('CodexStatusAdapter', () => {
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
   });
+
+  it('detects NEEDS_INPUT when Codex v0.160+ has queued follow-up questions awaiting shift+← to answer', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-muvnc5uv-e0wc',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        '',
+        '  >_ OpenAI Codex (v0.160.0)',
+        '     /mnt/data4/matt/code/growth/agents',
+        '',
+        '  Greetings, fellow tinkerer.',
+        '',
+        '',
+        '› para hacer un test, neceisto que me hagas una pregunta. y esperes la respuesta. aca en codex hay q apretar shift-left para responder',
+        '',
+        '',
+        '• ¿Qué color prefieres para esta prueba?',
+        '',
+        '  • Azul',
+        '  • Verde',
+        '  • Rojo',
+        '',
+        'Working (19s • esc to interrupt)',
+        '',
+        '• Queued follow-up inputs',
+        '  ? 1 question · 14s',
+        '    shift+← to answer',
+        '',
+        '',
+        '› Ask Codex to do anything',
+        '',
+        '  GPT-6.1-Sol low · weekly 60% left · 258K window · 24.6K used · Fast off · Context 95% left · 24.6K in · 44 out · 0.160.0 · agents',
+        '  ← for agents · ? for shortcuts                                                                                                                                                                                                           ⚠ 1 warning · f2 to view',
+        '',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toMatch(/shift\+← to answer|\? 1 question|Queued follow-up/i);
+  });
+
+  it('detects NEEDS_INPUT for queued follow-up inputs with shift-left variation', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-123',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Working (10s • esc to interrupt)',
+        '• Queued follow-up inputs',
+        '  ? 1 question · 5s',
+        '    shift-left to answer',
+        '› Ask Codex to do anything',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('detects NEEDS_INPUT when Codex v0.160+ question is opened via shift-left with option menu and footer', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-muvnc5uv-e0wc',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        '',
+        '  >_ OpenAI Codex (v0.160.0)',
+        '     /mnt/data4/matt/code/growth/agents',
+        '',
+        '  Greetings, fellow tinkerer.',
+        '',
+        '',
+        '› para hacer un test, neceisto que me hagas una pregunta. y esperes la respuesta. aca en codex hay q apretar shift-left para responder',
+        '',
+        '',
+        '• ¿Qué color prefieres para esta prueba?',
+        '',
+        '  • Azul',
+        '  • Verde',
+        '  • Rojo',
+        '',
+        'Working (1m 08s • esc to interrupt)',
+        '',
+        '• Queued follow-up inputs',
+        '',
+        '',
+        '  ¿Qué color prefieres para esta prueba?',
+        '',
+        '  › 1. Azul',
+        '    2. Verde',
+        '    3. Rojo',
+        '    4. Other',
+        '',
+        '  enter submit   ctrl+] skip   shift+→ main prompt',
+        '',
+        '',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toMatch(/Azul|submit|Queued follow-up/i);
+  });
 });
