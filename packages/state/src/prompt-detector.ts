@@ -53,16 +53,31 @@ export function detectPromptInTail(
   // Combine up to the last 15 lines so multi-line option menus and questions are fully visible
   const inspectionLinesCount = options.tailLinesCount || 15;
   const recentLines = nonEmptyLines.slice(-inspectionLinesCount);
-  const lastLine = recentLines[recentLines.length - 1];
-  const combinedTail = recentLines.join('\n');
+
+  // Filter rules by harness if specified (keep rules that match this harness or generic rules)
+  const targetHarness = options.harness?.toLowerCase() === 'agy' ? 'antigravity' : options.harness?.toLowerCase();
+
+  // For Codex, if a completion marker ('Worked for ...') is present in the tail,
+  // ignore historical prompts that occurred before the completion marker.
+  let effectiveTailLines = recentLines;
+  if (targetHarness === 'codex') {
+    const completionPattern = /(?:^\s*─\s+Worked for\b|Worked for \d+(?:\.\d+)?(?:s|m|h))/i;
+    const lastCompIdx = [...recentLines].reverse().findIndex((l) => completionPattern.test(l));
+    if (lastCompIdx !== -1) {
+      const compIdx = recentLines.length - 1 - lastCompIdx;
+      const linesAfter = recentLines.slice(compIdx + 1);
+      effectiveTailLines = linesAfter.length > 0 ? linesAfter : [recentLines[compIdx]];
+    }
+  }
+
+  const lastLine = effectiveTailLines[effectiveTailLines.length - 1];
+  const combinedTail = effectiveTailLines.join('\n');
 
   const rules: PatternRule[] = [
     ...(options.customRules || []),
     ...DEFAULT_PATTERN_RULES,
   ];
 
-  // Filter rules by harness if specified (keep rules that match this harness or generic rules)
-  const targetHarness = options.harness?.toLowerCase() === 'agy' ? 'antigravity' : options.harness?.toLowerCase();
   const applicableRules = rules.filter((rule) => {
     if (!rule.harness) return true;
     if (!targetHarness) return true;
@@ -88,11 +103,24 @@ export function detectPromptInTail(
       if (reg.test(combinedTail) || reg.test(lastLine)) {
         // Find best representative prompt line
         let promptLine = lastLine.trim();
-        for (let i = recentLines.length - 1; i >= 0; i--) {
-          const line = recentLines[i].trim();
+        for (let i = effectiveTailLines.length - 1; i >= 0; i--) {
+          const line = effectiveTailLines[i].trim();
+          if (rule.id === 'codex-questionnaire') {
+            if (line.startsWith('Question')) {
+              promptLine = line;
+              break;
+            }
+            continue;
+          }
           if (
             reg.test(line) ||
-            (category === 'choice' && (line.startsWith('Question') || line.startsWith('>') || line.startsWith('1.'))) ||
+            (category === 'choice' && (
+              line.startsWith('Question') ||
+              (line.startsWith('>') && !line.startsWith('>_')) ||
+              line.startsWith('›') ||
+              line.startsWith('❯') ||
+              line.startsWith('1.')
+            )) ||
             (category === 'question' && (
               line.startsWith('?') ||
               line.endsWith('?') ||

@@ -197,6 +197,217 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('codex-idle-prompt');
   });
 
+  it('detects modern Codex tool approval prompt (Allow / Deny)', () => {
+    const tail = [
+      'Codex wants to execute bash command:',
+      '  git push origin main',
+      '❯ 1. Allow once',
+      '  2. Always allow',
+      '  3. Deny',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('confirmation');
+    expect(res.matchedRuleId).toBe('codex-tool-approval');
+  });
+
+  it('detects modern Codex interactive arrow selection menu with ❯', () => {
+    const tail = [
+      'Choose an option:',
+      '❯ 1. First approach',
+      '  2. Second approach',
+      '↑/↓ to navigate · Enter to select',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('choice');
+    expect(res.matchedRuleId).toBe('codex-arrow-selection');
+  });
+
+  it('detects modern Codex CLI Braille spinner as active working', () => {
+    const tail = [
+      'Resolving files...',
+      '⠋ Thinking... (12s)',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(false);
+    expect(res.kind).toBe('working');
+    expect(res.matchedRuleId).toBe('codex-working-spinner');
+  });
+
+  it('detects modern Codex reasoning header as active working', () => {
+    const tail = [
+      '┌ Reasoning ───────────────────────────────',
+      'Thinking through the implementation steps...',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(false);
+    expect(res.kind).toBe('working');
+    expect(res.matchedRuleId).toBe('codex-working-reasoning');
+  });
+
+  it('detects modern Codex plan confirmation', () => {
+    const tail = [
+      'Review the migration plan above.',
+      'Do you want to proceed with this plan?',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('confirmation');
+    expect(res.matchedRuleId).toBe('codex-plan-confirmation');
+  });
+
+  it('detects modern Codex idle input prompt with ❯ and Ask anything', () => {
+    const tail = [
+      'Done!',
+      '❯ Ask anything, or type / for commands',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('codex-idle-prompt');
+  });
+
+  it('detects modern Codex v0.160+ queued follow-up question requiring shift+← to answer', () => {
+    const tail = [
+      '• Which color do you prefer for this test?',
+      '',
+      '  • Blue',
+      '  • Green',
+      '  • Red',
+      '',
+      'Working (19s • esc to interrupt)',
+      '',
+      '• Queued follow-up inputs',
+      '  ? 1 question · 14s',
+      '    shift+← to answer',
+      '',
+      '› Ask Codex to do anything',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('codex-queued-followup');
+    expect(res.promptLine).toMatch(/shift\+← to answer|\? 1 question/);
+  });
+
+  it('detects modern Codex queued follow-up with shift-left to answer variation', () => {
+    const tail = [
+      '• Queued follow-up inputs',
+      '  ? 2 questions · 5s',
+      '    shift-left to answer',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('codex-queued-followup');
+  });
+
+  it('detects modern Codex queued follow-up with multiple questions and minute/hour durations', () => {
+    const tailMinutes = [
+      '• Queued follow-up inputs',
+      '  ? 3 questions · 4m 12s',
+      '    shift+← to answer',
+    ];
+    const resMin = detectPromptInTail(tailMinutes, { harness: 'codex' });
+    expect(resMin.isPrompt).toBe(true);
+    expect(resMin.kind).toBe('question');
+    expect(resMin.matchedRuleId).toBe('codex-queued-followup');
+
+    const tailHours = [
+      '• Queued follow-up inputs',
+      '  ? 2 questions · 1h 30m',
+      '    shift+← to answer',
+    ];
+    const resHr = detectPromptInTail(tailHours, { harness: 'codex' });
+    expect(resHr.isPrompt).toBe(true);
+    expect(resHr.kind).toBe('question');
+    expect(resHr.matchedRuleId).toBe('codex-queued-followup');
+  });
+
+  it('detects modern Codex question with bullet options', () => {
+    const tail = [
+      '• Which deployment target would you prefer?',
+      '  • Staging',
+      '  • Production',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('codex-question-bullet-options');
+  });
+
+  it('detects modern Codex v0.160+ open questionnaire menu after pressing shift-left', () => {
+    const tail = [
+      'Working (1m 08s • esc to interrupt)',
+      '• Queued follow-up inputs',
+      '',
+      '  Which color do you prefer for this test?',
+      '',
+      '  › 1. Blue',
+      '    2. Green',
+      '    3. Red',
+      '    4. Other',
+      '',
+      '  enter submit   ctrl+] skip   shift+→ main prompt',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('choice');
+    expect(res.matchedRuleId).toBe('codex-questionnaire-menu');
+  });
+
+  it('detects modern Codex queued question with no time suffix', () => {
+    const tail = [
+      '• Queued follow-up inputs',
+      '  ? 4 questions',
+      '    shift+← to answer',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('codex-queued-followup');
+  });
+
+  it('detects modern Codex queued question with ascii arrow shift+<- to answer', () => {
+    const tail = [
+      '• Queued follow-up inputs',
+      '  ? 1 question · 10s',
+      '    shift+<- to answer',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('codex-queued-followup');
+  });
+
+  it('detects modern Codex questionnaire when option 2 or 3 is selected', () => {
+    const tail = [
+      '• Queued follow-up inputs',
+      '  Which architecture pattern to use?',
+      '    1. Monolith',
+      '  › 2. Microservices',
+      '    3. Modular Monolith',
+      '  enter submit   ctrl+] skip   shift+→ main prompt',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('choice');
+    expect(res.matchedRuleId).toBe('codex-questionnaire-menu');
+    expect(res.promptLine).toContain('Microservices');
+  });
+
+  it('detects modern Hermes idle input prompt with ❯ and Ask anything', () => {
+    const tail = [
+      'All changes applied.',
+      '❯ Ask anything, or type / for commands…',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'hermes' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('hermes-idle-prompt');
+  });
+
   it('detects command execution errors in terminal tail', () => {
     const tail = [
       'Running pnpm test...',

@@ -288,4 +288,19 @@ describe('StateDetector', () => {
     expect(res.source).toBe('terminal_prompt');
   });
 
+  it('reports idle for background sessions (isPtyAttached: false) with live tmux session and healthy process', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'bash',
+      tailLines: [],
+    };
+    const res = detector.detectStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('disconnected');
+  });
 });

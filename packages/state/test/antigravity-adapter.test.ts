@@ -271,4 +271,21 @@ describe('AntigravityStatusAdapter', () => {
     expect(res.source).toBe('tmux');
   });
 
+  it('reports idle for background Antigravity session (isPtyAttached: false) with live tmux session', () => {
+    const signals: SessionSignals = {
+      sessionId: 'antigravity-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'agy',
+      lastOutputAt: new Date(Date.now() - 12000),
+      tailLines: [],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('disconnected');
+    expect(res.source).toBe('tmux');
+  });
 });

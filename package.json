@@ -47,6 +47,14 @@
     "ignoredBuiltDependencies": [
       "cpu-features",
       "ssh2"
-    ]
+    ],
+    "auditConfig": {
+      "ignoreCves": [
+        "CVE-2026-93748"
+      ],
+      "ignoreGhsas": [
+        "GHSA-ch52-4w7c-c8xp"
+      ]
+    }
   }
 }

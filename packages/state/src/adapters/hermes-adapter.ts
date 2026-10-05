@@ -247,12 +247,10 @@ export class HermesStatusAdapter implements HarnessStatusAdapter {
     }
 
     return {
-      status: signals.isPtyAttached ? 'idle' : 'disconnected',
+      status: 'idle',
       confidence: 0.65,
       source: 'tmux',
-      reason: signals.isPtyAttached
-        ? 'Hermes session is quiet and waiting for input'
-        : 'Hermes session is detached',
+      reason: 'Hermes session is quiet and waiting for input',
       updatedAt: new Date(),
     };
   }
