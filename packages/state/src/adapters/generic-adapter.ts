@@ -90,7 +90,7 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
 
       if (promptResult.kind === 'working') {
         return {
-          status: signals.isPtyAttached ? 'working' : 'disconnected',
+          status: 'working',
           confidence: promptResult.confidence ?? 0.9,
           source: 'terminal_prompt',
           detectedPrompt: promptResult.promptLine,
@@ -101,7 +101,7 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
 
       if (promptResult.kind === 'idle_prompt' || promptResult.kind === 'shell_prompt') {
         return {
-          status: signals.isPtyAttached ? 'idle' : 'disconnected',
+          status: 'idle',
           confidence: promptResult.confidence ?? 0.9,
           source: 'terminal_prompt',
           detectedPrompt: promptResult.promptLine,
@@ -127,7 +127,7 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
     const isActivelyStreaming =
       signals.lastOutputAt !== undefined && msSinceOutput <= activeOutputWindowMs;
 
-    if (isActivelyStreaming && signals.isPtyAttached) {
+    if (isActivelyStreaming) {
       return {
         status: 'working',
         confidence: 0.75,
@@ -143,7 +143,7 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
 
     if (isShell) {
       return {
-        status: signals.isPtyAttached ? 'idle' : 'disconnected',
+        status: 'idle',
         confidence: 0.7,
         source: 'tmux',
         reason: `Shell '${signals.paneCurrentCommand}' is active at prompt`,
@@ -153,7 +153,7 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
 
     if (cmd && !isShell) {
       return {
-        status: signals.isPtyAttached ? 'working' : 'disconnected',
+        status: 'working',
         confidence: 0.65,
         source: 'process',
         reason: `Agent command '${signals.paneCurrentCommand}' is actively executing`,
@@ -163,10 +163,10 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
 
     // 8. Fallback for unattached / quiet existing session
     return {
-      status: signals.isPtyAttached ? 'idle' : 'disconnected',
+      status: 'idle',
       confidence: 0.5,
       source: 'tmux',
-      reason: signals.isPtyAttached ? 'Session is attached and quiet' : 'Session is detached',
+      reason: 'Session is quiet and waiting for input',
       updatedAt: new Date(),
     };
   }

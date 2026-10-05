@@ -485,4 +485,106 @@ describe('HermesStatusAdapter', () => {
     expect(res.source).toBe('tmux');
   });
 
+  it('reports idle for background Hermes session (isPtyAttached: false) during supervisor poll with live tmux session', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 15000), // quiet in background
+      tailLines: ['Unstructured build or agent output...'],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('disconnected');
+    expect(res.source).toBe('tmux');
+  });
+
+  it('prevents Hermes status flapping between idle and disconnected across tab switches and background polling', () => {
+    const baseSignals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      tailLines: [
+        ' ⚕ gpt-5.6-sol │ 112K/272K │ ✓ 0s',
+        '❯ Ask anything, or type / for commands…',
+      ],
+    };
+
+    // Tab active
+    const activeRes = adapter.evaluateStatus(baseSignals);
+    expect(activeRes.status).toBe('idle');
+
+    // Tab unselected (TerminalView detaches PTY -> isPtyAttached: false)
+    const backgroundRes1 = adapter.evaluateStatus({
+      ...baseSignals,
+      isPtyAttached: false,
+    });
+    expect(backgroundRes1.status).toBe('idle');
+    expect(backgroundRes1.status).not.toBe('disconnected');
+
+    // Next supervisor poll (10s later, output scrolled / quiet)
+    const backgroundRes2 = adapter.evaluateStatus({
+      ...baseSignals,
+      isPtyAttached: false,
+      tailLines: ['General background output...'],
+    });
+    expect(backgroundRes2.status).toBe('idle');
+    expect(backgroundRes2.status).not.toBe('disconnected');
+
+    // Tab re-selected (attachSession reconnects PTY)
+    const reattachedRes = adapter.evaluateStatus({
+      ...baseSignals,
+      isPtyAttached: true,
+    });
+    expect(reattachedRes.status).toBe('idle');
+  });
+
+  it('detects idle when Hermes displays modern prompt bar without metrics checkmark line', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'python3',
+      tailLines: [
+        'Finished running tool cleanly.',
+        '❯ Ask anything, or type / for commands…',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('continues to report disconnected when host is unreachable regardless of isPtyAttached', () => {
+    const attachedUnreachable = adapter.evaluateStatus({
+      sessionId: 'hermes-1',
+      hostReachable: false,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+    });
+    expect(attachedUnreachable.status).toBe('disconnected');
+
+    const detachedUnreachable = adapter.evaluateStatus({
+      sessionId: 'hermes-1',
+      hostReachable: false,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+    });
+    expect(detachedUnreachable.status).toBe('disconnected');
+  });
 });

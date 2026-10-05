@@ -197,6 +197,88 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('codex-idle-prompt');
   });
 
+  it('detects modern Codex tool approval prompt (Allow / Deny)', () => {
+    const tail = [
+      'Codex wants to execute bash command:',
+      '  git push origin main',
+      '❯ 1. Allow once',
+      '  2. Always allow',
+      '  3. Deny',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('confirmation');
+    expect(res.matchedRuleId).toBe('codex-tool-approval');
+  });
+
+  it('detects modern Codex interactive arrow selection menu with ❯', () => {
+    const tail = [
+      'Choose an option:',
+      '❯ 1. First approach',
+      '  2. Second approach',
+      '↑/↓ to navigate · Enter to select',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('choice');
+    expect(res.matchedRuleId).toBe('codex-arrow-selection');
+  });
+
+  it('detects modern Codex CLI Braille spinner as active working', () => {
+    const tail = [
+      'Resolving files...',
+      '⠋ Thinking... (12s)',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(false);
+    expect(res.kind).toBe('working');
+    expect(res.matchedRuleId).toBe('codex-working-spinner');
+  });
+
+  it('detects modern Codex reasoning header as active working', () => {
+    const tail = [
+      '┌ Reasoning ───────────────────────────────',
+      'Thinking through the implementation steps...',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(false);
+    expect(res.kind).toBe('working');
+    expect(res.matchedRuleId).toBe('codex-working-reasoning');
+  });
+
+  it('detects modern Codex plan confirmation', () => {
+    const tail = [
+      'Review the migration plan above.',
+      'Do you want to proceed with this plan?',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('confirmation');
+    expect(res.matchedRuleId).toBe('codex-plan-confirmation');
+  });
+
+  it('detects modern Codex idle input prompt with ❯ and Ask anything', () => {
+    const tail = [
+      'Done!',
+      '❯ Ask anything, or type / for commands',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'codex' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('codex-idle-prompt');
+  });
+
+  it('detects modern Hermes idle input prompt with ❯ and Ask anything', () => {
+    const tail = [
+      'All changes applied.',
+      '❯ Ask anything, or type / for commands…',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'hermes' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('hermes-idle-prompt');
+  });
+
   it('detects command execution errors in terminal tail', () => {
     const tail = [
       'Running pnpm test...',

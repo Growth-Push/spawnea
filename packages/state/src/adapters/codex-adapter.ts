@@ -78,17 +78,25 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         tailLinesCount: 20,
       });
 
-      // A. NEEDS_INPUT: Interactive user prompt (e.g. [y/N], option choice, confirmation)
+      // A. NEEDS_INPUT: Interactive user prompt (e.g. [y/N], option choice, confirmation, tool approval, questionnaire)
       const hasBracketConfirm = /\[[yY]\/[nN]\]|\([yY]\/[nN]\)|\[yes\/no\]|\(yes\/no\)/i.test(combinedTail);
       const hasProceedConfirm = /(?:do you want to (?:continue|proceed|run|execute|apply)|proceed\?|confirm\?)/i.test(combinedTail);
       const hasOptionConfirm = /(?:Please confirm one option|Which should I proceed with|Choose one of the following)/i.test(combinedTail);
       const hasBulletOption = /-\s+[A-Z]:\s+[^\n]+\n\s*-\s+[A-Z]:/i.test(combinedTail);
+      const hasToolApproval = /(?:Allow\s*\/\s*Deny|\[A\]llow\s*\/\s*\[D\]eny|❯\s*(?:Allow|Deny)|\bAllow\b[\s\S]*?\bDeny\b|tool\s+approval|approval\s+required|requesting\s+permission|permission\s+request)/i.test(combinedTail);
+      const hasPlanConfirm = /(?:approve|confirm|proceed\s+with|accept|apply)\s+(?:the\s+|this\s+)?plan\b/i.test(combinedTail);
+      const hasArrowMenu = /(?:^|\n)\s*❯\s+[^\n]+/i.test(combinedTail) && /(?:↑\/↓|arrow\s+keys?|enter\s+to\s+(?:select|confirm|submit)|to\s+navigate|\bAllow\b|\bDeny\b|\d+\.\s+)/i.test(combinedTail);
+      const hasQuestionnaire = /Question\s+\d+\s*(?:\/|of)\s*\d+/i.test(combinedTail);
 
       if (
         hasBracketConfirm ||
         hasProceedConfirm ||
         hasOptionConfirm ||
         hasBulletOption ||
+        hasToolApproval ||
+        hasPlanConfirm ||
+        hasArrowMenu ||
+        hasQuestionnaire ||
         promptResult.kind === 'confirmation' ||
         promptResult.kind === 'choice' ||
         promptResult.kind === 'question'
@@ -97,7 +105,7 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         if (!promptResult.promptLine) {
           for (let i = nonEmptyLines.length - 1; i >= 0; i--) {
             const l = nonEmptyLines[i].trim();
-            if (/\[[yY]\/[nN]\]|proceed|confirm|option/i.test(l) || l.startsWith('-')) {
+            if (/\[[yY]\/[nN]\]|proceed|confirm|option|Allow|Deny|plan|Question/i.test(l) || l.startsWith('-') || l.startsWith('❯')) {
               promptLine = l;
               break;
             }
@@ -113,20 +121,22 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         };
       }
 
-      // B. WORKING: Active working indicator, 'esc to interrupt', Braille spinner, or active progress
+      // B. WORKING: Active working indicator, 'esc to interrupt', Braille spinner, reasoning, or active progress
       // Matches:
       // - • Working (1m 02s • esc to interrupt)
       // - Working (30s)
-      // - esc to interrupt
-      // - • Thinking, • Searching, • Running
-      // - Braille spinner ([\u2800-\u28FF])
-      // - Progress verbs (generating, reading file, etc.)
+      // - esc to interrupt / ctrl+c to cancel
+      // - • Thinking, • Searching, • Running, • Reasoning, • Exploring, • Reading
+      // - Braille / CLI spinners (⠋, ⠙, ⠹, etc. or [\u2800-\u28FF])
+      // - Active reasoning headers (┌ Reasoning, Thinking..., etc.)
       const hasWorkingStatus = /(?:^|\n)\s*[•*·-]?\s*Working\b[^\n]*/i.test(combinedTail);
-      const hasBrailleSpinner = /[\u2800-\u28FF]/.test(combinedTail);
-      const hasActiveProgressBullets = /(?:^|\n)\s*•\s*(?:Working|Thinking|Searching|Running|Executing)\b[^\n]*/i.test(combinedTail);
-      const hasCodexIdlePrompt = /[>›]?\s*Ask Codex to do anything/i.test(combinedTail);
+      const hasBrailleSpinner = /(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|[\u2800-\u28FF])/.test(combinedTail);
+      const hasActiveProgressBullets = /(?:^|\n)\s*•\s*(?:Working|Thinking|Reasoning|Searching|Running|Executing|Exploring|Reading)\b[^\n]*/i.test(combinedTail);
+      const hasReasoningHeader = /(?:^|\n)\s*(?:[┌╭•*·-]\s*|\b)(?:Reasoning|Thinking)\b[^\n]*/i.test(combinedTail);
+      const hasCodexIdlePrompt =
+        /(?:^[>›❯]\s*(?:Ask (?:Codex|anything)|Type|Send|What would you like|$)|Ask Codex to do anything)/im.test(combinedTail);
       const activeStatusPattern = /^\s*•\s*[^\n]*\besc\s+to\s+interrupt\b/i;
-      const completionPattern = /^\s*─\s+Worked for\b.*─+\s*$/i;
+      const completionPattern = /(?:^\s*─\s+Worked for\b|Worked for \d+(?:\.\d+)?(?:s|m|h))/i;
       const lastActiveStatusIndex = [...recentLines].reverse().findIndex((line) => activeStatusPattern.test(line));
       const lastCompletionIndex = [...recentLines].reverse().findIndex((line) => completionPattern.test(line));
       const activeStatusIndex = lastActiveStatusIndex === -1 ? -1 : recentLines.length - 1 - lastActiveStatusIndex;
@@ -135,7 +145,7 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
       const hasInterruptFooter = activeStatusIndex >= 0 && !hasRecentCompletion;
 
       // Codex keeps the ready prompt visible while showing the transcript from
-      // the previous turn. A historical "Working" line must not keep the
+      // the previous turn. A historical "Working" or "Reasoning" line must not keep the
       // session marked as working after Codex has returned to the input bar.
       // The interrupt footer/spinner are the stronger indicators that the
       // current turn is still active.
@@ -143,21 +153,26 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         !hasRecentCompletion &&
         (hasInterruptFooter ||
           hasBrailleSpinner ||
-          ((!hasCodexIdlePrompt) && (hasWorkingStatus || hasActiveProgressBullets)));
-      const idlePromptLine = [...nonEmptyLines].reverse().find((line) => /[>›]?\s*Ask Codex to do anything/i.test(line));
+          ((!hasCodexIdlePrompt) && (hasWorkingStatus || hasActiveProgressBullets || hasReasoningHeader)));
+      const idlePromptLine = [...nonEmptyLines].reverse().find((line) =>
+        /(?:^[>›❯]\s*(?:Ask (?:Codex|anything)|Type|Send|What would you like|$)|Ask Codex to do anything)/i.test(line)
+      );
 
       if (
         hasActiveWorkingStatus ||
         hasInterruptFooter ||
         hasBrailleSpinner ||
-        (hasActiveProgressBullets && !hasCodexIdlePrompt) ||
+        ((hasActiveProgressBullets || hasReasoningHeader) && !hasCodexIdlePrompt) ||
         (promptResult.kind === 'working' && !hasCodexIdlePrompt)
       ) {
         let promptLine = promptResult.promptLine || 'Working...';
         if (!promptResult.promptLine || promptResult.kind !== 'working') {
           for (let i = nonEmptyLines.length - 1; i >= 0; i--) {
             const l = nonEmptyLines[i].trim();
-            if (/Working\b|esc to interrupt|Thinking\b|Running\b|Searching\b/i.test(l) || /[\u2800-\u28FF]/.test(l)) {
+            if (
+              /Working\b|esc to interrupt|ctrl\+c|Thinking\b|Reasoning\b|Running\b|Searching\b/i.test(l) ||
+              /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|[\u2800-\u28FF]/.test(l)
+            ) {
               promptLine = l;
               break;
             }
@@ -231,21 +246,22 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
       };
     }
 
-    if (cmd && !isShell) {
+    const isHarness = cmd === 'codex' || cmd === 'codex-cli' || cmd === 'node';
+    if (cmd && !isShell && !isHarness) {
       return {
         status: 'working',
         confidence: 0.65,
         source: 'process',
-        reason: `Codex process '${signals.paneCurrentCommand}' is executing`,
+        reason: `Subcommand '${signals.paneCurrentCommand}' is executing`,
         updatedAt: new Date(),
       };
     }
 
     return {
-      status: signals.isPtyAttached ? 'idle' : 'disconnected',
+      status: 'idle',
       confidence: 0.5,
       source: 'tmux',
-      reason: signals.isPtyAttached ? 'Session is attached and quiet' : 'Session is detached',
+      reason: 'Codex session is quiet and waiting for input',
       updatedAt: new Date(),
     };
   }

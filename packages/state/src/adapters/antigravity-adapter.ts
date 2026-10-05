@@ -198,12 +198,10 @@ export class AntigravityStatusAdapter implements HarnessStatusAdapter {
     }
 
     return {
-      status: signals.isPtyAttached ? 'idle' : 'disconnected',
+      status: 'idle',
       confidence: 0.65,
       source: 'tmux',
-      reason: signals.isPtyAttached
-        ? 'Antigravity session is quiet and waiting for input'
-        : 'Antigravity session is detached',
+      reason: 'Antigravity session is quiet and waiting for input',
       updatedAt: new Date(),
     };
   }

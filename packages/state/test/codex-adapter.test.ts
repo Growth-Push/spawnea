@@ -260,4 +260,199 @@ describe('CodexStatusAdapter', () => {
     expect(res.status).toBe('disconnected');
     expect(res.confidence).toBe(1.0);
   });
+
+  it('reports IDLE for background session when unselected in UI (isPtyAttached: false) with live tmux session', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-abc',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines: ['Unstructured history output from previous build...'],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.status).not.toBe('disconnected');
+    expect(res.source).toBe('tmux');
+  });
+
+  it('prevents status flapping between IDLE and DISCONNECTED when switching tabs (isPtyAttached true -> false -> true)', () => {
+    const baseSignals: SessionSignals = {
+      sessionId: 'sess-abc',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        '─ Worked for 1m 05s ─────────────────────────────',
+        '❯ Ask anything, or type / for commands',
+      ],
+    };
+
+    // Tab selected (active)
+    const activeRes = adapter.evaluateStatus(baseSignals);
+    expect(activeRes.status).toBe('idle');
+
+    // Tab unselected (background polling, isPtyAttached: false)
+    const backgroundRes1 = adapter.evaluateStatus({
+      ...baseSignals,
+      isPtyAttached: false,
+    });
+    expect(backgroundRes1.status).toBe('idle');
+    expect(backgroundRes1.status).not.toBe('disconnected');
+
+    // 10s supervisor poll in background with quiet unstructured output
+    const backgroundRes2 = adapter.evaluateStatus({
+      ...baseSignals,
+      isPtyAttached: false,
+      tailLines: ['Some quiet log output without recognized prompt'],
+    });
+    expect(backgroundRes2.status).toBe('idle');
+    expect(backgroundRes2.status).not.toBe('disconnected');
+
+    // Tab reselected (PTY re-attached)
+    const reconnectedRes = adapter.evaluateStatus({
+      ...baseSignals,
+      isPtyAttached: true,
+    });
+    expect(reconnectedRes.status).toBe('idle');
+  });
+
+  it('detects WORKING for modern Codex CLI (v0.160+) with Braille spinner', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-abc',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Inspecting source files...',
+        '⠋ Thinking... (12s)',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toContain('Thinking');
+  });
+
+  it('detects WORKING for modern Codex CLI (v0.160+) active reasoning blocks', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-abc',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        '┌ Reasoning ───────────────────────────────',
+        '• Searching codebase for prompt patterns (4s)',
+        '• Analyzing token consumption and output buffer',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('detects NEEDS_INPUT for modern Codex tool approval (Allow / Deny)', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-abc',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Approval required: Codex wants to execute the following command:',
+        '  git push origin main',
+        '',
+        '❯ 1. Allow once',
+        '  2. Always allow for this session',
+        '  3. Deny',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toMatch(/Allow|Approval/i);
+  });
+
+  it('detects NEEDS_INPUT for modern Codex interactive questionnaires with ❯ arrow selector', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-abc',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Select an integration strategy:',
+        '❯ 1. Clean worktree branch (Recommended)',
+        '  2. Rebase onto current HEAD',
+        '  3. Abort integration',
+        '↑/↓ to navigate · Enter to select',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('detects NEEDS_INPUT for modern Codex plan confirmation', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-abc',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        'Please review the proposed plan above.',
+        'Do you want to proceed with this plan?',
+        '❯ Approve plan',
+        '  Reject plan',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('detects IDLE for modern Codex CLI (v0.160+) idle input bar', () => {
+    const signals: SessionSignals = {
+      sessionId: 'sess-abc',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines: [
+        '─ Worked for 45s ─────────────────────────────',
+        '',
+        '❯ Ask anything, or type / for commands',
+      ],
+    };
+
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('idle');
+    expect(res.source).toBe('terminal_prompt');
+  });
 });
