@@ -4,6 +4,7 @@ import { CodexStatusAdapter } from '../src/adapters/codex-adapter.js';
 import { HermesStatusAdapter } from '../src/adapters/hermes-adapter.js';
 import { AntigravityStatusAdapter } from '../src/adapters/antigravity-adapter.js';
 import { GenericStatusAdapter } from '../src/adapters/generic-adapter.js';
+import { GrokStatusAdapter } from '../src/adapters/grok-adapter.js';
 
 describe('HarnessStatusAdapterRegistry', () => {
   const registry = new HarnessStatusAdapterRegistry();
@@ -40,6 +41,12 @@ describe('HarnessStatusAdapterRegistry', () => {
     const adapter3 = registry.getAdapter('gemini-cli');
     expect(adapter3).toBeInstanceOf(AntigravityStatusAdapter);
     expect(adapter3.harnessId).toBe('antigravity');
+  });
+
+  it('resolves GrokStatusAdapter for the grok harness', () => {
+    const adapter = registry.getAdapter('grok');
+    expect(adapter).toBeInstanceOf(GrokStatusAdapter);
+    expect(adapter.harnessId).toBe('grok');
   });
 
   it('resolves GenericStatusAdapter for unknown or undefined harnesses', () => {

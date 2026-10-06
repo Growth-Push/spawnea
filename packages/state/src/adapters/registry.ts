@@ -3,6 +3,7 @@ import { GenericStatusAdapter } from './generic-adapter.js';
 import { CodexStatusAdapter } from './codex-adapter.js';
 import { HermesStatusAdapter } from './hermes-adapter.js';
 import { AntigravityStatusAdapter } from './antigravity-adapter.js';
+import { GrokStatusAdapter } from './grok-adapter.js';
 
 export class HarnessStatusAdapterRegistry {
   private readonly adapters: Map<string, HarnessStatusAdapter> = new Map();
@@ -20,6 +21,7 @@ export class HarnessStatusAdapterRegistry {
     this.register(new CodexStatusAdapter());
     this.register(new HermesStatusAdapter());
     this.register(new AntigravityStatusAdapter());
+    this.register(new GrokStatusAdapter());
   }
 
   register(adapter: HarnessStatusAdapter): void {

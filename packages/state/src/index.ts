@@ -7,6 +7,7 @@ export * from './adapters/generic-adapter.js';
 export * from './adapters/codex-adapter.js';
 export * from './adapters/hermes-adapter.js';
 export * from './adapters/antigravity-adapter.js';
+export * from './adapters/grok-adapter.js';
 export * from './adapters/registry.js';
 export * from './orchestration-output/types.js';
 export * from './orchestration-output/generic.js';
