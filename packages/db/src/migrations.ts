@@ -119,6 +119,13 @@ export const MIGRATIONS: Migration[] = [
       CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_parent_child_alias ON sessions(parent_session_id, child_alias) WHERE parent_session_id IS NOT NULL AND child_alias IS NOT NULL;
     `,
   },
+  {
+    name: '0008_add_session_topology_and_agent_session_id',
+    sql: `
+      ALTER TABLE sessions ADD COLUMN saved_topology TEXT;
+      ALTER TABLE sessions ADD COLUMN agent_session_id TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(sqlite: Database.Database, migrations: Migration[] = MIGRATIONS): {

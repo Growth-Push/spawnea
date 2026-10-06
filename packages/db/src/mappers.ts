@@ -58,6 +58,15 @@ export function toSession(row: SessionRow): Session {
     status: row.status,
     creationSource: row.creationSource,
     isExternal: row.isExternal ?? false,
+    savedTopology: row.savedTopology
+      ? {
+          ...row.savedTopology,
+          savedAt: row.savedTopology.savedAt instanceof Date
+            ? row.savedTopology.savedAt
+            : new Date(row.savedTopology.savedAt),
+        }
+      : undefined,
+    agentSessionId: row.agentSessionId ?? undefined,
     createdAt: row.createdAt,
     lastActivityAt: row.lastActivityAt,
   };

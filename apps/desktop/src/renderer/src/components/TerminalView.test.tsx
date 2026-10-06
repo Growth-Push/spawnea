@@ -212,8 +212,8 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
 
     await waitFor(() => {
       expect(clipboardWriteText).toHaveBeenCalledWith('gp-osc52-smoke');
+      expect(screen.getByText('Copied to clipboard')).toBeDefined();
     });
-    expect(screen.getByText('Copied to clipboard')).toBeDefined();
   });
 
   it('keeps an OSC52 tmux selection available to the context menu', async () => {

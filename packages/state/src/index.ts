@@ -1,4 +1,5 @@
 export * from './prompt-detector.js';
+export * from './agent-session-detector.js';
 export * from './state-detector.js';
 export * from './rules/index.js';
 export * from './output-artifact-detector.js';
