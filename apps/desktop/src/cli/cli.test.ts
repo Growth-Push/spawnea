@@ -179,6 +179,24 @@ describe('Spawnea Control CLI', () => {
       await expect(pollTurn({} as any, 'turn-abc', -10)).rejects.toThrow('Invalid timeout');
     });
 
+    it('rounds fractional timeouts to integer milliseconds in pollTurn', async () => {
+      let passedWaitMs: number | undefined;
+      const mockClient = {
+        callTool: vi.fn().mockImplementation(async (_name, args) => {
+          passedWaitMs = args.waitMs;
+          return {
+            turnId: 'fractional-turn',
+            status: 'completed',
+            output: 'done',
+          };
+        }),
+      } as unknown as ControlCliClient;
+
+      await pollTurn(mockClient, 'fractional-turn', 1.2345);
+      expect(Number.isInteger(passedWaitMs)).toBe(true);
+      expect(passedWaitMs).toBe(1235);
+    });
+
     it('validates timeout in sendAndWaitPrompt and waitTurn upfront', async () => {
       const mockClient = { callTool: vi.fn() } as unknown as ControlCliClient;
       await expect(

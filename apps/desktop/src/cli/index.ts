@@ -206,7 +206,7 @@ export async function runCli(argv: string[]): Promise<void> {
               ? parsed.flags['client-request-id']
               : undefined;
           const timeoutSec = parseTimeoutSeconds(parsed.flags.timeout);
-          const timeoutMs = timeoutSec !== undefined ? timeoutSec * 1000 : undefined;
+          const timeoutMs = timeoutSec !== undefined ? Math.round(timeoutSec * 1000) : undefined;
 
           await createSession(client, {
             project,
@@ -261,7 +261,7 @@ export async function runCli(argv: string[]): Promise<void> {
               ? parsed.flags['client-request-id']
               : undefined;
           const timeoutSec = parseTimeoutSeconds(parsed.flags.timeout);
-          const timeoutMs = timeoutSec !== undefined ? timeoutSec * 1000 : undefined;
+          const timeoutMs = timeoutSec !== undefined ? Math.round(timeoutSec * 1000) : undefined;
 
           await createChild(client, {
             parent,

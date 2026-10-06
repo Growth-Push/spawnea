@@ -220,8 +220,8 @@ export async function pollTurn(
   while (Date.now() < deadline) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) break;
-    const waitMs = Math.min(remainingMs, 5000);
-    const rpcTimeoutMs = Math.min(waitMs + 2000, Math.max(500, remainingMs + 500));
+    const waitMs = Math.round(Math.min(remainingMs, 5000));
+    const rpcTimeoutMs = Math.round(Math.min(waitMs + 2000, Math.max(500, remainingMs + 500)));
     const turn = await client.callTool('spawnea_get_turn', {
       turnId,
       cursor,
@@ -253,8 +253,8 @@ export async function pollTurn(
       while (finalTurn.truncated && finalTurn.cursor) {
         const remainingDrainMs = deadline - Date.now();
         if (remainingDrainMs <= 0) break;
-        const waitMs = Math.min(Math.max(100, remainingDrainMs), 5000);
-        const rpcTimeoutMs = Math.min(waitMs + 2000, Math.max(500, remainingDrainMs + 500));
+        const waitMs = Math.round(Math.min(Math.max(100, remainingDrainMs), 5000));
+        const rpcTimeoutMs = Math.round(Math.min(waitMs + 2000, Math.max(500, remainingDrainMs + 500)));
         const nextChunk = await client.callTool('spawnea_get_turn', {
           turnId,
           cursor: finalTurn.cursor,
