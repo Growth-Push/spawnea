@@ -80,6 +80,8 @@ export interface CreateSessionOptions extends OutputOptions {
   server?: string;
   branch?: string;
   worktree?: boolean;
+  clientRequestId?: string;
+  timeoutMs?: number;
 }
 
 export async function createSession(client: ControlCliClient, options: CreateSessionOptions): Promise<void> {
@@ -90,7 +92,8 @@ export async function createSession(client: ControlCliClient, options: CreateSes
     serverId: options.server,
     baseBranch: options.branch,
     useWorktree: options.worktree ?? true,
-  });
+    clientRequestId: options.clientRequestId,
+  }, options.timeoutMs);
 
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -114,6 +117,8 @@ export interface CreateChildOptions extends OutputOptions {
   name?: string;
   model?: string;
   initialPrompt?: string;
+  clientRequestId?: string;
+  timeoutMs?: number;
 }
 
 export async function createChild(client: ControlCliClient, options: CreateChildOptions): Promise<void> {
@@ -125,7 +130,8 @@ export async function createChild(client: ControlCliClient, options: CreateChild
     name: options.name,
     model: options.model,
     initialPrompt: options.initialPrompt,
-  });
+    clientRequestId: options.clientRequestId,
+  }, options.timeoutMs);
 
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -232,12 +238,15 @@ export async function pollTurn(
       let finalTurn = { ...turn };
 
       while (finalTurn.truncated && finalTurn.cursor) {
+        const remainingDrainMs = deadline - Date.now();
+        if (remainingDrainMs <= 0) break;
+        const waitMs = Math.min(Math.max(100, remainingDrainMs), 5000);
         const nextChunk = await client.callTool('spawnea_get_turn', {
           turnId,
           cursor: finalTurn.cursor,
-          waitMs: 5000,
+          waitMs,
           outputMode: 'compact',
-        });
+        }, waitMs + 5000);
         if (nextChunk.cursorExpired) {
           accumulatedOutput = '';
         }

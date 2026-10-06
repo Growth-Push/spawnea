@@ -111,6 +111,38 @@ describe('Spawnea Control CLI', () => {
       expect(parsedForceFirst.positional).toEqual(['child-1']);
     });
 
+    it('parses --request-id and --timeout for session create and child create', () => {
+      const parsedSession = parseArgs([
+        'session',
+        'create',
+        '--project',
+        'proj-1',
+        '--task',
+        'Task',
+        '--request-id',
+        'req-123',
+        '--timeout',
+        '60',
+      ]);
+      expect(parsedSession.flags['request-id']).toBe('req-123');
+      expect(parsedSession.flags.timeout).toBe('60');
+
+      const parsedChild = parseArgs([
+        'child',
+        'create',
+        '--parent',
+        'parent-1',
+        '--task',
+        'Subtask',
+        '--request-id',
+        'req-456',
+        '--timeout',
+        '90',
+      ]);
+      expect(parsedChild.flags['request-id']).toBe('req-456');
+      expect(parsedChild.flags.timeout).toBe('90');
+    });
+
     it('throws when a non-boolean flag is missing a value', () => {
       expect(() => parseArgs(['session', 'create', '--project'])).toThrow("Flag '--project' requires a value.");
       expect(() => parseArgs(['session', 'create', '--project', '--task', 'do-work'])).toThrow("Flag '--project' requires a value.");
@@ -248,6 +280,32 @@ describe('Spawnea Control CLI', () => {
 
       expect(result.output).toBe('Final delimited content only');
       expect(result.output).not.toContain('streaming chunk');
+    });
+
+    it('bounds turn output draining by the configured deadline', async () => {
+      let drainedCalls = 0;
+      const mockClient = {
+        callTool: vi.fn().mockImplementation(async (name) => {
+          if (name === 'spawnea_get_turn') {
+            drainedCalls++;
+            await new Promise((resolve) => setTimeout(resolve, 15));
+            return {
+              turnId: 'turn-drain',
+              status: 'completed',
+              cursor: 'next-cursor',
+              truncated: true,
+              output: `chunk-${drainedCalls} `,
+            };
+          }
+          return {};
+        }),
+      } as unknown as ControlCliClient;
+
+      // With a 0.05s timeout, draining should terminate when deadline expires
+      const result = await pollTurn(mockClient, 'turn-drain', 0.05);
+      expect(result.status).toBe('completed');
+      expect(drainedCalls).toBeGreaterThan(0);
+      expect(drainedCalls).toBeLessThan(10);
     });
 
     it('sets process.exitCode = 1 when sendPrompt cannot confirm delivery', async () => {

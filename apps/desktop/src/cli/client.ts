@@ -194,8 +194,17 @@ export class ControlCliClient {
     this.socket.write(`${payload}\n`);
   }
 
-  async callTool<T = any>(name: string, args: Record<string, unknown> = {}): Promise<T> {
-    const result = await this.sendRequest('tools/call', { name, arguments: args });
+  async callTool<T = any>(
+    name: string,
+    args: Record<string, unknown> = {},
+    timeoutMs?: number
+  ): Promise<T> {
+    const defaultTimeoutMs =
+      name === 'spawnea_create_session' || name === 'spawnea_create_child_session'
+        ? 120_000
+        : 30_000;
+    const effectiveTimeout = timeoutMs ?? defaultTimeoutMs;
+    const result = await this.sendRequest('tools/call', { name, arguments: args }, effectiveTimeout);
     if (result?.isError) {
       const msg = result.structuredContent?.error?.message ||
                   result.content?.map((c: any) => c.text).join('\n') ||

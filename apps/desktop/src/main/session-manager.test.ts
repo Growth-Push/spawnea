@@ -1708,7 +1708,7 @@ up 1 day, 5 hours
       });
 
       const worktree = await sessionManager.resolveSessionWorktreePath(session);
-      await mockHost.writeFile(worktree.value, 'dirty-file.txt', 'dirty content');
+      await mockHost.writeFile(join(worktree.value, 'dirty-file.txt'), 'dirty content');
       worktree.release();
 
       const result = await sessionManager.finishSession(

@@ -28,6 +28,8 @@ COMMANDS:
     [--server <id>]             Target server (default: local)
     [--branch <branch>]         Base git branch
     [--no-worktree]             Do not use isolated worktree
+    [--request-id <id>]         Client request ID for idempotent retries
+    [--timeout <sec>]           Operation timeout in seconds (default: 120)
 
   session close <session-id>    Close an active session
     [--force]                   Force close even if working or starting
@@ -38,6 +40,8 @@ COMMANDS:
     [--agent <id>]              Harness (defaults to parent harness)
     [--workspace <type>]        Workspace: same-project | new-worktree (default: same-project)
     [--name <name>]             Display title for the child
+    [--request-id <id>]         Client request ID for idempotent retries
+    [--timeout <sec>]           Operation timeout in seconds (default: 120)
 
   prompt send                   Deliver prompt to a session terminal
     --session <id>              Target session ID (required)
@@ -187,6 +191,14 @@ export async function runCli(argv: string[]): Promise<void> {
           const server = typeof parsed.flags.server === 'string' ? parsed.flags.server : undefined;
           const branch = typeof parsed.flags.branch === 'string' ? parsed.flags.branch : undefined;
           const worktree = parsed.flags['no-worktree'] ? false : true;
+          const clientRequestId = typeof parsed.flags['request-id'] === 'string'
+            ? parsed.flags['request-id']
+            : typeof parsed.flags['client-request-id'] === 'string'
+              ? parsed.flags['client-request-id']
+              : undefined;
+          const timeoutMs = typeof parsed.flags.timeout === 'string'
+            ? Number(parsed.flags.timeout) * 1000
+            : undefined;
 
           await createSession(client, {
             project,
@@ -195,6 +207,8 @@ export async function runCli(argv: string[]): Promise<void> {
             server,
             branch,
             worktree,
+            clientRequestId,
+            timeoutMs,
             json: isJson,
           });
         } else if (parsed.subcommand === 'close') {
@@ -233,6 +247,14 @@ export async function runCli(argv: string[]): Promise<void> {
           }
           const name = typeof parsed.flags.name === 'string' ? parsed.flags.name : undefined;
           const model = typeof parsed.flags.model === 'string' ? parsed.flags.model : undefined;
+          const clientRequestId = typeof parsed.flags['request-id'] === 'string'
+            ? parsed.flags['request-id']
+            : typeof parsed.flags['client-request-id'] === 'string'
+              ? parsed.flags['client-request-id']
+              : undefined;
+          const timeoutMs = typeof parsed.flags.timeout === 'string'
+            ? Number(parsed.flags.timeout) * 1000
+            : undefined;
 
           await createChild(client, {
             parent,
@@ -241,6 +263,8 @@ export async function runCli(argv: string[]): Promise<void> {
             workspace,
             name,
             model,
+            clientRequestId,
+            timeoutMs,
             json: isJson,
           });
         } else {
