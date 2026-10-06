@@ -11,6 +11,8 @@ import {
   CheckCircle2,
   Trash2,
   Check,
+  RotateCcw,
+  Copy,
 } from 'lucide-react';
 import { TerminalContextMenu } from './TerminalContextMenu.js';
 import { ReconnectionBanner } from './ReconnectionBanner.js';
@@ -23,6 +25,7 @@ interface TerminalViewProps {
   onAttach?: (sessionId: string) => void;
   onDetach?: (sessionId: string) => void;
   onDelete?: (sessionId: string) => void;
+  onResurrect?: (sessionId: string) => void;
   onForgetLocally?: (sessionId: string) => void;
   onStatusChange?: (sessionId: string, status: Session['status']) => void;
 }
@@ -121,6 +124,7 @@ export function TerminalView({
   onAttach,
   onDetach: _onDetach,
   onDelete,
+  onResurrect,
   onForgetLocally,
   onStatusChange,
 }: TerminalViewProps): React.JSX.Element {
@@ -1066,20 +1070,56 @@ export function TerminalView({
               <CheckCircle2 className="w-6 h-6" />
             </div>
             <h3 className="text-sm font-semibold text-white mb-1">Session Ended</h3>
-            <p className="text-xs text-zinc-400 max-w-md mb-4 leading-relaxed">
+            <p className="text-xs text-zinc-400 max-w-md mb-2 leading-relaxed">
               The persistent execution context has concluded.
             </p>
-            {onDelete && (
-              <button
-                type="button"
-                data-testid="terminal-overlay-delete-button"
-                onClick={() => onDelete(session.id)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/30 text-rose-300 rounded-lg text-xs font-medium transition-all shadow-sm cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Remove Session Record</span>
-              </button>
+            {session.savedTopology?.windows && (
+              <p className="text-[11px] text-zinc-500 mb-2">
+                Saved layout: {session.savedTopology.windows.length} window(s), {session.savedTopology.windows.reduce((acc, w) => acc + (w.panes?.length || 0), 0)} pane(s)
+              </p>
             )}
+            {session.agentSessionId && (
+              <div className="mb-4 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#161b22] border border-[#30363d] text-xs font-mono text-cyan-300">
+                <span>Agent Session: {session.agentSessionId}</span>
+                <button
+                  type="button"
+                  data-testid="terminal-overlay-copy-agent-id-button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(session.agentSessionId!).catch((err) => {
+                      console.error('Failed to copy agent session ID to clipboard', err);
+                    });
+                  }}
+                  className="p-1 hover:text-white transition-colors cursor-pointer"
+                  title="Copy Agent Session ID"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              {onResurrect && (
+                <button
+                  type="button"
+                  data-testid="terminal-overlay-resurrect-button"
+                  onClick={() => onResurrect(session.id)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition-all shadow-md cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Resurrect Session</span>
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  data-testid="terminal-overlay-delete-button"
+                  onClick={() => onDelete(session.id)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/30 text-rose-300 rounded-lg text-xs font-medium transition-all shadow-sm cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Remove Session Record</span>
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -1097,10 +1137,21 @@ export function TerminalView({
               {errorMessage || 'Unable to attach to tmux session on host.'}
             </p>
             <div className="flex items-center gap-2">
+              {onResurrect && (session.status === 'done' || session.status === 'error') && (
+                <button
+                  type="button"
+                  data-testid="terminal-overlay-error-resurrect-button"
+                  onClick={() => onResurrect(session.id)}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition-all shadow-md cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Resurrect Session</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleManualRetry}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition-all shadow-md cursor-pointer"
+                className="flex items-center gap-2 px-4 py-2 bg-[#21262d] hover:bg-[#30363d] text-zinc-200 border border-[#30363d] rounded-lg text-xs font-semibold transition-all shadow-md cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>Retry Attach</span>

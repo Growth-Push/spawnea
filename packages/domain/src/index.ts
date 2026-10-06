@@ -144,6 +144,29 @@ export interface AdoptSessionInput {
   task?: string;
 }
 
+export interface TmuxPaneSnapshot {
+  windowIndex: number;
+  paneIndex: number;
+  cwd: string;
+  title?: string;
+  active: boolean;
+}
+
+export interface TmuxWindowSnapshot {
+  index: number;
+  name: string;
+  active: boolean;
+  layout?: string;
+  panes: TmuxPaneSnapshot[];
+}
+
+export interface SessionTopologySnapshot {
+  savedAt: Date;
+  sessionName: string;
+  windows: TmuxWindowSnapshot[];
+  agentSessionId?: string;
+}
+
 export interface Session {
   id: string;
   name: string;
@@ -164,6 +187,8 @@ export interface Session {
   /** Explicit origin of the session creation request. Legacy records may omit this. */
   creationSource?: SessionCreationSource;
   isExternal?: boolean;
+  savedTopology?: SessionTopologySnapshot;
+  agentSessionId?: string;
   createdAt: Date;
   lastActivityAt: Date;
 }

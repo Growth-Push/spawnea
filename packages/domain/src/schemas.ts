@@ -81,6 +81,29 @@ export const AgentSchema = z.object({
   createdAt: z.date().default(() => new Date()),
 });
 
+export const TmuxPaneSnapshotSchema = z.object({
+  windowIndex: z.number().int().nonnegative(),
+  paneIndex: z.number().int().nonnegative(),
+  cwd: z.string().min(1),
+  title: z.string().optional(),
+  active: z.boolean().default(false),
+});
+
+export const TmuxWindowSnapshotSchema = z.object({
+  index: z.number().int().nonnegative(),
+  name: z.string().min(1),
+  active: z.boolean().default(false),
+  layout: z.string().optional(),
+  panes: z.array(TmuxPaneSnapshotSchema).default([]),
+});
+
+export const SessionTopologySnapshotSchema = z.object({
+  savedAt: z.coerce.date().default(() => new Date()),
+  sessionName: z.string().min(1),
+  windows: z.array(TmuxWindowSnapshotSchema).min(1),
+  agentSessionId: z.string().optional(),
+});
+
 export const SessionSchema = z.object({
   id: z.string().uuid().or(z.string().min(1)),
   name: z.string().min(1),
@@ -97,6 +120,8 @@ export const SessionSchema = z.object({
   status: SessionStatusSchema.default('disconnected'),
   creationSource: SessionCreationSourceSchema.default('ui'),
   isExternal: z.boolean().default(false),
+  savedTopology: SessionTopologySnapshotSchema.optional(),
+  agentSessionId: z.string().optional(),
   createdAt: z.date().default(() => new Date()),
   lastActivityAt: z.date().default(() => new Date()),
 }).superRefine((session, ctx) => {

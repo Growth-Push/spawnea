@@ -29,6 +29,7 @@ import type {
   CreateChildSessionInput,
   ParentCloseAction,
   SessionStatus,
+  SessionTopologySnapshot,
 } from '@spawnea/domain';
 import {
   createCatalogProjectPathLocator,
@@ -40,6 +41,7 @@ import {
   parseCatalogPathLocator,
   resolveContainedPath,
   isLoopbackHost,
+  SessionTopologySnapshotSchema,
 } from '@spawnea/domain';
 import type { Repositories } from '@spawnea/db';
 import {
@@ -56,7 +58,7 @@ import {
   type ManagedWorktreeIdentity,
   type ResolvedValueLease,
 } from '@spawnea/hosts';
-import { StateDetector } from '@spawnea/state';
+import { StateDetector, detectAgentSessionId } from '@spawnea/state';
 import type { CatalogManager } from './catalog-manager.js';
 import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
@@ -111,6 +113,9 @@ export class SessionManager {
   private readonly startingSessions: Map<string, Promise<void>> = new Map();
   private readonly creatingSessionIds = new Set<string>();
   private readonly finalizingParents: Set<string> = new Set();
+  private readonly resurrectingSessionIds: Set<string> = new Set();
+  private readonly stoppingSessionIds: Set<string> = new Set();
+  private readonly savingLayoutSessionIds: Set<string> = new Set();
   private readonly childCreationsInProgress = new Map<string, {
     count: number;
     completion: Promise<void>;
@@ -1269,36 +1274,54 @@ export class SessionManager {
    * 5. Transitions status to 'done' in SQLite and context store.
    */
   async stopSession(sessionId: string): Promise<void> {
-    this.logger.info('Stopping session', { sessionId });
-    this.attachedSessions.delete(sessionId);
-    const session = await this.repos.sessions.findById(sessionId);
-    if (!session) {
-      throw new Error(`Session '${sessionId}' not found`);
+    if (this.resurrectingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being resurrected`);
+    }
+    if (this.creatingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being created`);
+    }
+    if (this.savingLayoutSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' layout is currently being saved`);
+    }
+    if (this.stoppingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is already being stopped`);
     }
 
-    // 1. Send stop/kill command to the target host for the owned session
-    const host = await this.getHostAdapter(session.serverId);
-    const terminated = await this.tmuxManager.killSession(host, session.tmuxSessionName);
+    this.stoppingSessionIds.add(sessionId);
+    try {
+      this.logger.info('Stopping session', { sessionId });
+      this.attachedSessions.delete(sessionId);
+      const session = await this.repos.sessions.findById(sessionId);
+      if (!session) {
+        throw new Error(`Session '${sessionId}' not found`);
+      }
 
-    // 2. Validate termination on the host (FG-2.7.3)
-    if (!terminated) {
-      this.logger.error('Session termination could not be verified on host', new Error('Tmux session still present'), {
-        sessionId,
-        tmuxSessionName: session.tmuxSessionName,
-      });
-      throw new Error(
-        `Failed to verify termination of persistent session '${session.tmuxSessionName}' on host '${session.serverId}'. Execution may still be active.`
-      );
+      // 1. Send stop/kill command to the target host for the owned session
+      const host = await this.getHostAdapter(session.serverId);
+      const terminated = await this.tmuxManager.killSession(host, session.tmuxSessionName);
+
+      // 2. Validate termination on the host (FG-2.7.3)
+      if (!terminated) {
+        this.logger.error('Session termination could not be verified on host', new Error('Tmux session still present'), {
+          sessionId,
+          tmuxSessionName: session.tmuxSessionName,
+        });
+        throw new Error(
+          `Failed to verify termination of persistent session '${session.tmuxSessionName}' on host '${session.serverId}'. Execution may still be active.`
+        );
+      }
+
+      // 3. Cleanly close local PTY broker stream upon verified termination
+      const ptyChannelId = `pty-${sessionId}`;
+      this.ptyBroker.close(ptyChannelId);
+
+      // 4. Update status to 'done' in SQLite and context store (FG-2.7.4)
+      await this.repos.sessions.updateStatus(sessionId, 'done');
+      await this.contextStore.updateStatus(sessionId, 'done');
+      this.logger.info('Session termination verified and recorded as done', { sessionId });
+    } finally {
+      this.stoppingSessionIds.delete(sessionId);
     }
-
-    // 3. Cleanly close local PTY broker stream upon verified termination
-    const ptyChannelId = `pty-${sessionId}`;
-    this.ptyBroker.close(ptyChannelId);
-
-    // 4. Update status to 'done' in SQLite and context store (FG-2.7.4)
-    await this.repos.sessions.updateStatus(sessionId, 'done');
-    await this.contextStore.updateStatus(sessionId, 'done');
-    this.logger.info('Session termination verified and recorded as done', { sessionId });
   }
 
   /**
@@ -1380,6 +1403,15 @@ export class SessionManager {
     if (signal.aborted) throw new Error('Session manager is shutting down');
     if (this.finalizingParents.has(sessionId)) {
       throw new Error(`Session '${sessionId}' is already being finalized`);
+    }
+    if (this.resurrectingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being resurrected`);
+    }
+    if (this.stoppingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being stopped`);
+    }
+    if (this.savingLayoutSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' layout is currently being saved`);
     }
     this.finalizingParents.add(sessionId);
     const creations = this.childCreationsInProgress.get(sessionId);
@@ -2155,6 +2187,8 @@ export class SessionManager {
           isExternal: ctx.isExternal ?? false,
           parentSessionId: ctx.parentSessionId,
           childAlias: ctx.childAlias,
+          savedTopology: ctx.savedTopology,
+          agentSessionId: ctx.agentSessionId,
         });
         dbSessionMap.set(restoredSession.id, restoredSession);
       }
@@ -2198,7 +2232,9 @@ export class SessionManager {
     if (!session) {
       throw new Error(`Session '${sessionId}' not found`);
     }
-    if (this.creatingSessionIds.has(sessionId)) return session;
+    if (this.creatingSessionIds.has(sessionId) || this.resurrectingSessionIds.has(sessionId)) {
+      return session;
+    }
 
     let currentStatus = session.status;
     try {
@@ -2323,6 +2359,308 @@ export class SessionManager {
       return await this.gitService.getGitDiff(host, worktreePath.value, options);
     } finally {
       worktreePath.release();
+    }
+  }
+
+  /**
+   * Captures active tmux windows and panes for the session, detects any agent conversation ID,
+   * and persists this topology snapshot in SQLite and session context file.
+   */
+  async saveSessionLayout(sessionId: string): Promise<SessionTopologySnapshot> {
+    if (this.creatingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being created`);
+    }
+    if (this.resurrectingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being resurrected`);
+    }
+    if (this.finalizingParents.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being finalized`);
+    }
+    if (this.stoppingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being stopped`);
+    }
+    if (this.savingLayoutSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' layout is already being saved`);
+    }
+
+    this.savingLayoutSessionIds.add(sessionId);
+    try {
+      const session = await this.repos.sessions.findById(sessionId);
+    if (!session) {
+      throw new Error(`Session '${sessionId}' not found`);
+    }
+
+    this.logger.info('Saving session layout topology', { sessionId, sessionName: session.tmuxSessionName });
+    const host = await this.getHostAdapter(session.serverId);
+
+    // 1. Capture tmux topology from the host
+    const rawTopology = await this.tmuxManager.captureSessionTopology(host, session.tmuxSessionName);
+
+    // Convert sensitive physical paths to safe locators if session is credential-backed
+    let topology = rawTopology;
+    const rootPathLease = await this.resolveSessionWorktreePath(session);
+    try {
+      const physicalRoot = rootPathLease.value.replace(/\/+$/, '');
+      const persistedRoot = session.worktreePath.replace(/\/+$/, '');
+
+      if (rootPathLease.sensitive || parseCatalogPathLocator(session.worktreePath)) {
+        const sanitizeSensitiveText = (text: string | undefined): string | undefined => {
+          if (!text) return undefined;
+          let replaced = text;
+          if (physicalRoot && replaced.includes(physicalRoot)) {
+            replaced = replaced.replaceAll(physicalRoot, persistedRoot);
+          }
+          let remainder = replaced;
+          if (persistedRoot) {
+            const escaped = persistedRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            remainder = remainder.replace(new RegExp(`${escaped}(?:[/\\\\][a-zA-Z0-9_.-]+)*`, 'g'), '');
+          }
+          if (remainder.includes('/') || remainder.includes('\\')) {
+            return undefined;
+          }
+          return replaced;
+        };
+
+        topology = {
+          ...rawTopology,
+          windows: rawTopology.windows.map((win) => ({
+            ...win,
+            name: sanitizeSensitiveText(win.name) || String(win.index),
+            panes: win.panes.map((pane) => {
+              const normalizedCwd = pane.cwd.replace(/\/+$/, '');
+              let safeCwd = pane.cwd;
+              if (normalizedCwd === physicalRoot) {
+                safeCwd = persistedRoot;
+              } else if (normalizedCwd.startsWith(`${physicalRoot}/`)) {
+                const relativeSuffix = normalizedCwd.slice(physicalRoot.length);
+                safeCwd = `${persistedRoot}${relativeSuffix}`;
+              } else {
+                safeCwd = persistedRoot;
+              }
+              const safeTitle = sanitizeSensitiveText(pane.title);
+              return {
+                ...pane,
+                title: safeTitle,
+                cwd: safeCwd,
+              };
+            }),
+          })),
+        };
+      }
+    } finally {
+      rootPathLease.release();
+    }
+
+    // 2. Capture recent tail lines to detect agent session / conversation ID
+    let agentSessionId = session.agentSessionId;
+    try {
+      const agent = await this.repos.agents.findById(session.agentId);
+      // The agent may run in any saved window, not only the first one.
+      const windowIndexes: Array<number | undefined> = rawTopology.windows.length > 0
+        ? rawTopology.windows.map((w) => w.index)
+        : [undefined];
+      for (const windowIndex of windowIndexes) {
+        const tailLines = await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, 50, windowIndex);
+        const detectedId = detectAgentSessionId(tailLines, { harness: agent?.harness });
+        if (detectedId) {
+          agentSessionId = detectedId;
+          break;
+        }
+      }
+    } catch (err) {
+      this.logger.warn('Failed to capture tail lines for agent session id detection', { sessionId, err });
+    }
+
+    if (agentSessionId) {
+      topology.agentSessionId = agentSessionId;
+    }
+
+    // Validate topology structure before persistence
+    const validatedTopology = SessionTopologySnapshotSchema.parse(topology);
+
+    // 3. Persist in SQLite
+    await this.repos.sessions.update(sessionId, {
+      savedTopology: validatedTopology,
+      agentSessionId,
+    });
+
+    // 4. Update session context file if present
+    try {
+      const existingContext = await this.contextStore.load(sessionId);
+      if (existingContext) {
+        await this.contextStore.save({
+          ...existingContext,
+          savedTopology: validatedTopology,
+          agentSessionId,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      this.logger.error('Failed to update context file with topology snapshot', { sessionId, err });
+      throw new Error(
+        `Session layout was saved to the database but the session context file could not be updated: ${err instanceof Error ? err.message : String(err)}. Save the layout again to retry.`
+      );
+    }
+
+      return validatedTopology;
+    } finally {
+      this.savingLayoutSessionIds.delete(sessionId);
+    }
+  }
+
+  /**
+   * Resurrects a dead or absent tmux session on its host using saved topology or base worktree metadata.
+   * Does NOT run unexpected automated commands; cleanly opens shells at the saved paths.
+   */
+  async resurrectSession(sessionId: string): Promise<Session> {
+    if (this.resurrectingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is already being resurrected`);
+    }
+    if (this.creatingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being created`);
+    }
+    if (this.finalizingParents.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being finalized`);
+    }
+    if (this.stoppingSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' is currently being stopped`);
+    }
+    if (this.savingLayoutSessionIds.has(sessionId)) {
+      throw new Error(`Session '${sessionId}' layout is currently being saved`);
+    }
+
+    this.resurrectingSessionIds.add(sessionId);
+    try {
+      const session = await this.repos.sessions.findById(sessionId);
+      if (!session) {
+        throw new Error(`Session '${sessionId}' not found`);
+      }
+
+      if (!['done', 'error'].includes(session.status)) {
+        throw new Error(`Cannot resurrect active or disconnected session '${sessionId}' in status '${session.status}'`);
+      }
+      this.logger.info('Resurrecting session', {
+        sessionId,
+        sessionName: session.tmuxSessionName,
+        hasSavedTopology: Boolean(session.savedTopology),
+      });
+
+      const host = await this.getHostAdapter(session.serverId);
+      const catalog = this.catalogManager.getState().catalog;
+      const catalogHost = catalog?.hosts[session.serverId];
+      const rawProjId = session.projectId.includes(':') ? session.projectId.split(':')[1] : session.projectId;
+      const catProject = catalogHost?.projects[rawProjId];
+
+      const dbServer = await this.repos.servers.findById(session.serverId);
+      const isConfirmedLocalHost =
+        host instanceof LocalHostAdapter ||
+        (catalogHost ? !catalogHost.ssh : false) ||
+        (dbServer ? isLoopbackHost(dbServer.host) && !dbServer.sshConfigAlias && !dbServer.sshUser && dbServer.sshPort === 22 : false);
+      const isLocalHost = !(host instanceof SSHHostAdapter) && isConfirmedLocalHost;
+      const defaultShell = isLocalHost ? (process.env.SHELL || 'sh') : 'sh';
+
+      const sessionPathLease = await this.resolveSessionWorktreePath(session);
+      try {
+        const physicalRoot = sessionPathLease.value.replace(/\/+$/, '');
+        const persistedRoot = session.worktreePath.replace(/\/+$/, '');
+
+        // Resolve any safe locators in savedTopology back to physical paths for tmux
+        const effectiveTopology = session.savedTopology
+          ? {
+              ...session.savedTopology,
+              windows: session.savedTopology.windows.map((win) => ({
+                ...win,
+                panes: win.panes.map((pane) => {
+                  let resolvedCwd = pane.cwd;
+                  const normalizedCwd = pane.cwd.replace(/\/+$/, '');
+                  if (normalizedCwd === persistedRoot) {
+                    resolvedCwd = physicalRoot;
+                  } else if (normalizedCwd.startsWith(`${persistedRoot}/`)) {
+                    const relativeSuffix = normalizedCwd.slice(persistedRoot.length);
+                    resolvedCwd = `${physicalRoot}${relativeSuffix}`;
+                  } else if (parseCatalogPathLocator(pane.cwd)) {
+                    resolvedCwd = physicalRoot;
+                  }
+                  return {
+                    ...pane,
+                    cwd: resolvedCwd,
+                  };
+                }),
+              })),
+            }
+          : undefined;
+
+        const resurrectResult = await this.tmuxManager.resurrectSession({
+          host,
+          sessionName: session.tmuxSessionName,
+          defaultCwd: sessionPathLease.value,
+          defaultWindowName: session.tmuxWindowName || session.name,
+          defaultShell,
+          topology: effectiveTopology,
+          env: {
+            SPAWNEA_SESSION_ID: session.id,
+            ...(this.profile ? { SPAWNEA_PROFILE: this.profile } : {}),
+          },
+          tmuxOptions: catProject?.tmux?.options,
+          tmuxCommands: catProject?.tmux?.commands,
+        });
+
+        if (!resurrectResult.success) {
+          throw new Error(resurrectResult.error || `Failed to resurrect tmux session '${session.tmuxSessionName}'`);
+        }
+
+        if (resurrectResult.alreadyRunning) {
+          this.logger.info('Tmux session is already running with no dead panes; recovering session to idle', {
+            sessionId,
+            sessionName: session.tmuxSessionName,
+          });
+        } else if (resurrectResult.translatedTopology && session.savedTopology) {
+          const newSavedTopology: SessionTopologySnapshot = {
+            ...session.savedTopology,
+            windows: session.savedTopology.windows.map((w, idx) => {
+              const tw = resurrectResult.translatedTopology?.windows[idx];
+              if (!tw) return w;
+              return {
+                ...w,
+                index: tw.index,
+                panes: w.panes.map((p, pIdx) => {
+                  const tp = tw.panes?.[pIdx];
+                  return tp ? { ...p, windowIndex: tw.index, paneIndex: tp.paneIndex } : p;
+                }),
+              };
+            }),
+          };
+          await this.repos.sessions.update(sessionId, { savedTopology: newSavedTopology });
+          const existingCtx = await this.contextStore.load(sessionId);
+          if (existingCtx) {
+            await this.contextStore.save({
+              ...existingCtx,
+              savedTopology: newSavedTopology,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        }
+      } finally {
+        sessionPathLease.release();
+      }
+
+      // Update status to idle awaiting interaction
+      await this.repos.sessions.updateStatus(sessionId, 'idle');
+      await this.contextStore.updateStatus(sessionId, 'idle');
+
+      const wc = this.getWebContents();
+      if (wc && (typeof (wc as any).isDestroyed !== 'function' || !(wc as any).isDestroyed())) {
+        wc.send('session:statusChanged', sessionId, 'idle');
+      }
+
+      const updated = await this.repos.sessions.findById(sessionId);
+      if (!updated) {
+        throw new Error(`Session '${sessionId}' vanished after resurrection`);
+      }
+
+      return updated;
+    } finally {
+      this.resurrectingSessionIds.delete(sessionId);
     }
   }
 

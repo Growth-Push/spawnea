@@ -443,6 +443,51 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('hermes-needs-input-menu');
   });
 
+  it('detects the Hermes Agent choice menu while the metrics stopwatch is still painted', () => {
+    const tail = [
+      '╭─ Hermes Agent needs your input ──────────────────────────────────╮',
+      '│ 1 question                                                       │',
+      '│ ▸ Which sample option should stay selected?                     │',
+      '│   ❯ 1. Keep the current choice                                  │',
+      '│     2. Switch to the other sample                               │',
+      '│     3. Other (type your answer)                                  │',
+      '╰──────────────────────────────────────────────────────────────────╯',
+      '  ❓ Which sample option should stay selected?',
+      '  ↑/↓ to select, Enter to lock, Tab next question  (12s)',
+      ' ☤ example-model │ 10K/100K │ [███░░░░░░░] 27% │ ⏱21 43s',
+      '──────────────────────────────────────────────────────────────────',
+      '? ❯',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'hermes', tailLinesCount: 20 });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('choice');
+    expect(res.matchedRuleId).toBe('hermes-needs-input-menu');
+    expect(res.promptLine).not.toContain('example-model');
+  });
+
+  it('lets a later progress verb replace a stale Hermes choice footer', () => {
+    const tail = [
+      '  ↑/↓ to select, Enter to lock, Tab next question  (12s)',
+      'formulating...',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'hermes' });
+    expect(res.kind).toBe('working');
+    expect(res.matchedRuleId).toBe('hermes-working-progress-verbs');
+    expect(res.promptLine).toBe('formulating...');
+  });
+
+  it('detects a Hermes ? ❯ prompt that remains under the metrics stopwatch', () => {
+    const tail = [
+      ' ☤ example-model │ 10K/100K │ [███░░░░░░░] 27% │ ⏱21 43s',
+      '? ❯',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'hermes' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('question');
+    expect(res.matchedRuleId).toBe('hermes-question-prompt');
+    expect(res.promptLine).toBe('? ❯');
+  });
+
   it('detects a Hermes consultation question with emoji Q3 / QN3', () => {
     const tail = [
       'La tabla debe vivir en algo similar a HarnessLaunchRegistry.',
