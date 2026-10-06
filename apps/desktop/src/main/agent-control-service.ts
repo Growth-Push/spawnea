@@ -233,6 +233,14 @@ export class AgentControlService {
       } else if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
         throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
       }
+      const result = await this.sessionManager.finishSession(
+        sessionId,
+        'close',
+        { stashChanges: false },
+        'mcp-validated'
+      );
+      this.notifyDataChanged?.();
+      return { apiVersion: SPAWNEA_CONTROL_API_VERSION, sessionId, removed: result.removed };
     }
 
     await this.sessionManager.deleteSession(sessionId, 'leave-children');
@@ -324,20 +332,7 @@ export class AgentControlService {
           throw new Error('Root session cannot be closed from within scoped session control');
         }
         if (session.managedWorktree) {
-          if (!force && ['working', 'starting'].includes(session.status)) {
-            throw new Error(`Session '${sessionId}' is currently ${session.status}; pass force=true to close`);
-          }
-          const gitStatus = await this.sessionManager.getGitStatus(sessionId).catch(() => null);
-          if (!gitStatus) {
-            if (!force) {
-              throw new Error(`Session '${sessionId}' worktree status could not be verified; pass force=true to close`);
-            }
-          } else if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
-            throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
-          }
-          await this.sessionManager.deleteSession(sessionId, 'leave-children');
-          this.notifyDataChanged?.();
-          return { apiVersion: SPAWNEA_CONTROL_API_VERSION, sessionId, removed: true };
+          return this.closeSession(sessionId, force);
         }
         return this.closeSharedChildSession(sessionId, force);
       },

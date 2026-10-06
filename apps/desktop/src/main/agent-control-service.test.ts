@@ -98,7 +98,7 @@ describe('AgentControlService', () => {
       inspectManagedWorktree: vi.fn().mockResolvedValue({
         state: 'active', currentBranch: 'spawnea/existing', message: 'Ready',
       }),
-      finishSession: vi.fn().mockResolvedValue({ action: 'integrate', removed: true }),
+      finishSession: vi.fn().mockResolvedValue({ action: 'close', removed: true }),
       closeSharedChildSession: vi.fn().mockResolvedValue({ action: 'close', removed: true, workspacePreserved: true }),
       createChildSession: vi.fn(async (input, source) => {
         createdCount += 1;
@@ -1491,7 +1491,13 @@ describe('AgentControlService', () => {
           sessionId: 'close-child',
           removed: true,
         });
-        expect(sessionManager.deleteSession).toHaveBeenCalledWith('close-child', 'leave-children');
+        expect(sessionManager.finishSession).toHaveBeenCalledWith(
+          'close-child',
+          'close',
+          { stashChanges: false },
+          'mcp-validated'
+        );
+        expect(sessionManager.deleteSession).not.toHaveBeenCalledWith('close-child', expect.anything());
       });
 
       it('rejects closing a dirty managed worktree child even with force', async () => {
@@ -1634,6 +1640,43 @@ describe('AgentControlService', () => {
           "Session 'dirty-unscoped-sess' has uncommitted changes in managed worktree; finalize or stash changes before closing"
         );
         expect(sessionManager.deleteSession).not.toHaveBeenCalledWith('dirty-unscoped-sess', expect.anything());
+      });
+
+      it('closes a clean managed worktree session via unscoped closeSession using guarded finalization', async () => {
+        await repositories.servers.save({
+          id: 'local-unscoped-clean',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('clean-unscoped-sess', {
+            serverId: 'local-unscoped-clean',
+            managedWorktree: true,
+            status: 'idle',
+          })
+        );
+
+        sessionManager.getGitStatus.mockResolvedValueOnce({
+          isClean: true,
+          totalChanges: 0,
+        });
+
+        const result = await service.closeSession('clean-unscoped-sess');
+        expect(result).toEqual({
+          apiVersion: 'v1',
+          sessionId: 'clean-unscoped-sess',
+          removed: true,
+        });
+        expect(sessionManager.finishSession).toHaveBeenCalledWith(
+          'clean-unscoped-sess',
+          'close',
+          { stashChanges: false },
+          'mcp-validated'
+        );
+        expect(sessionManager.deleteSession).not.toHaveBeenCalledWith('clean-unscoped-sess', expect.anything());
       });
     });
   });
