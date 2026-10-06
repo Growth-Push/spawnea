@@ -126,6 +126,48 @@ describe('HermesStatusAdapter', () => {
     expect(res.reason).toContain('interactive input');
   });
 
+  it('keeps needs_input when the choice menu is newer than a progress verb', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 5000),
+      tailLines: [
+        'formulating...',
+        '  ↑/↓ to select, Enter to lock, Tab next question  (12s)',
+        '? ❯',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('needs_input');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('detects working when a progress verb follows a stale choice-menu footer', () => {
+    const signals: SessionSignals = {
+      sessionId: 'hermes-1',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'python3',
+      lastOutputAt: new Date(Date.now() - 5000),
+      tailLines: [
+        '  ↑/↓ to select, Enter to lock, Tab next question  (12s)',
+        'formulating...',
+      ],
+    };
+    const res = adapter.evaluateStatus(signals);
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toContain('formulating...');
+  });
+
   it('detects needs_input when only the ? ❯ prompt remains beside the metrics stopwatch', () => {
     const signals: SessionSignals = {
       sessionId: 'hermes-1',

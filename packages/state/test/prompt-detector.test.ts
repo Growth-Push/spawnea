@@ -465,6 +465,17 @@ describe('prompt-detector', () => {
     expect(res.promptLine).not.toContain('example-model');
   });
 
+  it('lets a later progress verb replace a stale Hermes choice footer', () => {
+    const tail = [
+      '  ↑/↓ to select, Enter to lock, Tab next question  (12s)',
+      'formulating...',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'hermes' });
+    expect(res.kind).toBe('working');
+    expect(res.matchedRuleId).toBe('hermes-working-progress-verbs');
+    expect(res.promptLine).toBe('formulating...');
+  });
+
   it('detects a Hermes ? ❯ prompt that remains under the metrics stopwatch', () => {
     const tail = [
       ' ☤ example-model │ 10K/100K │ [███░░░░░░░] 27% │ ⏱21 43s',
