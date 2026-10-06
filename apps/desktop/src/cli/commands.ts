@@ -156,6 +156,19 @@ export async function sendPrompt(client: ControlCliClient, options: SendPromptOp
     prompt: options.prompt,
   });
 
+  if (result.delivered === false) {
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.error(
+        `Prompt delivery could not be confirmed for session ${result.sessionId || options.session}: ${result.message || 'Enter key could not be confirmed'}`
+      );
+      if (result.turnId) console.error(`Turn ID: ${result.turnId}`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -187,23 +200,36 @@ export async function pollTurn(
   }
 
   const deadline = Date.now() + timeoutSec * 1000;
+  let cursor: string | undefined;
   let version = initialVersion;
+  let accumulatedOutput = '';
 
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1000, deadline - Date.now());
     const waitMs = Math.min(remainingMs, 5000);
     const turn = await client.callTool('spawnea_get_turn', {
       turnId,
+      cursor,
       afterVersion: version,
       waitMs,
       outputMode: 'compact',
     });
 
+    if (turn.cursorExpired) {
+      accumulatedOutput = '';
+    }
+
+    if (turn.extraction === 'delimited') {
+      accumulatedOutput = turn.output || '';
+    } else if (turn.output) {
+      accumulatedOutput += turn.output;
+    }
+
+    cursor = turn.cursor ?? cursor;
     version = turn.version ?? version;
 
     if (turn.status === 'completed' || turn.status === 'needs_input' || turn.status === 'failed') {
       let finalTurn = { ...turn };
-      let accumulatedOutput = turn.output || '';
 
       while (finalTurn.truncated && finalTurn.cursor) {
         const nextChunk = await client.callTool('spawnea_get_turn', {
@@ -270,6 +296,19 @@ export async function sendAndWaitPrompt(client: ControlCliClient, options: SendA
     target: options.session,
     prompt: options.prompt,
   });
+
+  if (sent.delivered === false) {
+    if (options.json) {
+      console.log(JSON.stringify(sent, null, 2));
+    } else {
+      console.error(
+        `Prompt delivery could not be confirmed for session ${sent.sessionId || options.session}: ${sent.message || 'Enter key could not be confirmed'}`
+      );
+      if (sent.turnId) console.error(`Turn ID: ${sent.turnId}`);
+    }
+    process.exitCode = 1;
+    return;
+  }
 
   const turnId = sent.turnId;
   if (!turnId) {

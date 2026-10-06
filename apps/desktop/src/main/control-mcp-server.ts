@@ -484,7 +484,7 @@ export function createCliSpawneaMcpServer(
         task: request.task,
         baseBranch: request.baseBranch,
         useWorktree: request.useWorktree ?? true,
-      });
+      }, { allowRemoteHost: true });
     })()
   );
 
@@ -580,7 +580,7 @@ export function createCliSpawneaMcpServer(
       if ('closeSession' in control) {
         return control.closeSession(sessionId, force);
       }
-      return control.closeSharedChildSession(sessionId, force);
+      return control.closeChildSession(sessionId, force);
     })()
   );
 

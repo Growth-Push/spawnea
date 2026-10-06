@@ -7,7 +7,7 @@ import { ControlMcpGateway } from '../main/control-mcp-gateway.js';
 import type { AgentControlService as AgentControlServiceType } from '../main/agent-control-service.js';
 import { ControlCliClient } from './client.js';
 import { parseArgs, runCli } from './index.js';
-import { pollTurn, showSkillPrompt } from './commands.js';
+import { pollTurn, sendPrompt, sendAndWaitPrompt, showSkillPrompt } from './commands.js';
 
 describe('Spawnea Control CLI', () => {
   const gateways: ControlMcpGateway[] = [];
@@ -145,6 +145,142 @@ describe('Spawnea Control CLI', () => {
       await expect(pollTurn({} as any, 'turn-abc', NaN)).rejects.toThrow('Invalid timeout');
       await expect(pollTurn({} as any, 'turn-abc', 0)).rejects.toThrow('Invalid timeout');
       await expect(pollTurn({} as any, 'turn-abc', -10)).rejects.toThrow('Invalid timeout');
+    });
+
+    it('accumulates streamed output across working polls until turn completion', async () => {
+      const calls: any[] = [];
+      const mockClient = {
+        callTool: vi.fn().mockImplementation((_name, args) => {
+          calls.push(args);
+          if (calls.length === 1) {
+            return Promise.resolve({
+              turnId: 'turn-1',
+              status: 'working',
+              cursor: 'c1',
+              version: 1,
+              output: 'Part 1: working on it...\n',
+            });
+          }
+          return Promise.resolve({
+            turnId: 'turn-1',
+            status: 'completed',
+            cursor: 'c2',
+            version: 2,
+            output: '',
+          });
+        }),
+      } as unknown as ControlCliClient;
+
+      const result = await pollTurn(mockClient, 'turn-1', 5);
+
+      expect(result.output).toContain('Part 1: working on it...');
+      expect(mockClient.callTool).toHaveBeenCalledTimes(2);
+    });
+
+    it('resets accumulated output when cursor expires during turn polling', async () => {
+      const calls: any[] = [];
+      const mockClient = {
+        callTool: vi.fn().mockImplementation((_name, args) => {
+          calls.push(args);
+          if (calls.length === 1) {
+            return Promise.resolve({
+              turnId: 'turn-1',
+              status: 'working',
+              cursor: 'c1',
+              version: 1,
+              output: 'stale output that will expire',
+            });
+          }
+          return Promise.resolve({
+            turnId: 'turn-1',
+            status: 'completed',
+            cursor: 'c2',
+            version: 2,
+            cursorExpired: true,
+            output: 'fresh output after cursor expiration',
+          });
+        }),
+      } as unknown as ControlCliClient;
+
+      const result = await pollTurn(mockClient, 'turn-1', 5);
+
+      expect(result.output).toBe('fresh output after cursor expiration');
+      expect(result.output).not.toContain('stale output');
+    });
+
+    it('replaces accumulated output when delimited extraction is returned', async () => {
+      const calls: any[] = [];
+      const mockClient = {
+        callTool: vi.fn().mockImplementation((_name, args) => {
+          calls.push(args);
+          if (calls.length === 1) {
+            return Promise.resolve({
+              turnId: 'turn-1',
+              status: 'working',
+              cursor: 'c1',
+              version: 1,
+              output: 'streaming chunk',
+            });
+          }
+          return Promise.resolve({
+            turnId: 'turn-1',
+            status: 'completed',
+            cursor: 'c2',
+            version: 2,
+            extraction: 'delimited',
+            output: 'Final delimited content only',
+          });
+        }),
+      } as unknown as ControlCliClient;
+
+      const result = await pollTurn(mockClient, 'turn-1', 5);
+
+      expect(result.output).toBe('Final delimited content only');
+      expect(result.output).not.toContain('streaming chunk');
+    });
+
+    it('sets process.exitCode = 1 when sendPrompt cannot confirm delivery', async () => {
+      const mockClient = {
+        callTool: vi.fn().mockResolvedValue({
+          delivered: false,
+          status: 'unknown',
+          sessionId: 'sess-test',
+          turnId: 'turn-test',
+          message: 'Enter key could not be confirmed',
+        }),
+      } as unknown as ControlCliClient;
+
+      const prevExitCode = process.exitCode;
+      process.exitCode = undefined;
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await sendPrompt(mockClient, { session: 'sess-test', prompt: 'test' });
+
+      expect(process.exitCode).toBe(1);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('Prompt delivery could not be confirmed'));
+      process.exitCode = prevExitCode;
+    });
+
+    it('sets process.exitCode = 1 when sendAndWaitPrompt cannot confirm delivery', async () => {
+      const mockClient = {
+        callTool: vi.fn().mockResolvedValue({
+          delivered: false,
+          status: 'unknown',
+          sessionId: 'sess-test',
+          turnId: 'turn-test',
+          message: 'Enter key could not be confirmed',
+        }),
+      } as unknown as ControlCliClient;
+
+      const prevExitCode = process.exitCode;
+      process.exitCode = undefined;
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await sendAndWaitPrompt(mockClient, { session: 'sess-test', prompt: 'test', timeout: 5 });
+
+      expect(process.exitCode).toBe(1);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('Prompt delivery could not be confirmed'));
+      process.exitCode = prevExitCode;
     });
 
     it('fails fast when desktop app is not running', async () => {

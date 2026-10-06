@@ -19,6 +19,7 @@ describe('AgentControlService', () => {
     sendPrompt: ReturnType<typeof vi.fn>;
     captureSessionTerminal: ReturnType<typeof vi.fn>;
     getGitStatus: ReturnType<typeof vi.fn>;
+    deleteSession: ReturnType<typeof vi.fn>;
   };
   let service: AgentControlService;
   let terminalOutput: string;
@@ -120,6 +121,7 @@ describe('AgentControlService', () => {
       })),
       captureSessionTerminal: vi.fn(async () => terminalOutput),
       getGitStatus: vi.fn().mockResolvedValue({ isClean: true }),
+      deleteSession: vi.fn().mockResolvedValue(true),
     };
     service = new AgentControlService({
       repositories,
@@ -1447,6 +1449,107 @@ describe('AgentControlService', () => {
 
         expect(result.sessionCreated).toBe(true);
         expect(result.agentId).toBe('seed-agent');
+      });
+    });
+
+    describe('Scoped child session closing', () => {
+      it('allows closing a clean managed worktree child from scoped control', async () => {
+        await repositories.servers.save({
+          id: 'local-close',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('close-root', {
+            serverId: 'local-close',
+            status: 'working',
+          })
+        );
+
+        await repositories.sessions.save(
+          session('close-child', {
+            serverId: 'local-close',
+            parentSessionId: 'close-root',
+            managedWorktree: true,
+            status: 'idle',
+          })
+        );
+
+        sessionManager.getGitStatus.mockResolvedValueOnce({
+          isClean: true,
+          totalChanges: 0,
+        });
+
+        const scoped = await service.createScopedControl('close-root');
+        const result = await scoped.closeChildSession('close-child');
+
+        expect(result).toEqual({
+          apiVersion: 'v1',
+          sessionId: 'close-child',
+          removed: true,
+        });
+        expect(sessionManager.deleteSession).toHaveBeenCalledWith('close-child', 'leave-children');
+      });
+
+      it('rejects closing a dirty managed worktree child without force', async () => {
+        await repositories.servers.save({
+          id: 'local-close-2',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('close-root-2', {
+            serverId: 'local-close-2',
+            status: 'working',
+          })
+        );
+
+        await repositories.sessions.save(
+          session('dirty-child', {
+            serverId: 'local-close-2',
+            parentSessionId: 'close-root-2',
+            managedWorktree: true,
+            status: 'idle',
+          })
+        );
+
+        sessionManager.getGitStatus.mockResolvedValueOnce({
+          isClean: false,
+          totalChanges: 2,
+        });
+
+        const scoped = await service.createScopedControl('close-root-2');
+        await expect(scoped.closeChildSession('dirty-child')).rejects.toThrow(
+          "Session 'dirty-child' has uncommitted changes in managed worktree; pass force=true to close"
+        );
+      });
+
+      it('rejects closing root session from scoped control', async () => {
+        await repositories.servers.save({
+          id: 'local-close-3',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('close-root-3', {
+            serverId: 'local-close-3',
+            status: 'working',
+          })
+        );
+
+        const scoped = await service.createScopedControl('close-root-3');
+        await expect(scoped.closeChildSession('close-root-3')).rejects.toThrow(
+          'Root session cannot be closed from within scoped session control'
+        );
       });
     });
   });

@@ -111,6 +111,7 @@ export interface AgentControlServiceOptions {
 
 export interface ScopedAgentControlService {
   closeSharedChildSession(sessionId: string, force?: boolean): ReturnType<SessionManager['closeSharedChildSession']>;
+  closeChildSession(sessionId: string, force?: boolean): Promise<{ apiVersion: typeof SPAWNEA_CONTROL_API_VERSION; sessionId: string; removed: boolean }>;
   preflightIntegration(sessionId: string): ReturnType<SessionManager['preflightIntegration']>;
   getState(): Promise<ControlStateSnapshot>;
   createSessions(request: ControlCreateSessionsRequest): Promise<ControlCreateSessionsResult>;
@@ -209,6 +210,10 @@ export class AgentControlService {
     return this.sessionManager.closeSharedChildSession(sessionId, force);
   }
 
+  closeChildSession(sessionId: string, force?: boolean) {
+    return this.closeSession(sessionId, force);
+  }
+
   async closeSession(
     sessionId: string,
     force = false,
@@ -275,6 +280,30 @@ export class AgentControlService {
     const scoped: ScopedAgentControlService = {
       closeSharedChildSession: async (sessionId, force) => {
         await resolveInScope(sessionId);
+        return this.closeSharedChildSession(sessionId, force);
+      },
+      closeChildSession: async (sessionId, force) => {
+        const session = await resolveInScope(sessionId, true);
+        if (session.id === rootSessionId) {
+          throw new Error('Root session cannot be closed from within scoped session control');
+        }
+        if (session.managedWorktree) {
+          if (!force && ['working', 'starting'].includes(session.status)) {
+            throw new Error(`Session '${sessionId}' is currently ${session.status}; pass force=true to close`);
+          }
+          if (!force) {
+            const gitStatus = await this.sessionManager.getGitStatus(sessionId).catch(() => null);
+            if (!gitStatus) {
+              throw new Error(`Session '${sessionId}' worktree status could not be verified; pass force=true to close`);
+            }
+            if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
+              throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; pass force=true to close`);
+            }
+          }
+          await this.sessionManager.deleteSession(sessionId, 'leave-children');
+          this.notifyDataChanged?.();
+          return { apiVersion: SPAWNEA_CONTROL_API_VERSION, sessionId, removed: true };
+        }
         return this.closeSharedChildSession(sessionId, force);
       },
       preflightIntegration: async (sessionId) => {
@@ -677,34 +706,60 @@ export class AgentControlService {
     return this.isHarnessAvailableForHost(harnessId, hostId);
   }
 
-  private isBootstrapProjectAvailable(projectId: string, hostId: string): boolean {
+  private isProjectAvailableForHost(projectId: string, hostId: string): boolean {
     if (!projectId.includes(':')) return true;
     const prefix = `${hostId}:`;
     if (!projectId.startsWith(prefix)) return false;
     const catalogHost = this.getActiveCatalog?.()?.hosts[hostId];
-    if (!catalogHost?.enabled || catalogHost.ssh) return false;
+    if (!catalogHost || catalogHost.enabled === false) return false;
     return catalogHost.projects[projectId.slice(prefix.length)]?.enabled === true;
   }
 
-  private async validateBootstrapRootRequest(request: ControlCreateSessionRequest): Promise<void> {
+  private isBootstrapProjectAvailable(projectId: string, hostId: string): boolean {
+    const catalogHost = this.getActiveCatalog?.()?.hosts[hostId];
+    if (catalogHost && (catalogHost.enabled === false || catalogHost.ssh)) return false;
+    return this.isProjectAvailableForHost(projectId, hostId);
+  }
+
+  private async validateRootRequest(
+    request: ControlCreateSessionRequest,
+    allowRemoteHost = false,
+  ): Promise<void> {
     const [host, project, harness] = await Promise.all([
       this.repos.servers.findById(request.serverId),
       this.repos.projects.findById(request.projectId),
       this.repos.agents.findById(request.agentId),
     ]);
-    if (!host || !host.enabled || !isLocalControlHost(host)) {
-      throw new Error('Bootstrap root creation requires an enabled local host');
+    if (!host || !host.enabled) {
+      throw new Error(`Host '${request.serverId}' is not enabled or not found`);
     }
-    if (!project || project.serverId !== host.id ||
-        !this.isBootstrapProjectAvailable(project.id, host.id)) {
-      throw new Error(`Project '${request.projectId}' is not available on bootstrap host '${host.id}'`);
+    if (!project || project.serverId !== host.id) {
+      throw new Error(`Project '${request.projectId}' is not available on host '${host.id}'`);
     }
-    if (!harness || !this.isBootstrapHarnessAvailable(harness.id, host.id)) {
-      throw new Error(`Harness '${request.agentId}' is not available on bootstrap host '${host.id}'`);
+    if (!allowRemoteHost) {
+      if (!isLocalControlHost(host)) {
+        throw new Error('Bootstrap root creation requires an enabled local host');
+      }
+      if (!this.isBootstrapProjectAvailable(project.id, host.id)) {
+        throw new Error(`Project '${request.projectId}' is not available on bootstrap host '${host.id}'`);
+      }
+      if (!harness || !this.isBootstrapHarnessAvailable(harness.id, host.id)) {
+        throw new Error(`Harness '${request.agentId}' is not available on bootstrap host '${host.id}'`);
+      }
+    } else {
+      if (!this.isProjectAvailableForHost(project.id, host.id)) {
+        throw new Error(`Project '${request.projectId}' is not available on host '${host.id}'`);
+      }
+      if (!harness || !this.isHarnessAvailableForHost(harness.id, host.id)) {
+        throw new Error(`Harness '${request.agentId}' is not available on host '${host.id}'`);
+      }
     }
   }
 
-  async createRootSession(request: ControlCreateSessionRequest): Promise<ControlCreateSessionResult> {
+  async createRootSession(
+    request: ControlCreateSessionRequest,
+    options: { allowRemoteHost?: boolean } = {},
+  ): Promise<ControlCreateSessionResult> {
     const fingerprint = JSON.stringify({
       serverId: request.serverId,
       projectId: request.projectId,
@@ -730,7 +785,7 @@ export class AgentControlService {
 
     const operation = (async (): Promise<ControlCreateSessionResult> => {
       try {
-        await this.validateBootstrapRootRequest(request);
+        await this.validateRootRequest(request, options.allowRemoteHost);
         const session = await this.sessionManager.createSession({
           serverId: request.serverId,
           projectId: request.projectId,

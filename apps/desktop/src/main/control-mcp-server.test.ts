@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
-import { createBootstrapSpawneaMcpServer, createSpawneaMcpServer } from './control-mcp-server.js';
+import {
+  createBootstrapSpawneaMcpServer,
+  createCliSpawneaMcpServer,
+  createSpawneaMcpServer,
+} from './control-mcp-server.js';
 import type {
   AgentControlService,
   BootstrapAgentControlService,
@@ -11,8 +15,8 @@ import type { ControlListSessionsResult, ControlSendPromptResult } from '@spawne
 describe('Spawnea MCP v1 contract', () => {
   const connected: Array<{ client: Client; server: ReturnType<typeof createSpawneaMcpServer> }> = [];
 
-  async function connect(control: Partial<AgentControlService>) {
-    const server = createSpawneaMcpServer(control as AgentControlService);
+  async function connect(control: Partial<ScopedAgentControlService>) {
+    const server = createSpawneaMcpServer(control as ScopedAgentControlService);
     const client = new Client({ name: 'spawnea-test-client', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -635,6 +639,77 @@ describe('Spawnea MCP v1 contract', () => {
         id: 'local-1:agy',
         kind: 'agy',
       },
+    });
+  });
+
+  describe('CLI MCP server', () => {
+    async function connectCli(control: AgentControlService | ScopedAgentControlService) {
+      const server = createCliSpawneaMcpServer(control);
+      const client = new Client({ name: 'spawnea-cli-test-client', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      connected.push({ client, server: server as any });
+      return client;
+    }
+
+    it('passes allowRemoteHost when creating root session via CLI MCP', async () => {
+      const createRootSession = vi.fn().mockResolvedValue({
+        apiVersion: 'v1',
+        sessionId: 'remote-root',
+        sessionCreated: true,
+      });
+      const getState = vi.fn().mockResolvedValue({
+        apiVersion: 'v1',
+        sessions: [],
+        hosts: [{ id: 'remote-1', name: 'Remote Server', enabled: true }],
+        projects: [{ id: 'remote-1:proj', name: 'Project', hostId: 'remote-1' }],
+        harnesses: [{ id: 'remote-1:shell', name: 'Shell', harness: 'shell', kind: 'shell' }],
+      });
+
+      const client = await connectCli({
+        createRootSession,
+        getState,
+      } as unknown as AgentControlService);
+
+      const result = await client.callTool({
+        name: 'spawnea_create_session',
+        arguments: {
+          serverId: 'remote-1',
+          projectId: 'remote-1:proj',
+          agentId: 'remote-1:shell',
+          task: 'Remote task',
+        },
+      });
+
+      expect(result.structuredContent).toMatchObject({ sessionId: 'remote-root' });
+      expect(createRootSession).toHaveBeenCalledWith(
+        expect.objectContaining({ serverId: 'remote-1', projectId: 'remote-1:proj' }),
+        { allowRemoteHost: true }
+      );
+    });
+
+    it('calls closeChildSession when closing session in scoped CLI MCP', async () => {
+      const closeChildSession = vi.fn().mockResolvedValue({
+        apiVersion: 'v1',
+        sessionId: 'child-123',
+        removed: true,
+      });
+
+      const client = await connectCli({
+        closeChildSession,
+        getState: vi.fn(),
+      } as unknown as ScopedAgentControlService);
+
+      const result = await client.callTool({
+        name: 'spawnea_close_session',
+        arguments: {
+          sessionId: 'child-123',
+          force: true,
+        },
+      });
+
+      expect(result.structuredContent).toMatchObject({ sessionId: 'child-123', removed: true });
+      expect(closeChildSession).toHaveBeenCalledWith('child-123', true);
     });
   });
 });

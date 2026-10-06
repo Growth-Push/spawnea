@@ -72,6 +72,7 @@ export class ControlCliClient {
   }
 
   private async init(): Promise<void> {
+    let initialized = false;
     await new Promise<void>((resolve, reject) => {
       const socket = createConnection(this.descriptor.socketPath);
       socket.setEncoding('utf8');
@@ -88,8 +89,11 @@ export class ControlCliClient {
         socket.removeListener('error', onError);
 
         const handleSocketClose = (reason: string) => {
+          const message = initialized
+            ? `Control socket connection closed: ${reason}`
+            : `Spawnea desktop app closed connection during handshake (possibly unauthorized or stale runtime descriptor): ${reason}`;
           for (const { reject } of this.pending.values()) {
-            reject(new Error(`Control socket connection closed: ${reason}`));
+            reject(new Error(message));
           }
           this.pending.clear();
         };
@@ -120,6 +124,7 @@ export class ControlCliClient {
     });
 
     this.sendNotification('notifications/initialized');
+    initialized = true;
   }
 
   private handleData(chunk: Buffer | string): void {
