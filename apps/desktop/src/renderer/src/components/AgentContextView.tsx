@@ -13,7 +13,7 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
   const [selected, setSelected] = useState<ControlAgentContextCall | null>(null);
   const [output, setOutput] = useState<string | null>(null);
   const [outputMode, setOutputMode] = useState<'compact' | 'raw'>('compact');
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const copyTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const response = selected?.response as { turnId?: string; sessionId?: string } | undefined;
   const turnId = response?.turnId;
@@ -27,11 +27,13 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
   const handleCopyPrompt = async () => {
     try {
       await navigator.clipboard.writeText(getAgentSkillPrompt());
-      setCopied(true);
+      setCopyStatus('copied');
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
+      copyTimeoutRef.current = setTimeout(() => setCopyStatus('idle'), 2000);
     } catch {
-      // Ignore clipboard write failure
+      setCopyStatus('failed');
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopyStatus('idle'), 2000);
     }
   };
 
@@ -83,8 +85,10 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
             className="flex items-center gap-1 shrink-0 rounded bg-[#21262d] px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-[#30363d] hover:text-white transition-colors"
             title="Copy Spawnea CLI orchestration prompt for AI agents"
           >
-            {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
-            <span>{copied ? 'Copied' : 'Copy Prompt'}</span>
+            {copyStatus === 'copied' ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+            <span className={copyStatus === 'failed' ? 'text-rose-400' : undefined}>
+              {copyStatus === 'copied' ? 'Copied' : copyStatus === 'failed' ? 'Copy failed' : 'Copy Prompt'}
+            </span>
           </button>
         </div>
         {snapshot.calls.length === 0 ? (

@@ -55,7 +55,7 @@ spawnea prompt send-and-wait --session <child-id> "Run the test suite and report
 
 # Or send asynchronously and poll turn status:
 TURN_ID=$(spawnea prompt send --session <child-id> "Run unit tests" --json | jq -r .turnId)
-spawnea prompt wait --turn "$TURN_ID" --timeout 120
+[ "$TURN_ID" != "null" ] && [ -n "$TURN_ID" ] && spawnea prompt wait --turn "$TURN_ID" --timeout 120
 \`\`\`
 
 ### 6. Close a Session or Child

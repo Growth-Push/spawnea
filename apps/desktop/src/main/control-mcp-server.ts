@@ -469,7 +469,10 @@ export function createCliSpawneaMcpServer(
       }
       if (!resolvedAgentId) {
         const defaultHarness = availableHarnesses.find((h) => h.kind !== 'shell') ?? availableHarnesses[0];
-        resolvedAgentId = defaultHarness?.id ?? 'local:codex';
+        if (!defaultHarness) {
+          throw new Error(`No harness available on server '${serverId}'`);
+        }
+        resolvedAgentId = defaultHarness.id;
       }
 
       const clientRequestId = request.clientRequestId ?? randomUUID();
@@ -508,7 +511,10 @@ export function createCliSpawneaMcpServer(
       let agentId = input.agentId;
       if (agentId) {
         const state = await control.getState();
-        const match = state.harnesses.find(
+        const parent = state.sessions.find((s) => s.id === input.parentSession);
+        const serverId = input.serverId ?? parent?.host?.id ?? 'local';
+        const availableHarnesses = state.harnesses.filter((h) => !h.id.includes(':') || h.id.startsWith(`${serverId}:`));
+        const match = availableHarnesses.find(
           (h) => h.id === agentId ||
                  h.name.toLowerCase() === agentId?.toLowerCase() ||
                  h.harness.toLowerCase() === agentId?.toLowerCase() ||

@@ -7,7 +7,7 @@ import { ControlMcpGateway } from '../main/control-mcp-gateway.js';
 import type { AgentControlService as AgentControlServiceType } from '../main/agent-control-service.js';
 import { ControlCliClient } from './client.js';
 import { parseArgs, runCli } from './index.js';
-import { showSkillPrompt } from './commands.js';
+import { pollTurn, showSkillPrompt } from './commands.js';
 
 describe('Spawnea Control CLI', () => {
   const gateways: ControlMcpGateway[] = [];
@@ -110,6 +110,11 @@ describe('Spawnea Control CLI', () => {
       expect(parsedForceFirst.flags.force).toBe(true);
       expect(parsedForceFirst.positional).toEqual(['child-1']);
     });
+
+    it('throws when a non-boolean flag is missing a value', () => {
+      expect(() => parseArgs(['session', 'create', '--project'])).toThrow("Flag '--project' requires a value.");
+      expect(() => parseArgs(['session', 'create', '--project', '--task', 'do-work'])).toThrow("Flag '--project' requires a value.");
+    });
   });
 
   describe('skill prompt generation', () => {
@@ -136,10 +141,17 @@ describe('Spawnea Control CLI', () => {
   });
 
   describe('socket client and error handling', () => {
+    it('validates timeout in pollTurn', async () => {
+      await expect(pollTurn({} as any, 'turn-abc', NaN)).rejects.toThrow('Invalid timeout');
+      await expect(pollTurn({} as any, 'turn-abc', 0)).rejects.toThrow('Invalid timeout');
+      await expect(pollTurn({} as any, 'turn-abc', -10)).rejects.toThrow('Invalid timeout');
+    });
+
     it('fails fast when desktop app is not running', async () => {
       await expect(
         ControlCliClient.connect({
           profile: 'nonexistent-profile-12345',
+          env: {},
         }),
       ).rejects.toThrow('Spawnea desktop app is not running');
     });

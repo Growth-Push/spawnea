@@ -110,7 +110,7 @@ export function parseArgs(rawArgs: string[]): ParsedArgs {
             flags[key] = next;
             i++;
           } else {
-            flags[key] = true;
+            throw new Error(`Flag '--${key}' requires a value.`);
           }
         }
       }
@@ -158,6 +158,7 @@ export async function runCli(argv: string[]): Promise<void> {
     client = await ControlCliClient.connect({
       profile,
       runtimeFile,
+      sessionId: process.env.SPAWNEA_SESSION_ID || undefined,
     });
 
     switch (parsed.command) {

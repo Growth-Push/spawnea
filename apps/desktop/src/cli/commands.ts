@@ -168,41 +168,46 @@ export async function sendPrompt(client: ControlCliClient, options: SendPromptOp
   }
 }
 
-export interface WaitTurnOptions extends OutputOptions {
-  turn: string;
-  timeout?: number;
+export interface PollTurnResult {
+  turnId: string;
+  status: string;
+  output: string;
+  error?: string;
+  rawTurn: any;
 }
 
-export async function waitTurn(client: ControlCliClient, options: WaitTurnOptions): Promise<void> {
-  const timeoutSec = options.timeout ?? 120;
+export async function pollTurn(
+  client: ControlCliClient,
+  turnId: string,
+  timeoutSec: number,
+  initialVersion = 0,
+): Promise<PollTurnResult> {
+  if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) {
+    throw new Error(`Invalid timeout '${timeoutSec}'. Must be a positive finite number.`);
+  }
+
   const deadline = Date.now() + timeoutSec * 1000;
-  let cursor: string | undefined;
-  let version = 0;
-  let accumulatedOutput = '';
+  let version = initialVersion;
 
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1000, deadline - Date.now());
     const waitMs = Math.min(remainingMs, 5000);
     const turn = await client.callTool('spawnea_get_turn', {
-      turnId: options.turn,
-      cursor,
+      turnId,
       afterVersion: version,
       waitMs,
       outputMode: 'compact',
     });
 
-    if (turn.output) {
-      accumulatedOutput += turn.output;
-    }
-
-    cursor = turn.cursor ?? cursor;
     version = turn.version ?? version;
 
-    if (turn.status === 'completed' || turn.status === 'needs_input') {
+    if (turn.status === 'completed' || turn.status === 'needs_input' || turn.status === 'failed') {
       let finalTurn = { ...turn };
+      let accumulatedOutput = turn.output || '';
+
       while (finalTurn.truncated && finalTurn.cursor) {
         const nextChunk = await client.callTool('spawnea_get_turn', {
-          turnId: options.turn,
+          turnId,
           cursor: finalTurn.cursor,
           waitMs: 5000,
           outputMode: 'compact',
@@ -212,29 +217,46 @@ export async function waitTurn(client: ControlCliClient, options: WaitTurnOption
         }
         finalTurn = nextChunk;
       }
-      finalTurn = { ...finalTurn, output: accumulatedOutput || finalTurn.output };
-      if (options.json) {
-        console.log(JSON.stringify(finalTurn, null, 2));
-      } else {
-        console.log(`Turn ${options.turn} ${turn.status}:`);
-        console.log(finalTurn.output || '(No response text)');
-      }
-      return;
-    }
 
-    if (turn.status === 'failed') {
-      const finalTurn = { ...turn, output: accumulatedOutput || turn.output };
-      if (options.json) {
-        console.log(JSON.stringify(finalTurn, null, 2));
-      } else {
-        console.error(`Turn ${options.turn} failed: ${finalTurn.error || finalTurn.output || 'Unknown error'}`);
-      }
-      process.exitCode = 1;
-      return;
+      finalTurn = { ...finalTurn, output: accumulatedOutput || finalTurn.output || '' };
+      return {
+        turnId,
+        status: turn.status,
+        output: finalTurn.output,
+        error: finalTurn.error,
+        rawTurn: finalTurn,
+      };
     }
   }
 
-  throw new Error(`Turn ${options.turn} did not complete within ${timeoutSec} seconds.`);
+  throw new Error(`Turn ${turnId} did not complete within ${timeoutSec} seconds.`);
+}
+
+export interface WaitTurnOptions extends OutputOptions {
+  turn: string;
+  timeout?: number;
+}
+
+export async function waitTurn(client: ControlCliClient, options: WaitTurnOptions): Promise<void> {
+  const timeoutSec = options.timeout ?? 120;
+  const result = await pollTurn(client, options.turn, timeoutSec);
+
+  if (result.status === 'failed') {
+    if (options.json) {
+      console.log(JSON.stringify(result.rawTurn, null, 2));
+    } else {
+      console.error(`Turn ${options.turn} failed: ${result.error || result.output || 'Unknown error'}`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify(result.rawTurn, null, 2));
+  } else {
+    console.log(`Turn ${options.turn} ${result.status}:`);
+    console.log(result.output || '(No response text)');
+  }
 }
 
 export interface SendAndWaitOptions extends OutputOptions {
@@ -255,65 +277,31 @@ export async function sendAndWaitPrompt(client: ControlCliClient, options: SendA
   }
 
   const timeoutSec = options.timeout ?? 300;
-  const deadline = Date.now() + timeoutSec * 1000;
-  let cursor: string | undefined;
-  let version = sent.version ?? 0;
-  let accumulatedOutput = '';
+  try {
+    const result = await pollTurn(client, turnId, timeoutSec, sent.version ?? 0);
 
-  while (Date.now() < deadline) {
-    const remainingMs = Math.max(1000, deadline - Date.now());
-    const waitMs = Math.min(remainingMs, 5000);
-    const turn = await client.callTool('spawnea_get_turn', {
-      turnId,
-      cursor,
-      afterVersion: version,
-      waitMs,
-      outputMode: 'compact',
-    });
-
-    if (turn.output) {
-      accumulatedOutput += turn.output;
-    }
-
-    cursor = turn.cursor ?? cursor;
-    version = turn.version ?? version;
-
-    if (turn.status === 'completed' || turn.status === 'needs_input') {
-      let finalTurn = { ...turn };
-      while (finalTurn.truncated && finalTurn.cursor) {
-        const nextChunk = await client.callTool('spawnea_get_turn', {
-          turnId,
-          cursor: finalTurn.cursor,
-          waitMs: 5000,
-          outputMode: 'compact',
-        });
-        if (nextChunk.output) {
-          accumulatedOutput += nextChunk.output;
-        }
-        finalTurn = nextChunk;
-      }
-      finalTurn = { ...finalTurn, output: accumulatedOutput || finalTurn.output };
+    if (result.status === 'failed') {
       if (options.json) {
-        console.log(JSON.stringify(finalTurn, null, 2));
+        console.log(JSON.stringify(result.rawTurn, null, 2));
       } else {
-        console.log(finalTurn.output || '');
-      }
-      return;
-    }
-
-    if (turn.status === 'failed') {
-      const finalTurn = { ...turn, output: accumulatedOutput || turn.output };
-      if (options.json) {
-        console.log(JSON.stringify(finalTurn, null, 2));
-      } else {
-        console.error(`Prompt execution failed: ${finalTurn.error || finalTurn.output || 'Unknown failure'}`);
+        console.error(`Prompt execution failed: ${result.error || result.output || 'Unknown failure'}`);
       }
       process.exitCode = 1;
       return;
     }
-  }
 
-  throw new Error(`Session ${options.session} did not complete prompt within ${timeoutSec} seconds (turn: ${turnId}).`);
+    if (options.json) {
+      console.log(JSON.stringify(result.rawTurn, null, 2));
+    } else {
+      console.log(result.output || '');
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('did not complete within')) {
+      throw new Error(`Session ${options.session} did not complete prompt within ${timeoutSec} seconds (turn: ${turnId}).`);
+    }
+    throw err;
+  }
 }
 
 export interface CloseSessionOptions extends OutputOptions {

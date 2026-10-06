@@ -198,6 +198,9 @@ export class ControlCliClient {
       this.socket.destroy();
     }
     this.socket = null;
+    for (const { reject } of this.pending.values()) {
+      reject(new Error('Control socket connection was closed'));
+    }
     this.pending.clear();
   }
 }

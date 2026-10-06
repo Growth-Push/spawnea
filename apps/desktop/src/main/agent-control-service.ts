@@ -221,7 +221,10 @@ export class AgentControlService {
 
     if (session.managedWorktree && !force) {
       const gitStatus = await this.sessionManager.getGitStatus(sessionId).catch(() => null);
-      if (gitStatus && (!gitStatus.isClean || gitStatus.totalChanges > 0)) {
+      if (!gitStatus) {
+        throw new Error(`Session '${sessionId}' worktree status could not be verified; pass force=true to close`);
+      }
+      if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
         throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; pass force=true to close`);
       }
     }
