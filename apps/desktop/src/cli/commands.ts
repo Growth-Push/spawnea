@@ -215,6 +215,7 @@ export async function pollTurn(
   let cursor: string | undefined;
   let version = initialVersion;
   let accumulatedOutput = '';
+  let hasDelimitedResponse = false;
 
   while (Date.now() < deadline) {
     const remainingMs = deadline - Date.now();
@@ -233,11 +234,13 @@ export async function pollTurn(
 
     if (turn.cursorExpired) {
       accumulatedOutput = '';
+      hasDelimitedResponse = false;
     }
 
     if (turn.extraction === 'delimited') {
       accumulatedOutput = turn.output || '';
-    } else if (turn.output) {
+      hasDelimitedResponse = true;
+    } else if (!hasDelimitedResponse && turn.output) {
       accumulatedOutput += turn.output;
     }
 
@@ -260,10 +263,12 @@ export async function pollTurn(
         }, rpcTimeoutMs);
         if (nextChunk.cursorExpired) {
           accumulatedOutput = '';
+          hasDelimitedResponse = false;
         }
         if (nextChunk.extraction === 'delimited') {
           accumulatedOutput = nextChunk.output || '';
-        } else if (nextChunk.output) {
+          hasDelimitedResponse = true;
+        } else if (!hasDelimitedResponse && nextChunk.output) {
           accumulatedOutput += nextChunk.output;
         }
         finalTurn = nextChunk;

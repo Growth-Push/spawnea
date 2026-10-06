@@ -296,6 +296,37 @@ describe('Spawnea Control CLI', () => {
       expect(result.output).not.toContain('streaming chunk');
     });
 
+    it('does not append post-delimiter terminal output chunks when draining subsequent output', async () => {
+      let callCount = 0;
+      const mockClient = {
+        callTool: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              turnId: 'delimited-drain',
+              status: 'completed',
+              cursor: 'c1',
+              truncated: true,
+              extraction: 'delimited',
+              output: 'Exact delimited response',
+            };
+          }
+          return {
+            turnId: 'delimited-drain',
+            status: 'completed',
+            cursor: undefined,
+            truncated: false,
+            extraction: 'tail',
+            output: '\n[Spawnea] terminal trailing output or prompt',
+          };
+        }),
+      } as unknown as ControlCliClient;
+
+      const result = await pollTurn(mockClient, 'delimited-drain', 5);
+      expect(result.output).toBe('Exact delimited response');
+      expect(result.output).not.toContain('terminal trailing output');
+    });
+
     it('bounds turn output draining by the configured deadline and fails if output remains truncated', async () => {
       let drainedCalls = 0;
       const mockClient = {
