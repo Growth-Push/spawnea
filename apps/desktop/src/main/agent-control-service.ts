@@ -249,6 +249,9 @@ export class AgentControlService {
     }
 
     await this.sessionManager.deleteSession(sessionId, 'leave-children');
+    if (await this.repos.sessions.findById(sessionId)) {
+      throw new Error(`Session '${sessionId}' runtime stopped but session record could not be removed`);
+    }
     this.notifyDataChanged?.();
     return { apiVersion: SPAWNEA_CONTROL_API_VERSION, sessionId, removed: true };
   }

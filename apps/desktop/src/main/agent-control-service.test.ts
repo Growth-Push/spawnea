@@ -1797,6 +1797,63 @@ describe('AgentControlService', () => {
           'mcp-validated'
         );
       });
+
+      it('closes a non-managed session and deletes it from repositories', async () => {
+        await repositories.servers.save({
+          id: 'local-non-managed-server',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('non-managed-sess', {
+            serverId: 'local-non-managed-server',
+            managedWorktree: false,
+            status: 'idle',
+          })
+        );
+
+        sessionManager.deleteSession.mockImplementationOnce(async (id: string) => {
+          await repositories.sessions.delete(id);
+          return true;
+        });
+
+        const result = await service.closeSession('non-managed-sess');
+        expect(result).toEqual({
+          apiVersion: 'v1',
+          sessionId: 'non-managed-sess',
+          removed: true,
+        });
+        expect(sessionManager.deleteSession).toHaveBeenCalledWith('non-managed-sess', 'leave-children');
+        expect(await repositories.sessions.findById('non-managed-sess')).toBeNull();
+      });
+
+      it('throws when non-managed session record remains after deleteSession', async () => {
+        await repositories.servers.save({
+          id: 'local-failing-delete-server',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('failing-delete-sess', {
+            serverId: 'local-failing-delete-server',
+            managedWorktree: false,
+            status: 'idle',
+          })
+        );
+
+        // deleteSession returns true or doesn't throw, but record is still in repos
+        sessionManager.deleteSession.mockResolvedValueOnce(true);
+
+        await expect(service.closeSession('failing-delete-sess')).rejects.toThrow(
+          "Session 'failing-delete-sess' runtime stopped but session record could not be removed"
+        );
+      });
     });
   });
 });
