@@ -20,6 +20,7 @@ describe('AgentControlService', () => {
     captureSessionTerminal: ReturnType<typeof vi.fn>;
     getGitStatus: ReturnType<typeof vi.fn>;
     deleteSession: ReturnType<typeof vi.fn>;
+    stopSession: ReturnType<typeof vi.fn>;
   };
   let service: AgentControlService;
   let terminalOutput: string;
@@ -122,6 +123,7 @@ describe('AgentControlService', () => {
       captureSessionTerminal: vi.fn(async () => terminalOutput),
       getGitStatus: vi.fn().mockResolvedValue({ isClean: true }),
       deleteSession: vi.fn().mockResolvedValue(true),
+      stopSession: vi.fn().mockResolvedValue(undefined),
     };
     service = new AgentControlService({
       repositories,
@@ -1612,6 +1614,31 @@ describe('AgentControlService', () => {
           expect.objectContaining({ parentSessionId: 'root-parent' }),
           'mcp'
         );
+
+        // Cannot prompt itself (reentrant self-prompt)
+        await expect(
+          childScoped.sendPrompt({ target: 'child-terminal', prompt: 'Self hello', clientRequestId: 'self-1' })
+        ).rejects.toThrow('outside the authenticated MCP scope');
+
+        // Cannot prompt root
+        await expect(
+          childScoped.sendPrompt({ target: 'root-parent', prompt: 'Root hello', clientRequestId: 'root-1' })
+        ).rejects.toThrow('outside the authenticated MCP scope');
+
+        // Can prompt sibling
+        await repositories.sessions.save(
+          session('sibling-terminal', {
+            serverId: 'local-child-scope',
+            parentSessionId: 'root-parent',
+            status: 'idle',
+          })
+        );
+        const siblingTurn = await childScoped.sendPrompt({
+          target: 'sibling-terminal',
+          prompt: 'Sibling review',
+          clientRequestId: 'sibling-1',
+        });
+        expect(siblingTurn.turnId).toBeDefined();
       });
 
       it('rejects closing a dirty managed worktree session via unscoped closeSession even with force', async () => {
@@ -1640,6 +1667,65 @@ describe('AgentControlService', () => {
           "Session 'dirty-unscoped-sess' has uncommitted changes in managed worktree; finalize or stash changes before closing"
         );
         expect(sessionManager.deleteSession).not.toHaveBeenCalledWith('dirty-unscoped-sess', expect.anything());
+        expect(sessionManager.finishSession).not.toHaveBeenCalledWith('dirty-unscoped-sess', expect.anything(), expect.anything(), expect.anything());
+      });
+
+      it('fails closed when managed worktree git status cannot be verified even with force', async () => {
+        await repositories.servers.save({
+          id: 'local-unscoped-unverified',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('unverified-sess', {
+            serverId: 'local-unscoped-unverified',
+            managedWorktree: true,
+            status: 'idle',
+          })
+        );
+
+        sessionManager.getGitStatus.mockResolvedValueOnce(null);
+
+        await expect(service.closeSession('unverified-sess', true)).rejects.toThrow(
+          "Session 'unverified-sess' worktree status could not be verified; aborting close to prevent data loss"
+        );
+        expect(sessionManager.finishSession).not.toHaveBeenCalledWith('unverified-sess', expect.anything(), expect.anything(), expect.anything());
+      });
+
+      it('stops running agent runtime before verifying cleanliness and closing managed worktree', async () => {
+        await repositories.servers.save({
+          id: 'local-unscoped-working',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('working-clean-sess', {
+            serverId: 'local-unscoped-working',
+            managedWorktree: true,
+            status: 'working',
+          })
+        );
+
+        sessionManager.getGitStatus.mockResolvedValueOnce({
+          isClean: true,
+          totalChanges: 0,
+        });
+
+        const result = await service.closeSession('working-clean-sess', true);
+        expect(result.removed).toBe(true);
+        expect(sessionManager.stopSession).toHaveBeenCalledWith('working-clean-sess');
+        expect(sessionManager.finishSession).toHaveBeenCalledWith(
+          'working-clean-sess',
+          'close',
+          { stashChanges: false },
+          'mcp-validated'
+        );
       });
 
       it('closes a clean managed worktree session via unscoped closeSession using guarded finalization', async () => {

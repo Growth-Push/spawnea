@@ -225,12 +225,14 @@ export class AgentControlService {
     }
 
     if (session.managedWorktree) {
+      if (['working', 'starting'].includes(session.status)) {
+        await this.sessionManager.stopSession(sessionId);
+      }
       const gitStatus = await this.sessionManager.getGitStatus(sessionId).catch(() => null);
       if (!gitStatus) {
-        if (!force) {
-          throw new Error(`Session '${sessionId}' worktree status could not be verified; pass force=true to close`);
-        }
-      } else if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
+        throw new Error(`Session '${sessionId}' worktree status could not be verified; aborting close to prevent data loss`);
+      }
+      if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
         throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
       }
       const result = await this.sessionManager.finishSession(
@@ -408,6 +410,12 @@ export class AgentControlService {
         if (!target) target = await this.repos.sessions.findByParentAndAlias(rootSessionId, request.target);
         if (!target && isChild) target = await this.repos.sessions.findByParentAndAlias(sessionOrRootId, request.target);
         if (!target) throw new Error('Session is outside the authenticated MCP scope');
+        if (target.id === sessionOrRootId && (isChild || !allowRootPrompts)) {
+          throw new Error('Session is outside the authenticated MCP scope');
+        }
+        if (target.id === rootSessionId && !allowRootPrompts) {
+          throw new Error('Session is outside the authenticated MCP scope');
+        }
         await resolveInScope(target.id, allowRootPrompts);
         return this.sendPrompt({ ...request, target: target.id });
       },
