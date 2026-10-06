@@ -21,6 +21,7 @@ describe('AgentControlService', () => {
     getGitStatus: ReturnType<typeof vi.fn>;
     deleteSession: ReturnType<typeof vi.fn>;
     stopSession: ReturnType<typeof vi.fn>;
+    isWorktreeRemovalRecorded: ReturnType<typeof vi.fn>;
   };
   let service: AgentControlService;
   let terminalOutput: string;
@@ -124,6 +125,7 @@ describe('AgentControlService', () => {
       getGitStatus: vi.fn().mockResolvedValue({ isClean: true }),
       deleteSession: vi.fn().mockResolvedValue(true),
       stopSession: vi.fn().mockResolvedValue(undefined),
+      isWorktreeRemovalRecorded: vi.fn().mockResolvedValue(false),
     };
     service = new AgentControlService({
       repositories,
@@ -1756,6 +1758,7 @@ describe('AgentControlService', () => {
           sessionId: 'clean-unscoped-sess',
           removed: true,
         });
+        expect(sessionManager.stopSession).toHaveBeenCalledWith('clean-unscoped-sess');
         expect(sessionManager.finishSession).toHaveBeenCalledWith(
           'clean-unscoped-sess',
           'close',
@@ -1763,6 +1766,36 @@ describe('AgentControlService', () => {
           'mcp-validated'
         );
         expect(sessionManager.deleteSession).not.toHaveBeenCalledWith('clean-unscoped-sess', expect.anything());
+      });
+
+      it('allows close retry when worktree removal was already recorded without requiring worktree to exist', async () => {
+        await repositories.servers.save({
+          id: 'local-unscoped-retry',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('retry-sess', {
+            serverId: 'local-unscoped-retry',
+            managedWorktree: true,
+            status: 'idle',
+          })
+        );
+
+        sessionManager.isWorktreeRemovalRecorded.mockResolvedValueOnce(true);
+
+        const result = await service.closeSession('retry-sess');
+        expect(result.removed).toBe(true);
+        expect(sessionManager.getGitStatus).not.toHaveBeenCalledWith('retry-sess');
+        expect(sessionManager.finishSession).toHaveBeenCalledWith(
+          'retry-sess',
+          'close',
+          { stashChanges: false },
+          'mcp-validated'
+        );
       });
     });
   });

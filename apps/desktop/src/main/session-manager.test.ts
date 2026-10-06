@@ -1749,6 +1749,31 @@ up 1 day, 5 hours
       expect(await contextStore.load(session.id)).toBeNull();
     });
 
+    it('reports whether worktree removal was recorded in session context', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Recorded removal check',
+        baseBranch: 'main',
+      });
+
+      expect(await sessionManager.isWorktreeRemovalRecorded(session.id, 'close')).toBe(false);
+
+      const existingContext = await contextStore.load(session.id);
+      expect(existingContext).toBeDefined();
+      if (existingContext) {
+        await contextStore.save({
+          ...existingContext,
+          finalization: { action: 'close', worktreeRemoved: true },
+        });
+      }
+
+      expect(await sessionManager.isWorktreeRemovalRecorded(session.id, 'close')).toBe(true);
+      expect(await sessionManager.isWorktreeRemovalRecorded(session.id, 'integrate')).toBe(false);
+    });
+
     it('finalizes a managed worktree session with action integrate', async () => {
       await enableManagedWorktrees();
       const session = await sessionManager.createSession({

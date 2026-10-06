@@ -1762,6 +1762,18 @@ export class SessionManager {
           // 2. Verify termination before changing any files.
           await this.stopSession(sessionId);
 
+          // MCP-validated closes never discard work: with the runtime stopped, require a
+          // verified clean worktree so late writes or an unreadable status cannot be lost.
+          if (origin === 'mcp-validated') {
+            const postStopStatus = await this.getGitStatus(sessionId).catch(() => null);
+            if (!postStopStatus || postStopStatus.unavailable) {
+              throw new Error(`Session '${sessionId}' worktree status could not be verified; aborting close to prevent data loss`);
+            }
+            if (!postStopStatus.isClean || postStopStatus.totalChanges > 0) {
+              throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
+            }
+          }
+
           // 3. Preserve or discard local changes before removing the worktree.
           if (options.stashChanges) {
             await this.gitService.stashManagedWorktreeChanges(host, identity);
@@ -1822,6 +1834,11 @@ export class SessionManager {
         }
       }
     }
+  }
+
+  async isWorktreeRemovalRecorded(sessionId: string, action: FinishSessionAction = 'close'): Promise<boolean> {
+    const existingContext = await this.contextStore.load(sessionId);
+    return existingContext?.finalization?.action === action && existingContext.finalization.worktreeRemoved === true;
   }
 
   async preflightIntegration(sessionId: string) {
