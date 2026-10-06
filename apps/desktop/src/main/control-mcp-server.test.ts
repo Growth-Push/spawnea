@@ -792,7 +792,7 @@ describe('Spawnea MCP v1 contract', () => {
           { id: 'dev-workstation:claude', name: 'Claude', kind: 'claude' },
         ],
       });
-      const isHarnessAvailableForHost = vi.fn().mockImplementation((harnessId: string, hostId: string) => {
+      const isHarnessAvailableForHost = vi.fn().mockImplementation((harnessId: string, _hostId: string) => {
         if (harnessId === 'codex') return false;
         if (harnessId === 'dev-workstation:claude') return true;
         return false;
