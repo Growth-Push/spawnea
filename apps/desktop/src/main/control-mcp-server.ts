@@ -463,7 +463,16 @@ export function createCliSpawneaMcpServer(
       const state = await control.getState();
       const selectedProject = state.projects?.find((p) => p.id === request.projectId);
       const serverId = request.serverId ?? selectedProject?.hostId ?? state.hosts[0]?.id ?? 'local';
-      const availableHarnesses = state.harnesses.filter((h) => !h.id.includes(':') || h.id.startsWith(`${serverId}:`));
+      const isAvailable = (h: { id: string }) => {
+        if ('isHarnessAvailableForHost' in control && typeof (control as any).isHarnessAvailableForHost === 'function') {
+          return (control as any).isHarnessAvailableForHost(h.id, serverId);
+        }
+        return !h.id.includes(':') || h.id.startsWith(`${serverId}:`);
+      };
+      const availableHarnesses = state.harnesses.filter((h) => {
+        if (h.id.includes(':') && !h.id.startsWith(`${serverId}:`)) return false;
+        return isAvailable(h);
+      });
       let resolvedAgentId = request.agentId;
       if (resolvedAgentId && !availableHarnesses.some((h) => h.id === resolvedAgentId)) {
         const match = availableHarnesses.find(

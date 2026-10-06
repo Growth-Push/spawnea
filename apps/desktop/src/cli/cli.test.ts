@@ -346,6 +346,23 @@ describe('Spawnea Control CLI', () => {
       expect(result.output).toBe('chunk-1 chunk-2 ');
     });
 
+    it('fails when a terminal response arrives after the deadline', async () => {
+      const mockClient = {
+        callTool: vi.fn().mockImplementation(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+          return {
+            turnId: 'late-turn',
+            status: 'completed',
+            output: 'late answer',
+          };
+        }),
+      } as unknown as ControlCliClient;
+
+      await expect(pollTurn(mockClient, 'late-turn', 0.03)).rejects.toThrow(
+        /Turn late-turn did not complete within 0.03 seconds/
+      );
+    });
+
     it('sets process.exitCode = 1 when sendPrompt cannot confirm delivery', async () => {
       const mockClient = {
         callTool: vi.fn().mockResolvedValue({

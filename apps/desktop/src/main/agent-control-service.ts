@@ -134,6 +134,7 @@ export interface ScopedAgentControlService {
 export interface BootstrapAgentControlService {
   getState(): Promise<ControlBootstrapState>;
   createSession(request: ControlCreateSessionRequest): Promise<ControlCreateSessionResult>;
+  isHarnessAvailableForHost?(harnessId: string, hostId: string): boolean;
 }
 
 function toIso(value: Date | string): string {
@@ -247,6 +248,7 @@ export class AgentControlService {
     return {
       getState: () => this.getBootstrapState(),
       createSession: (request) => this.createRootSession(request),
+      isHarnessAvailableForHost: (harnessId, hostId) => this.isHarnessAvailableForHost(harnessId, hostId),
     };
   }
 
@@ -728,7 +730,7 @@ export class AgentControlService {
     };
   }
 
-  private isHarnessAvailableForHost(harnessId: string, hostId: string): boolean {
+  isHarnessAvailableForHost(harnessId: string, hostId: string): boolean {
     const catalog = this.getActiveCatalog?.();
     if (catalog) {
       const catalogHost = catalog.hosts[hostId];

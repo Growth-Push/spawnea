@@ -1755,6 +1755,45 @@ up 1 day, 5 hours
       expect(await repos.sessions.findById(session.id)).toBeDefined();
     });
 
+    it('rejects MCP-validated close with stashChanges: false when worktree contains ignored files', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Discard close test on ignored file worktree',
+        baseBranch: 'main',
+      });
+
+      mockHost.customRules.push(
+        {
+          pattern: 'git rev-parse --is-inside-work-tree',
+          response: { stdout: 'true\n', stderr: '', exitCode: 0 },
+        },
+        {
+          pattern: 'git status --porcelain=v1 -uall',
+          response: { stdout: '', stderr: '', exitCode: 0 },
+        },
+        {
+          pattern: 'git status --porcelain=v1 --ignored --untracked-files=all',
+          response: { stdout: '!! .env\n', stderr: '', exitCode: 0 },
+        }
+      );
+
+      await expect(
+        sessionManager.finishSession(
+          session.id,
+          'close',
+          { stashChanges: false },
+          'mcp-validated'
+        )
+      ).rejects.toThrow(
+        `Session '${session.id}' has ignored files in managed worktree; finalize or stash changes before closing`
+      );
+
+      expect(await repos.sessions.findById(session.id)).toBeDefined();
+    });
+
     it('rejects finishing an unmanaged session', async () => {
       const regularSession = await sessionManager.createSession({
         serverId: 'dev-workstation',

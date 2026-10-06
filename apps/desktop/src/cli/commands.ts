@@ -217,15 +217,19 @@ export async function pollTurn(
   let accumulatedOutput = '';
 
   while (Date.now() < deadline) {
-    const remainingMs = Math.max(1000, deadline - Date.now());
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
     const waitMs = Math.min(remainingMs, 5000);
+    const rpcTimeoutMs = Math.min(waitMs + 2000, Math.max(500, remainingMs + 500));
     const turn = await client.callTool('spawnea_get_turn', {
       turnId,
       cursor,
       afterVersion: version,
       waitMs,
       outputMode: 'compact',
-    });
+    }, rpcTimeoutMs);
+
+    if (Date.now() >= deadline) break;
 
     if (turn.cursorExpired) {
       accumulatedOutput = '';
@@ -247,12 +251,13 @@ export async function pollTurn(
         const remainingDrainMs = deadline - Date.now();
         if (remainingDrainMs <= 0) break;
         const waitMs = Math.min(Math.max(100, remainingDrainMs), 5000);
+        const rpcTimeoutMs = Math.min(waitMs + 2000, Math.max(500, remainingDrainMs + 500));
         const nextChunk = await client.callTool('spawnea_get_turn', {
           turnId,
           cursor: finalTurn.cursor,
           waitMs,
           outputMode: 'compact',
-        }, waitMs + 5000);
+        }, rpcTimeoutMs);
         if (nextChunk.cursorExpired) {
           accumulatedOutput = '';
         }
@@ -264,7 +269,7 @@ export async function pollTurn(
         finalTurn = nextChunk;
       }
 
-      if (finalTurn.truncated) {
+      if (finalTurn.truncated || Date.now() >= deadline) {
         throw new Error(`Turn ${turnId} completed, but draining remaining output timed out after ${timeoutSec} seconds.`);
       }
 

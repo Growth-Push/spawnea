@@ -1772,6 +1772,17 @@ export class SessionManager {
             if (!postStopStatus.isClean || postStopStatus.totalChanges > 0) {
               throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
             }
+
+            const ignoredStatus = await host.execute('git status --porcelain=v1 --ignored --untracked-files=all', {
+              cwd: identity.worktreePath,
+            }).catch(() => null);
+            if (!ignoredStatus || ignoredStatus.exitCode !== 0) {
+              throw new Error(`Session '${sessionId}' worktree ignored status could not be verified; aborting close to prevent data loss`);
+            }
+            const hasIgnored = ignoredStatus.stdout.split('\n').some((line) => line.startsWith('!! '));
+            if (hasIgnored) {
+              throw new Error(`Session '${sessionId}' has ignored files in managed worktree; finalize or stash changes before closing`);
+            }
           }
 
           // 3. Preserve or discard local changes before removing the worktree.

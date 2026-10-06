@@ -774,6 +774,51 @@ describe('Spawnea MCP v1 contract', () => {
       );
     });
 
+    it('skips disabled unprefixed seed harness when selecting default harness for host', async () => {
+      const createRootSession = vi.fn().mockResolvedValue({
+        apiVersion: 'v1',
+        sessionId: 'claude-root',
+        sessionCreated: true,
+      });
+      const getState = vi.fn().mockResolvedValue({
+        apiVersion: 'v1',
+        sessions: [],
+        hosts: [
+          { id: 'dev-workstation', name: 'Development Workstation', enabled: true },
+        ],
+        projects: [{ id: 'spawnea-proj', name: 'Spawnea', hostId: 'dev-workstation' }],
+        harnesses: [
+          { id: 'codex', name: 'Codex', kind: 'codex' },
+          { id: 'dev-workstation:claude', name: 'Claude', kind: 'claude' },
+        ],
+      });
+      const isHarnessAvailableForHost = vi.fn().mockImplementation((harnessId: string, hostId: string) => {
+        if (harnessId === 'codex') return false;
+        if (harnessId === 'dev-workstation:claude') return true;
+        return false;
+      });
+
+      const client = await connectCli({
+        createRootSession,
+        getState,
+        isHarnessAvailableForHost,
+      } as unknown as AgentControlService);
+
+      const result = await client.callTool({
+        name: 'spawnea_create_session',
+        arguments: {
+          projectId: 'spawnea-proj',
+          task: 'Select enabled harness',
+        },
+      });
+
+      expect(result.structuredContent).toMatchObject({ sessionId: 'claude-root' });
+      expect(createRootSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'dev-workstation:claude' }),
+        { allowRemoteHost: true }
+      );
+    });
+
     it('calls closeChildSession when closing session in scoped CLI MCP', async () => {
       const closeChildSession = vi.fn().mockResolvedValue({
         apiVersion: 'v1',
