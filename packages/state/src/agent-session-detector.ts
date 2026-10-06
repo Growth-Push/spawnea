@@ -93,7 +93,15 @@ export function detectAgentSessionId(
         if (isValidCandidate(candidate)) {
           // If a specific harness was requested, do not match banners clearly identifying a different harness
           if (harnessName) {
-            const allowedAliases = HARNESS_ALIASES[harnessName] || [harnessName];
+            // Configured commands may embed a known harness (e.g. "claude-code"), so
+            // allow any known harness that appears as a token of the configured name.
+            const embedded = KNOWN_HARNESSES.filter((h) =>
+              new RegExp(`(?:^|[^a-z0-9])${escapeRegex(h)}(?:$|[^a-z0-9])`).test(harnessName)
+            );
+            const allowedAliases = [
+              ...(HARNESS_ALIASES[harnessName] || [harnessName]),
+              ...embedded.flatMap((h) => HARNESS_ALIASES[h] || [h]),
+            ];
             const isOtherHarness = KNOWN_HARNESSES.some((h) => {
               if (allowedAliases.includes(h)) return false;
               const boundaryRegex = new RegExp(`\\b${escapeRegex(h)}\\b`, 'i');

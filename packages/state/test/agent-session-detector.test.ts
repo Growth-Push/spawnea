@@ -157,4 +157,12 @@ describe('detectAgentSessionId', () => {
     expect(detectAgentSessionId(['session_id=987654321'])).toBeUndefined();
     expect(detectAgentSessionId(['user-session-id: 987654321'])).toBeUndefined();
   });
+
+  it('detects the ID when the configured harness embeds a known harness name', () => {
+    expect(
+      detectAgentSessionId(['Session ID: claude-sess-1234', 'claude --resume claude-sess-1234'], {
+        harness: 'claude-code',
+      })
+    ).toBe('claude-sess-1234');
+  });
 });
