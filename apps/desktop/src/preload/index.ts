@@ -7,6 +7,7 @@ import type {
   Artifact,
   FileEntry,
   SessionStatus,
+  SessionTopologySnapshot,
   CreateSessionInput,
   AdoptSessionInput,
   DiscoveredTmuxSession,
@@ -119,6 +120,10 @@ export const api = {
     ipcRenderer.invoke('sessions:forgetLocal', sessionId),
   sendPrompt: (sessionId: string, prompt: string): Promise<{ delivered: boolean; deliveryMethod: 'pty' | 'tmux' }> =>
     ipcRenderer.invoke('sessions:sendPrompt', sessionId, prompt),
+  saveSessionLayout: (sessionId: string): Promise<SessionTopologySnapshot> =>
+    ipcRenderer.invoke('sessions:saveLayout', sessionId),
+  resurrectSession: (sessionId: string): Promise<Session> =>
+    ipcRenderer.invoke('sessions:resurrect', sessionId),
 
   // Explicit local MCP control. The bridge never exposes an approval method to
   // MCP; only this trusted renderer preload can resolve pending requests.

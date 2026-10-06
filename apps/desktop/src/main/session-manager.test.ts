@@ -8,6 +8,7 @@ import { LocalHostAdapter, MockHostAdapter, OnePasswordResolver, SSHHostAdapter 
 import {
   createLogger,
   type Logger,
+  type SessionTopologySnapshot,
   createCatalogProjectPathLocator,
   createCatalogWorktreePathLocator,
   registerSensitiveValue,
@@ -540,8 +541,81 @@ hosts:
     expect(listFiles).toHaveBeenLastCalledWith(
       `${resolvedProjectPath}__worktrees/restart-task-abc`
     );
-    expect(resolveString).toHaveBeenCalledTimes(3);
-    expect(release).toHaveBeenCalledTimes(3);
+
+    // Verify that saving topology converts physical paths to safe locators
+    secureHost.customRules.push({
+      pattern: 'tmux list-windows',
+      response: {
+        stdout: `0:::1:::c625,260x56,0,0,1:::win-${resolvedProjectPath}__worktrees/restart-task-abc\n`,
+        stderr: '',
+        exitCode: 0,
+      },
+    });
+    secureHost.customRules.push({
+      pattern: 'tmux list-panes',
+      response: {
+        stdout: `0:::0:::1:::${resolvedProjectPath}__worktrees/restart-task-abc/src:::bash - ${resolvedProjectPath}__worktrees/restart-task-abc/src\n0:::1:::0:::/srv/other/secret:::extra\n`,
+        stderr: '',
+        exitCode: 0,
+      },
+    });
+    secureHost.customRules.push({
+      pattern: 'tmux capture-pane',
+      response: { stdout: '', stderr: '', exitCode: 0 },
+    });
+
+    const savedTopo = await sessionManager.saveSessionLayout(session.id);
+    expect(savedTopo.windows[0].name).not.toContain(resolvedProjectPath);
+    expect(savedTopo.windows[0].name).toContain(worktreeLocator);
+    expect(savedTopo.windows[0].panes[0].title).not.toContain(resolvedProjectPath);
+    expect(savedTopo.windows[0].panes[0].title).toContain(worktreeLocator);
+    expect(savedTopo.windows[0].panes[0].cwd).toBe(`${worktreeLocator}/src`);
+    expect(savedTopo.windows[0].panes[0].cwd).not.toContain(resolvedProjectPath);
+    // Out-of-root pane cwd must fall back to worktreeLocator to prevent path leaks
+    expect(savedTopo.windows[0].panes[1].cwd).toBe(worktreeLocator);
+    expect(savedTopo.windows[0].panes[1].cwd).not.toContain('/srv/other/secret');
+
+    const persistedAfterSave = await repos.sessions.findById(session.id);
+    const contextAfterSave = await contextStore.load(session.id);
+    const serializedAfterSave = JSON.stringify({ contextAfterSave, persistedAfterSave });
+    expect(serializedAfterSave).not.toContain(resolvedProjectPath);
+    expect(serializedAfterSave).not.toContain('/srv/other/secret');
+    expect(serializedAfterSave).toContain(`${worktreeLocator}/src`);
+
+    // Verify resurrect resolves the safe locator back to physical path
+    await repos.sessions.updateStatus(session.id, 'done');
+    secureHost.sessions.clear();
+    secureHost.directories.add(`${resolvedProjectPath}__worktrees/restart-task-abc`);
+    secureHost.directories.add(`${resolvedProjectPath}__worktrees/restart-task-abc/src`);
+    const resurrectCmds: string[] = [];
+    secureHost.customRules.push({
+      pattern: 'tmux',
+      response: (cmd) => {
+        resurrectCmds.push(cmd);
+        if (cmd.includes('has-session')) return { stdout: '', stderr: 'no session', exitCode: 1 };
+        if (cmd.includes('#{window_index}')) return { stdout: '0\n', stderr: '', exitCode: 0 };
+        if (cmd.includes('#{pane_id}')) return { stdout: '%0\n', stderr: '', exitCode: 0 };
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    });
+
+    const resurrectedSession = await sessionManager.resurrectSession(session.id);
+    expect(resurrectedSession.status).toBe('idle');
+    expect(resurrectCmds.some((c) => c.includes(`'${resolvedProjectPath}__worktrees/restart-task-abc/src'`))).toBe(true);
+
+    // Verify stop and resurrect lifecycle collision guards
+    (sessionManager as any).resurrectingSessionIds.add(session.id);
+    await expect(sessionManager.stopSession(session.id)).rejects.toThrow(
+      `Session '${session.id}' is currently being resurrected`
+    );
+    (sessionManager as any).resurrectingSessionIds.delete(session.id);
+
+    (sessionManager as any).stoppingSessionIds.add(session.id);
+    await repos.sessions.updateStatus(session.id, 'done');
+    await expect(sessionManager.resurrectSession(session.id)).rejects.toThrow(
+      `Session '${session.id}' is currently being stopped`
+    );
+    (sessionManager as any).stoppingSessionIds.delete(session.id);
   });
 
   it('does not resolve SSH references until an explicit connection test', async () => {
@@ -2294,6 +2368,439 @@ up 1 day, 5 hours
         command.includes('tmux new-session')
       );
       expect(tmuxCommand).toBeDefined();
+    });
+
+    it('captures active session layout topology, detects agent session id, and persists it', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Layout capture test',
+      });
+
+      mockHost.customRules.push({
+        pattern: 'tmux has-session',
+        response: { stdout: '', stderr: '', exitCode: 0 },
+      });
+      mockHost.customRules.push({
+        pattern: 'tmux list-windows',
+        response: {
+          stdout: '0:::1:::c625,260x56,0,0,8:::code\n',
+          stderr: '',
+          exitCode: 0,
+        },
+      });
+      mockHost.customRules.push({
+        pattern: 'tmux list-panes -s',
+        response: {
+          stdout: '0:::0:::1:::/workspace/spawnea/src:::editor\n0:::1:::0:::/workspace/spawnea/docs:::notes\n',
+          stderr: '',
+          exitCode: 0,
+        },
+      });
+      mockHost.customRules.push({
+        pattern: 'tmux capture-pane',
+        response: {
+          stdout: 'Claude Code Assistant\nclaude resume 0192-task20-resurrect\nReady for input.\n',
+          stderr: '',
+          exitCode: 0,
+        },
+      });
+
+      const topology = await sessionManager.saveSessionLayout(session.id);
+      expect(topology.sessionName).toBe(session.tmuxSessionName);
+      expect(topology.windows).toHaveLength(1);
+      expect(topology.windows[0].panes).toHaveLength(2);
+      expect(topology.windows[0].panes[1].cwd).toBe('/workspace/spawnea/docs');
+      expect(topology.agentSessionId).toBe('0192-task20-resurrect');
+
+      const inDb = await repos.sessions.findById(session.id);
+      expect(inDb?.agentSessionId).toBe('0192-task20-resurrect');
+      expect(inDb?.savedTopology?.windows).toHaveLength(1);
+
+      const inContext = await contextStore.load(session.id);
+      expect(inContext?.agentSessionId).toBe('0192-task20-resurrect');
+      expect(inContext?.savedTopology?.windows[0].panes[0].cwd).toBe('/workspace/spawnea/src');
+    });
+
+    it('sanitizes sensitive physical paths and preserves safe locators in window names and pane titles', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Sensitive sanitize test',
+      });
+
+      const physicalRoot = '/tmp/secrets/physical-root';
+      const persistedRoot = 'catalog-project://dev-workstation/spawnea';
+      await repos.sessions.update(session.id, {
+        worktreePath: persistedRoot,
+      });
+
+      vi.spyOn(sessionManager as any, 'resolveSessionWorktreePath').mockResolvedValueOnce({
+        value: physicalRoot,
+        sensitive: true,
+        release: vi.fn(),
+      });
+
+      vi.spyOn((sessionManager as any).tmuxManager, 'captureSessionTopology').mockResolvedValueOnce({
+        savedAt: new Date(),
+        sessionName: session.tmuxSessionName,
+        windows: [
+          {
+            index: 0,
+            name: `${physicalRoot}`,
+            active: true,
+            panes: [
+              {
+                windowIndex: 0,
+                paneIndex: 0,
+                cwd: `${physicalRoot}/packages/core`,
+                title: `${physicalRoot}`,
+                active: true,
+              },
+            ],
+          },
+          {
+            index: 1,
+            name: '/unrelated/secret/path',
+            active: false,
+            panes: [
+              {
+                windowIndex: 1,
+                paneIndex: 0,
+                cwd: physicalRoot,
+                title: '/another/unrelated/path',
+                active: true,
+              },
+            ],
+          },
+        ],
+      });
+
+      const topology = await sessionManager.saveSessionLayout(session.id);
+      // Window 0 had name physicalRoot -> sanitized to persistedRoot
+      expect(topology.windows[0].name).toBe(persistedRoot);
+      // Pane cwd under physicalRoot -> sanitized with persistedRoot
+      expect(topology.windows[0].panes[0].cwd).toBe(`${persistedRoot}/packages/core`);
+      // Pane title in Window 0 had physicalRoot -> sanitized to persistedRoot
+      expect(topology.windows[0].panes[0].title).toBe(persistedRoot);
+      // Window 1 had unrelated path with slashes -> sanitized to fallback "1"
+      expect(topology.windows[1].name).toBe('1');
+      // Pane in Window 1 had unrelated title with slashes -> sanitized to undefined
+      expect(topology.windows[1].panes[0].title).toBeUndefined();
+    });
+
+    it('reports a partial save when the context file cannot be updated', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Partial save test',
+      });
+      mockHost.customRules.push(
+        { pattern: 'tmux has-session', response: { stdout: '', stderr: '', exitCode: 0 } },
+        { pattern: 'tmux list-windows', response: { stdout: '0:::1:::c625,260x56,0,0,8:::code\n', stderr: '', exitCode: 0 } },
+        { pattern: 'tmux list-panes -s', response: { stdout: '0:::0:::1:::/workspace/spawnea/src:::editor\n', stderr: '', exitCode: 0 } },
+        { pattern: 'tmux capture-pane', response: { stdout: '', stderr: '', exitCode: 0 } }
+      );
+      vi.spyOn(contextStore, 'load').mockResolvedValue({ sessionId: session.id } as any);
+      vi.spyOn(contextStore, 'save').mockRejectedValue(new Error('disk full'));
+
+      await expect(sessionManager.saveSessionLayout(session.id)).rejects.toThrow('context file could not be updated');
+    });
+
+    it('rejects saveSessionLayout while session is creating, resurrecting, stopping, or already saving', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Save guards test',
+      });
+
+      (sessionManager as any).creatingSessionIds.add(session.id);
+      await expect(sessionManager.saveSessionLayout(session.id)).rejects.toThrow('currently being created');
+      (sessionManager as any).creatingSessionIds.delete(session.id);
+
+      (sessionManager as any).resurrectingSessionIds.add(session.id);
+      await expect(sessionManager.saveSessionLayout(session.id)).rejects.toThrow('currently being resurrected');
+      (sessionManager as any).resurrectingSessionIds.delete(session.id);
+
+      (sessionManager as any).finalizingParents.add(session.id);
+      await expect(sessionManager.saveSessionLayout(session.id)).rejects.toThrow('currently being finalized');
+      (sessionManager as any).finalizingParents.delete(session.id);
+
+      (sessionManager as any).stoppingSessionIds.add(session.id);
+      await expect(sessionManager.saveSessionLayout(session.id)).rejects.toThrow('currently being stopped');
+      (sessionManager as any).stoppingSessionIds.delete(session.id);
+
+      (sessionManager as any).savingLayoutSessionIds.add(session.id);
+      await expect(sessionManager.saveSessionLayout(session.id)).rejects.toThrow('layout is already being saved');
+      await expect(sessionManager.stopSession(session.id)).rejects.toThrow('layout is currently being saved');
+      await expect(sessionManager.deleteSession(session.id)).rejects.toThrow('layout is currently being saved');
+      await expect(sessionManager.resurrectSession(session.id)).rejects.toThrow('layout is currently being saved');
+      (sessionManager as any).savingLayoutSessionIds.delete(session.id);
+    });
+
+    it('resurrects an absent tmux session at saved topology paths and transitions status to idle', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Resurrection test',
+      });
+
+      // Update session with saved topology and mark done/disconnected
+      await repos.sessions.update(session.id, {
+        status: 'done',
+        savedTopology: {
+          savedAt: new Date(),
+          sessionName: session.tmuxSessionName,
+          windows: [
+            {
+              index: 0,
+              name: 'main',
+              active: true,
+              panes: [
+                {
+                  windowIndex: 0,
+                  paneIndex: 0,
+                  cwd: '/workspace/spawnea/feature',
+                  active: true,
+                },
+              ],
+            },
+          ],
+        },
+      });
+      await contextStore.updateStatus(session.id, 'done');
+
+      // Tmux session has died on host
+      mockHost.directories.add('/workspace/spawnea/feature');
+      mockHost.customRules.push({
+        pattern: 'tmux has-session',
+        response: { stdout: '', stderr: 'session not found', exitCode: 1 },
+      });
+
+      const executedCommands: string[] = [];
+      mockHost.customRules.push({
+        pattern: 'tmux new-session',
+        response: (cmd) => {
+          executedCommands.push(cmd);
+          return { stdout: '', stderr: '', exitCode: 0 };
+        },
+      });
+
+      const resurrected = await sessionManager.resurrectSession(session.id);
+      expect(resurrected.status).toBe('idle');
+
+      const inDb = await repos.sessions.findById(session.id);
+      expect(inDb?.status).toBe('idle');
+
+      const inContext = await contextStore.load(session.id);
+      expect(inContext?.status).toBe('idle');
+
+      expect(executedCommands.some((c) => c.includes("tmux new-session -d -s") && c.includes("'/workspace/spawnea/feature'"))).toBe(true);
+    });
+
+    it('preserves window identities by positional mapping when multiple windows share the same name', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Duplicate window name test',
+      });
+
+      // Save topology with 2 windows having identical name 'shell'
+      const originalTopology: SessionTopologySnapshot = {
+        savedAt: new Date(),
+        sessionName: session.tmuxSessionName,
+        windows: [
+          {
+            index: 0,
+            name: 'shell',
+            active: true,
+            panes: [{ windowIndex: 0, paneIndex: 0, cwd: '/workspace/spawnea', active: true }],
+          },
+          {
+            index: 1,
+            name: 'shell',
+            active: false,
+            panes: [{ windowIndex: 1, paneIndex: 0, cwd: '/workspace/spawnea', active: true }],
+          },
+        ],
+      };
+      await repos.sessions.update(session.id, {
+        status: 'done',
+        savedTopology: originalTopology,
+      });
+
+      // Mock tmux resurrection returning translated topology with shifted indices (e.g. 1 and 2)
+      vi.spyOn((sessionManager as any).tmuxManager, 'resurrectSession').mockResolvedValueOnce({
+        success: true,
+        sessionName: session.tmuxSessionName,
+        translatedTopology: {
+          savedAt: new Date(),
+          sessionName: session.tmuxSessionName,
+          windows: [
+            {
+              index: 1,
+              name: 'shell',
+              active: true,
+              panes: [{ windowIndex: 1, paneIndex: 1, cwd: '/workspace/spawnea', active: true }],
+            },
+            {
+              index: 2,
+              name: 'shell',
+              active: false,
+              panes: [{ windowIndex: 2, paneIndex: 2, cwd: '/workspace/spawnea', active: true }],
+            },
+          ],
+        },
+      });
+
+      await sessionManager.resurrectSession(session.id);
+
+      const updated = await repos.sessions.findById(session.id);
+      expect(updated?.savedTopology?.windows[0].index).toBe(1);
+      expect(updated?.savedTopology?.windows[0].panes[0].windowIndex).toBe(1);
+      expect(updated?.savedTopology?.windows[0].panes[0].paneIndex).toBe(1);
+      expect(updated?.savedTopology?.windows[1].index).toBe(2);
+      expect(updated?.savedTopology?.windows[1].panes[0].windowIndex).toBe(2);
+      expect(updated?.savedTopology?.windows[1].panes[0].paneIndex).toBe(2);
+    });
+
+    it('rejects resurrecting an active session with status working', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Active resurrect test',
+      });
+      await repos.sessions.updateStatus(session.id, 'working');
+      await expect(sessionManager.resurrectSession(session.id)).rejects.toThrow('Cannot resurrect active');
+    });
+
+    it('rejects resurrecting a disconnected session', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Disconnected resurrect test',
+      });
+      await repos.sessions.updateStatus(session.id, 'disconnected');
+      await expect(sessionManager.resurrectSession(session.id)).rejects.toThrow('Cannot resurrect active or disconnected session');
+    });
+
+    it('resurrects an error session and transitions status to idle', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Error resurrect test',
+      });
+      await repos.sessions.updateStatus(session.id, 'error');
+      await contextStore.updateStatus(session.id, 'error');
+
+      mockHost.customRules.push({
+        pattern: 'tmux has-session',
+        response: { stdout: '', stderr: 'session not found', exitCode: 1 },
+      });
+      mockHost.customRules.push({
+        pattern: 'tmux new-session',
+        response: { stdout: '', stderr: '', exitCode: 0 },
+      });
+
+      const resurrected = await sessionManager.resurrectSession(session.id);
+      expect(resurrected.status).toBe('idle');
+
+      const inDb = await repos.sessions.findById(session.id);
+      expect(inDb?.status).toBe('idle');
+    });
+
+    it('recovers session to idle when tmux session already exists with no dead panes', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Already running resurrect test',
+      });
+      await repos.sessions.updateStatus(session.id, 'error');
+      await contextStore.updateStatus(session.id, 'error');
+
+      mockHost.customRules.push({
+        pattern: 'tmux has-session',
+        response: { stdout: '', stderr: '', exitCode: 0 },
+      });
+      mockHost.customRules.push({
+        pattern: 'tmux list-panes',
+        response: { stdout: '0:::0:::0\n', stderr: '', exitCode: 0 },
+      });
+
+      const res = await sessionManager.resurrectSession(session.id);
+      expect(res.status).toBe('idle');
+
+      const inDb = await repos.sessions.findById(session.id);
+      expect(inDb?.status).toBe('idle');
+    });
+
+    it('prevents session removal while resurrection is in progress', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Removal guard test',
+      });
+      await repos.sessions.updateStatus(session.id, 'done');
+
+      let resolveHost: () => void = () => {};
+      const hostWait = new Promise<void>((r) => { resolveHost = r; });
+
+      mockHost.customRules.push({
+        pattern: 'tmux has-session',
+        response: async () => {
+          await hostWait;
+          return { stdout: '', stderr: '', exitCode: 0 };
+        },
+      });
+
+      const resurrectPromise = sessionManager.resurrectSession(session.id);
+
+      // Attempt to delete session while resurrection is in flight
+      await expect(sessionManager.deleteSession(session.id)).rejects.toThrow('currently being resurrected');
+
+      resolveHost();
+      await resurrectPromise;
+    });
+
+    it('skips reconciling a session while resurrection is in progress', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Reconciliation resurrection guard test',
+      });
+      await repos.sessions.updateStatus(session.id, 'done');
+
+      let resolveHost: () => void = () => {};
+      const hostWait = new Promise<void>((r) => { resolveHost = r; });
+
+      mockHost.customRules.push({
+        pattern: 'tmux has-session',
+        response: async () => {
+          await hostWait;
+          return { stdout: '', stderr: '', exitCode: 0 };
+        },
+      });
+
+      const resurrectPromise = sessionManager.resurrectSession(session.id);
+
+      // Reconcile should skip because session is in resurrectingSessionIds
+      const reconciled = await sessionManager.reconcileSession(session.id);
+      expect(reconciled.id).toBe(session.id);
+
+      resolveHost();
+      await resurrectPromise;
     });
   });
 });

@@ -200,6 +200,8 @@ export interface IpcChannels {
   'sessions:delete': (sessionId: string, childAction?: ParentCloseAction) => Promise<boolean>;
   'sessions:forgetLocal': (sessionId: string) => Promise<boolean>;
   'sessions:sendPrompt': (sessionId: string, prompt: string) => Promise<{ delivered: boolean; deliveryMethod: 'pty' | 'tmux' }>;
+  'sessions:saveLayout': (sessionId: string) => Promise<import('./index.js').SessionTopologySnapshot>;
+  'sessions:resurrect': (sessionId: string) => Promise<Session>;
 
   // Local MCP control requests. Pending destructive actions are resolved here
   // from the trusted renderer after an explicit user decision. An explicitly

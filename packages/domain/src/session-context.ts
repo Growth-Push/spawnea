@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { maskSensitiveString } from './logger.js';
-import { SessionCreationSourceSchema, SessionStatusSchema } from './schemas.js';
+import { SessionCreationSourceSchema, SessionStatusSchema, SessionTopologySnapshotSchema } from './schemas.js';
 
 export const SessionContextHostSchema = z
   .object({
@@ -84,6 +84,8 @@ export const SessionContextFileSchema = z
     childAlias: z.string().min(1).optional(),
     creationSource: SessionCreationSourceSchema.optional(),
     isExternal: z.boolean().optional(),
+    savedTopology: SessionTopologySnapshotSchema.optional(),
+    agentSessionId: z.string().optional(),
     createdAt: z.string().datetime({ offset: true }).or(z.string()),
     updatedAt: z.string().datetime({ offset: true }).or(z.string()),
   })

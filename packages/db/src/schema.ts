@@ -1,6 +1,6 @@
 import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { relations } from 'drizzle-orm';
-import type { SessionStatus, SessionCreationSource, ArtifactDirection } from '@spawnea/domain';
+import type { SessionStatus, SessionCreationSource, ArtifactDirection, SessionTopologySnapshot } from '@spawnea/domain';
 
 export const servers = sqliteTable('servers', {
   id: text('id').primaryKey(),
@@ -62,6 +62,8 @@ export const sessions = sqliteTable(
     parentSessionId: text('parent_session_id'),
     childAlias: text('child_alias'),
     isExternal: integer('is_external', { mode: 'boolean' }).notNull().default(false),
+    savedTopology: text('saved_topology', { mode: 'json' }).$type<SessionTopologySnapshot>(),
+    agentSessionId: text('agent_session_id'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     lastActivityAt: integer('last_activity_at', { mode: 'timestamp_ms' }).notNull(),
   },

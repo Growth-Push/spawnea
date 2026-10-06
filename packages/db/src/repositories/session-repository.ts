@@ -194,6 +194,8 @@ export class SqliteSessionRepository implements SessionRepository {
         childAlias: session.childAlias ?? null,
         creationSource: session.creationSource ?? existing.creationSource ?? 'ui',
         isExternal: session.isExternal ?? existing.isExternal ?? false,
+        savedTopology: session.savedTopology ?? existing.savedTopology ?? null,
+        agentSessionId: session.agentSessionId ?? existing.agentSessionId ?? null,
         lastActivityAt: session.lastActivityAt ?? now,
       };
 
@@ -230,6 +232,8 @@ export class SqliteSessionRepository implements SessionRepository {
       childAlias: session.childAlias ?? null,
       creationSource: session.creationSource ?? 'ui',
       isExternal: session.isExternal ?? false,
+      savedTopology: session.savedTopology ?? null,
+      agentSessionId: session.agentSessionId ?? null,
       createdAt: session.createdAt ?? now,
       lastActivityAt: session.lastActivityAt ?? now,
     };
@@ -279,6 +283,8 @@ export class SqliteSessionRepository implements SessionRepository {
     if (updates.childAlias !== undefined) setValues.childAlias = updates.childAlias ?? null;
     if (updates.creationSource !== undefined) setValues.creationSource = updates.creationSource;
     if (updates.isExternal !== undefined) setValues.isExternal = updates.isExternal;
+    if (updates.savedTopology !== undefined) setValues.savedTopology = updates.savedTopology ?? null;
+    if (updates.agentSessionId !== undefined) setValues.agentSessionId = updates.agentSessionId ?? null;
     if (updates.lastActivityAt !== undefined) setValues.lastActivityAt = updates.lastActivityAt;
 
     if (Object.keys(setValues).length > 0) {

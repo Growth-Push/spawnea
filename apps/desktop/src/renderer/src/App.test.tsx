@@ -278,6 +278,15 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
     openConfig: vi.fn().mockResolvedValue({ success: true }),
     deleteSession: vi.fn().mockResolvedValue(true),
     forgetSessionLocally: vi.fn().mockResolvedValue(true),
+    saveSessionLayout: vi.fn().mockResolvedValue({
+      savedAt: new Date(),
+      sessionName: 'mock-session',
+      windows: [],
+    }),
+    resurrectSession: vi.fn().mockImplementation(async (sessionId: string) => {
+      const session = mockSessions.find((s) => s.id === sessionId);
+      return session ? { ...session, status: 'idle' } : mockSessions[0];
+    }),
     syncControlUiState: vi.fn(),
     listControlFinalizationRequests: vi.fn().mockResolvedValue([]),
     getAgentContext: vi.fn().mockResolvedValue({
