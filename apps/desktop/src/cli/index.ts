@@ -216,7 +216,14 @@ export async function runCli(argv: string[]): Promise<void> {
           if (!task) throw new Error('--task "<description>" is required');
 
           const agent = typeof parsed.flags.agent === 'string' ? parsed.flags.agent : undefined;
-          const workspace = parsed.flags.workspace === 'new-worktree' ? 'new-worktree' : 'same-project';
+          let workspace: 'same-project' | 'new-worktree' = 'same-project';
+          if (parsed.flags.workspace !== undefined) {
+            const rawWorkspace = String(parsed.flags.workspace);
+            if (rawWorkspace !== 'same-project' && rawWorkspace !== 'new-worktree') {
+              throw new Error(`Invalid --workspace: '${rawWorkspace}'. Supported values are 'same-project' and 'new-worktree'.`);
+            }
+            workspace = rawWorkspace;
+          }
           const name = typeof parsed.flags.name === 'string' ? parsed.flags.name : undefined;
           const model = typeof parsed.flags.model === 'string' ? parsed.flags.model : undefined;
 

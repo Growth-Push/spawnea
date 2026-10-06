@@ -75,6 +75,7 @@ export class ControlMcpGateway {
   private readonly logger: Logger;
   private readonly token = randomBytes(32).toString('hex');
   private readonly handles = new Set<StdioServerHandle>();
+  private readonly sockets = new Set<Socket>();
   private server: NetServer | null = null;
   private ownsSocketPath = false;
   private ownsRuntimeFilePath = false;
@@ -132,7 +133,11 @@ export class ControlMcpGateway {
     }
     await this.clearStaleRuntime();
 
-    const server = createServer((socket) => this.authenticate(socket));
+    const server = createServer((socket) => {
+      this.sockets.add(socket);
+      socket.once('close', () => this.sockets.delete(socket));
+      this.authenticate(socket);
+    });
     this.server = server;
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error) => {
@@ -248,6 +253,10 @@ export class ControlMcpGateway {
     const handles = Array.from(this.handles);
     this.handles.clear();
     await Promise.allSettled(handles.map((handle) => handle.close()));
+    for (const socket of this.sockets) {
+      socket.destroy();
+    }
+    this.sockets.clear();
     if (this.server) {
       const server = this.server;
       this.server = null;

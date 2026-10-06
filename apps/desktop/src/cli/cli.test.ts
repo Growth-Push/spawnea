@@ -478,6 +478,11 @@ describe('Spawnea Control CLI', () => {
       // Test status
       await runCli(['status', 'sess-e2e-1', '--runtime-file', runtimeFile]);
       expect(log).toHaveBeenCalledWith(expect.stringContaining('Session:      sess-e2e-1'));
+
+      // Test invalid workspace rejection
+      await expect(
+        runCli(['child', 'create', '--parent', 'sess-e2e-1', '--task', 'Subtask', '--workspace', 'invalid-type', '--runtime-file', runtimeFile])
+      ).rejects.toThrow("Invalid --workspace: 'invalid-type'");
     });
   });
 });
