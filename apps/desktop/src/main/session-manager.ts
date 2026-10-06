@@ -2424,11 +2424,18 @@ export class SessionManager {
     // 2. Capture recent tail lines to detect agent session / conversation ID
     let agentSessionId = session.agentSessionId;
     try {
-      const tailLines = await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, 50);
       const agent = await this.repos.agents.findById(session.agentId);
-      const detectedId = detectAgentSessionId(tailLines, { harness: agent?.harness });
-      if (detectedId) {
-        agentSessionId = detectedId;
+      // The agent may run in any saved window, not only the first one.
+      const windowIndexes: Array<number | undefined> = rawTopology.windows.length > 0
+        ? rawTopology.windows.map((w) => w.index)
+        : [undefined];
+      for (const windowIndex of windowIndexes) {
+        const tailLines = await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, 50, windowIndex);
+        const detectedId = detectAgentSessionId(tailLines, { harness: agent?.harness });
+        if (detectedId) {
+          agentSessionId = detectedId;
+          break;
+        }
       }
     } catch (err) {
       this.logger.warn('Failed to capture tail lines for agent session id detection', { sessionId, err });
@@ -2459,7 +2466,10 @@ export class SessionManager {
         });
       }
     } catch (err) {
-      this.logger.warn('Failed to update context file with topology snapshot', { sessionId, err });
+      this.logger.error('Failed to update context file with topology snapshot', { sessionId, err });
+      throw new Error(
+        `Session layout was saved to the database but the session context file could not be updated: ${err instanceof Error ? err.message : String(err)}. Save the layout again to retry.`
+      );
     }
 
       return validatedTopology;

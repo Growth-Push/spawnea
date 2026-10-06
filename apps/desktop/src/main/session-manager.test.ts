@@ -2491,6 +2491,25 @@ up 1 day, 5 hours
       expect(topology.windows[1].panes[0].title).toBeUndefined();
     });
 
+    it('reports a partial save when the context file cannot be updated', async () => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Partial save test',
+      });
+      mockHost.customRules.push(
+        { pattern: 'tmux has-session', response: { stdout: '', stderr: '', exitCode: 0 } },
+        { pattern: 'tmux list-windows', response: { stdout: '0:::1:::c625,260x56,0,0,8:::code\n', stderr: '', exitCode: 0 } },
+        { pattern: 'tmux list-panes -s', response: { stdout: '0:::0:::1:::/workspace/spawnea/src:::editor\n', stderr: '', exitCode: 0 } },
+        { pattern: 'tmux capture-pane', response: { stdout: '', stderr: '', exitCode: 0 } }
+      );
+      vi.spyOn(contextStore, 'load').mockResolvedValue({ sessionId: session.id } as any);
+      vi.spyOn(contextStore, 'save').mockRejectedValue(new Error('disk full'));
+
+      await expect(sessionManager.saveSessionLayout(session.id)).rejects.toThrow('context file could not be updated');
+    });
+
     it('rejects saveSessionLayout while session is creating, resurrecting, stopping, or already saving', async () => {
       const session = await sessionManager.createSession({
         serverId: 'dev-workstation',

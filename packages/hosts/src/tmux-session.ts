@@ -463,7 +463,12 @@ export class TmuxManager {
   /**
    * Captures the tail buffer lines of a tmux pane without altering terminal state.
    */
-  async capturePaneTail(host: HostAdapter, sessionName: string, lines: number = 25): Promise<string[]> {
+  async capturePaneTail(
+    host: HostAdapter,
+    sessionName: string,
+    lines: number = 25,
+    windowIndex?: number
+  ): Promise<string[]> {
     // A session target without a window selects whichever tab the user last
     // viewed. Hermes can leave its metrics footer in the first tab while a
     // later tab is focused, so resolve the first window explicitly.
@@ -478,7 +483,8 @@ export class TmuxManager {
       .map((value) => Number(value))
       .filter((value) => Number.isSafeInteger(value) && value >= 0)
       .sort((a, b) => a - b)[0];
-    const target = firstWindow === undefined ? sessionName : `${sessionName}:${firstWindow}`;
+    const targetWindow = windowIndex !== undefined && Number.isSafeInteger(windowIndex) && windowIndex >= 0 ? windowIndex : firstWindow;
+    const target = targetWindow === undefined ? sessionName : `${sessionName}:${targetWindow}`;
     const safeLines = Number.isFinite(lines) ? Math.min(Math.max(0, Math.trunc(lines)), 2_147_483_647) : 25;
     const cmd = `tmux capture-pane -p -t ${escapeShellArg(target)} -S -${safeLines}`;
     const result = await host.execute(cmd, { timeoutMs: 5000 });
