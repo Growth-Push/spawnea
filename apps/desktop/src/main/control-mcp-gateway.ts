@@ -213,10 +213,10 @@ export class ControlMcpGateway {
           }
         }
         createServer = auth.mode === 'cli'
-          ? () => createCliSpawneaMcpServer(scopedControl)
+          ? () => createCliSpawneaMcpServer(scopedControl, { isScoped: true })
           : () => createSpawneaMcpServer(scopedControl);
       } else if (auth.mode === 'cli') {
-        createServer = () => createCliSpawneaMcpServer(this.control);
+        createServer = () => createCliSpawneaMcpServer(this.control, { isScoped: false });
       } else {
         const bootstrapControl = this.control.createBootstrapControl();
         createServer = () => createBootstrapSpawneaMcpServer(

@@ -643,14 +643,27 @@ describe('Spawnea MCP v1 contract', () => {
   });
 
   describe('CLI MCP server', () => {
-    async function connectCli(control: AgentControlService | ScopedAgentControlService) {
-      const server = createCliSpawneaMcpServer(control);
+    async function connectCli(
+      control: AgentControlService | ScopedAgentControlService,
+      options?: { isScoped?: boolean },
+    ) {
+      const server = createCliSpawneaMcpServer(control, options);
       const client = new Client({ name: 'spawnea-cli-test-client', version: '1.0.0' });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
       connected.push({ client, server: server as any });
       return client;
     }
+
+    it('rejects root creation when isScoped is true', async () => {
+      const client = await connectCli({} as any, { isScoped: true });
+      const result = await client.callTool({
+        name: 'spawnea_create_session',
+        arguments: { projectId: 'p1', task: 'Root task' },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.content[0] as any).text).toContain('Creating root sessions is not permitted from a scoped session context');
+    });
 
     it('passes allowRemoteHost when creating root session via CLI MCP', async () => {
       const createRootSession = vi.fn().mockResolvedValue({

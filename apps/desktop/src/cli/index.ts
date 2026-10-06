@@ -246,7 +246,10 @@ export async function runCli(argv: string[]): Promise<void> {
         } else if (parsed.subcommand === 'wait') {
           const turn = String(parsed.flags.turn || '');
           if (!turn) throw new Error('--turn <turnId> is required');
-          const timeout = parsed.flags.timeout ? Number(parsed.flags.timeout) : undefined;
+          const timeout = parsed.flags.timeout !== undefined ? Number(parsed.flags.timeout) : undefined;
+          if (timeout !== undefined && (isNaN(timeout) || timeout <= 0)) {
+            throw new Error(`Invalid timeout: '${parsed.flags.timeout}'. Expected positive number of seconds.`);
+          }
 
           await waitTurn(client, { turn, timeout, json: isJson });
         } else if (parsed.subcommand === 'send-and-wait') {
@@ -254,7 +257,10 @@ export async function runCli(argv: string[]): Promise<void> {
           const prompt = parsed.positional.join(' ') || (typeof parsed.flags.prompt === 'string' ? parsed.flags.prompt : '');
           if (!session) throw new Error('--session <id> is required');
           if (!prompt) throw new Error('Prompt text is required');
-          const timeout = parsed.flags.timeout ? Number(parsed.flags.timeout) : undefined;
+          const timeout = parsed.flags.timeout !== undefined ? Number(parsed.flags.timeout) : undefined;
+          if (timeout !== undefined && (isNaN(timeout) || timeout <= 0)) {
+            throw new Error(`Invalid timeout: '${parsed.flags.timeout}'. Expected positive number of seconds.`);
+          }
 
           await sendAndWaitPrompt(client, { session, prompt, timeout, json: isJson });
         } else {

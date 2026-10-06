@@ -7,7 +7,7 @@ import { ControlMcpGateway } from '../main/control-mcp-gateway.js';
 import type { AgentControlService as AgentControlServiceType } from '../main/agent-control-service.js';
 import { ControlCliClient } from './client.js';
 import { parseArgs, runCli } from './index.js';
-import { pollTurn, sendPrompt, sendAndWaitPrompt, showSkillPrompt } from './commands.js';
+import { pollTurn, sendPrompt, sendAndWaitPrompt, showSkillPrompt, waitTurn } from './commands.js';
 
 describe('Spawnea Control CLI', () => {
   const gateways: ControlMcpGateway[] = [];
@@ -145,6 +145,17 @@ describe('Spawnea Control CLI', () => {
       await expect(pollTurn({} as any, 'turn-abc', NaN)).rejects.toThrow('Invalid timeout');
       await expect(pollTurn({} as any, 'turn-abc', 0)).rejects.toThrow('Invalid timeout');
       await expect(pollTurn({} as any, 'turn-abc', -10)).rejects.toThrow('Invalid timeout');
+    });
+
+    it('validates timeout in sendAndWaitPrompt and waitTurn upfront', async () => {
+      const mockClient = { callTool: vi.fn() } as unknown as ControlCliClient;
+      await expect(
+        sendAndWaitPrompt(mockClient, { session: 'sess-1', prompt: 'hi', timeout: -5 })
+      ).rejects.toThrow('Invalid timeout');
+      await expect(
+        waitTurn(mockClient, { turn: 'turn-1', timeout: 0 })
+      ).rejects.toThrow('Invalid timeout');
+      expect(mockClient.callTool).not.toHaveBeenCalled();
     });
 
     it('accumulates streamed output across working polls until turn completion', async () => {

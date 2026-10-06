@@ -385,9 +385,15 @@ export function createBootstrapSpawneaMcpServer(
   return server;
 }
 
+export interface CreateCliSpawneaMcpServerOptions {
+  isScoped?: boolean;
+}
+
 export function createCliSpawneaMcpServer(
   control: AgentControlService | ScopedAgentControlService,
+  options: CreateCliSpawneaMcpServerOptions = {},
 ): McpServer {
+  const isScoped = options.isScoped ?? !('createRootSession' in control);
   const server = new McpServer({
     name: 'spawnea-control-cli',
     version: '1.0.0',
@@ -451,18 +457,18 @@ export function createCliSpawneaMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async (request) => safeTool(async () => {
-      if (!('createRootSession' in control)) {
+      if (isScoped || !('createRootSession' in control)) {
         throw new Error('Creating root sessions is not permitted from a scoped session context');
       }
-      const serverId = request.serverId ?? 'local';
       const state = await control.getState();
+      const serverId = request.serverId ?? state.hosts.find((h) => h.enabled)?.id ?? 'local';
       const availableHarnesses = state.harnesses.filter((h) => !h.id.includes(':') || h.id.startsWith(`${serverId}:`));
       let resolvedAgentId = request.agentId;
       if (resolvedAgentId && !availableHarnesses.some((h) => h.id === resolvedAgentId)) {
         const match = availableHarnesses.find(
           (h) => h.name.toLowerCase() === resolvedAgentId?.toLowerCase() ||
-                 h.harness.toLowerCase() === resolvedAgentId?.toLowerCase() ||
-                 h.kind.toLowerCase() === resolvedAgentId?.toLowerCase() ||
+                 (h.harness && h.harness.toLowerCase() === resolvedAgentId?.toLowerCase()) ||
+                 (h.kind && h.kind.toLowerCase() === resolvedAgentId?.toLowerCase()) ||
                  h.id.endsWith(`:${resolvedAgentId}`)
         );
         if (match) resolvedAgentId = match.id;
@@ -577,6 +583,9 @@ export function createCliSpawneaMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
     async ({ sessionId, force }) => safeTool(async () => {
+      if (isScoped) {
+        return control.closeChildSession(sessionId, force);
+      }
       if ('closeSession' in control) {
         return control.closeSession(sessionId, force);
       }

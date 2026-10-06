@@ -291,14 +291,13 @@ export class AgentControlService {
           if (!force && ['working', 'starting'].includes(session.status)) {
             throw new Error(`Session '${sessionId}' is currently ${session.status}; pass force=true to close`);
           }
-          if (!force) {
-            const gitStatus = await this.sessionManager.getGitStatus(sessionId).catch(() => null);
-            if (!gitStatus) {
+          const gitStatus = await this.sessionManager.getGitStatus(sessionId).catch(() => null);
+          if (!gitStatus) {
+            if (!force) {
               throw new Error(`Session '${sessionId}' worktree status could not be verified; pass force=true to close`);
             }
-            if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
-              throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; pass force=true to close`);
-            }
+          } else if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
+            throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
           }
           await this.sessionManager.deleteSession(sessionId, 'leave-children');
           this.notifyDataChanged?.();

@@ -58,6 +58,7 @@ export class ControlCliClient {
   private nextId = 1;
   private pending = new Map<number, { resolve: (res: any) => void; reject: (err: Error) => void }>();
   private buffer = '';
+  private closeReason?: string;
 
   private constructor(
     private readonly descriptor: ControlRuntimeDescriptor,
@@ -92,6 +93,7 @@ export class ControlCliClient {
           const message = initialized
             ? `Control socket connection closed: ${reason}`
             : `Spawnea desktop app closed connection during handshake (possibly unauthorized or stale runtime descriptor): ${reason}`;
+          this.closeReason = message;
           for (const { reject } of this.pending.values()) {
             reject(new Error(message));
           }
@@ -155,8 +157,8 @@ export class ControlCliClient {
 
   private sendRequest(method: string, params: Record<string, unknown> = {}, timeoutMs = 30000): Promise<any> {
     return new Promise((resolve, reject) => {
-      if (!this.socket || this.socket.destroyed) {
-        return reject(new Error('Connection to Spawnea control socket was closed'));
+      if (!this.socket || this.socket.destroyed || this.closeReason) {
+        return reject(new Error(this.closeReason || 'Connection to Spawnea control socket was closed'));
       }
       const id = this.nextId++;
       const timer = setTimeout(() => {
@@ -182,7 +184,7 @@ export class ControlCliClient {
   }
 
   private sendNotification(method: string, params: Record<string, unknown> = {}): void {
-    if (!this.socket || this.socket.destroyed) return;
+    if (!this.socket || this.socket.destroyed || this.closeReason) return;
     const payload = JSON.stringify({ jsonrpc: '2.0', method, params });
     this.socket.write(`${payload}\n`);
   }

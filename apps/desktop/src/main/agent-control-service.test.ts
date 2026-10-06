@@ -1494,7 +1494,7 @@ describe('AgentControlService', () => {
         expect(sessionManager.deleteSession).toHaveBeenCalledWith('close-child', 'leave-children');
       });
 
-      it('rejects closing a dirty managed worktree child without force', async () => {
+      it('rejects closing a dirty managed worktree child even with force', async () => {
         await repositories.servers.save({
           id: 'local-close-2',
           name: 'Local Host',
@@ -1519,14 +1519,14 @@ describe('AgentControlService', () => {
           })
         );
 
-        sessionManager.getGitStatus.mockResolvedValueOnce({
+        sessionManager.getGitStatus.mockResolvedValue({
           isClean: false,
           totalChanges: 2,
         });
 
         const scoped = await service.createScopedControl('close-root-2');
-        await expect(scoped.closeChildSession('dirty-child')).rejects.toThrow(
-          "Session 'dirty-child' has uncommitted changes in managed worktree; pass force=true to close"
+        await expect(scoped.closeChildSession('dirty-child', true)).rejects.toThrow(
+          "Session 'dirty-child' has uncommitted changes in managed worktree; finalize or stash changes before closing"
         );
       });
 

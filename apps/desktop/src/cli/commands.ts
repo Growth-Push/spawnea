@@ -238,7 +238,12 @@ export async function pollTurn(
           waitMs: 5000,
           outputMode: 'compact',
         });
-        if (nextChunk.output) {
+        if (nextChunk.cursorExpired) {
+          accumulatedOutput = '';
+        }
+        if (nextChunk.extraction === 'delimited') {
+          accumulatedOutput = nextChunk.output || '';
+        } else if (nextChunk.output) {
           accumulatedOutput += nextChunk.output;
         }
         finalTurn = nextChunk;
@@ -264,6 +269,9 @@ export interface WaitTurnOptions extends OutputOptions {
 }
 
 export async function waitTurn(client: ControlCliClient, options: WaitTurnOptions): Promise<void> {
+  if (options.timeout !== undefined && (typeof options.timeout !== 'number' || isNaN(options.timeout) || options.timeout <= 0)) {
+    throw new Error(`Invalid timeout: ${options.timeout}. Expected positive number of seconds.`);
+  }
   const timeoutSec = options.timeout ?? 120;
   const result = await pollTurn(client, options.turn, timeoutSec);
 
@@ -292,6 +300,9 @@ export interface SendAndWaitOptions extends OutputOptions {
 }
 
 export async function sendAndWaitPrompt(client: ControlCliClient, options: SendAndWaitOptions): Promise<void> {
+  if (options.timeout !== undefined && (typeof options.timeout !== 'number' || isNaN(options.timeout) || options.timeout <= 0)) {
+    throw new Error(`Invalid timeout: ${options.timeout}. Expected positive number of seconds.`);
+  }
   const sent = await client.callTool('spawnea_send_prompt', {
     target: options.session,
     prompt: options.prompt,

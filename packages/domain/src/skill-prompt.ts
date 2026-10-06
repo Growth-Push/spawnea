@@ -53,9 +53,12 @@ Dispatch a prompt to a session and read results:
 # Send prompt and wait for turn completion (prints assistant's response to stdout):
 spawnea prompt send-and-wait --session <child-id> "Run the test suite and report results."
 
-# Or send asynchronously and poll turn status:
-TURN_ID=$(spawnea prompt send --session <child-id> "Run unit tests" --json | jq -r .turnId)
-[ "$TURN_ID" != "null" ] && [ -n "$TURN_ID" ] && spawnea prompt wait --turn "$TURN_ID" --timeout 120
+# Or send asynchronously and poll turn status (only wait if delivery succeeds):
+RESULT=$(spawnea prompt send --session <child-id> "Run unit tests" --json)
+if [ $? -eq 0 ]; then
+  TURN_ID=$(echo "$RESULT" | jq -r .turnId)
+  [ "$TURN_ID" != "null" ] && [ -n "$TURN_ID" ] && spawnea prompt wait --turn "$TURN_ID" --timeout 120
+fi
 \`\`\`
 
 ### 6. Close a Session or Child
