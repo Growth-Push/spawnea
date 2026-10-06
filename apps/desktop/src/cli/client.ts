@@ -68,8 +68,13 @@ export class ControlCliClient {
   static async connect(options: ControlCliClientOptions = {}): Promise<ControlCliClient> {
     const descriptor = await loadControlRuntime(options);
     const client = new ControlCliClient(descriptor, options.sessionId);
-    await client.init();
-    return client;
+    try {
+      await client.init();
+      return client;
+    } catch (err) {
+      client.close();
+      throw err;
+    }
   }
 
   private async init(): Promise<void> {

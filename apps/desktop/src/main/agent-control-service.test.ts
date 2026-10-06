@@ -1594,6 +1594,18 @@ describe('AgentControlService', () => {
         await expect(childScoped.closeChildSession('root-parent')).rejects.toThrow(
           'Root session cannot be closed from within scoped session control'
         );
+
+        // Creating a child from the child's scope resolves effective parent to root-parent
+        const createdSubChild = await childScoped.createChildSession({
+          parentSession: 'child-terminal',
+          task: 'Subtask from child terminal',
+          workspace: 'same-project',
+        });
+        expect(createdSubChild.sessionId).toBeDefined();
+        expect(sessionManager.createChildSession).toHaveBeenCalledWith(
+          expect.objectContaining({ parentSessionId: 'root-parent' }),
+          'mcp'
+        );
       });
 
       it('rejects closing a dirty managed worktree session via unscoped closeSession even with force', async () => {

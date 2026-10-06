@@ -303,6 +303,36 @@ describe('Spawnea Control CLI', () => {
       ).rejects.toThrow('Spawnea desktop app is not running');
     });
 
+    it('closes socket cleanly when initialization fails during connect', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'spawnea-cli-init-fail-'));
+      directories.push(directory);
+      const runtimeFile = join(directory, 'control-runtime.json');
+      const socketPath = join(directory, 'control.sock');
+
+      const net = await import('node:net');
+      const server = net.createServer((sock) => {
+        sock.destroy();
+      });
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(runtimeFile, JSON.stringify({
+        apiVersion: 'v1',
+        socketPath,
+        token: 'test-token',
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+      }));
+
+      try {
+        await expect(
+          ControlCliClient.connect({ runtimeFile })
+        ).rejects.toThrow();
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+
     it('executes atomic commands through authenticated Unix domain socket', async () => {
       const directory = await mkdtemp(join(tmpdir(), 'spawnea-cli-test-'));
       directories.push(directory);

@@ -384,11 +384,12 @@ export class AgentControlService {
       },
       createChildSession: async (request) => {
         const currentRoot = await validateRoot();
-        const parentId = request.parentSession ?? (isChild ? sessionOrRootId : currentRoot.id);
+        const parentId = request.parentSession ?? currentRoot.id;
         const parent = await resolveInScope(parentId, true);
+        const effectiveParentId = parent.parentSessionId ? currentRoot.id : parent.id;
         return this.createChildSession({
           ...request,
-          parentSession: parent.id,
+          parentSession: effectiveParentId,
         });
       },
       listSessions: async () => {

@@ -210,9 +210,16 @@ export async function runCli(argv: string[]): Promise<void> {
 
       case 'child': {
         if (parsed.subcommand === 'create') {
-          const parent = String(parsed.flags.parent || process.env.SPAWNEA_SESSION_ID || '');
-          const task = String(parsed.flags.task || '');
+          let parent = typeof parsed.flags.parent === 'string' ? parsed.flags.parent : undefined;
+          if (!parent && process.env.SPAWNEA_SESSION_ID) {
+            const status = await client.callTool<{ session?: { id: string; parentSessionId?: string | null } }>(
+              'spawnea_status',
+              { sessionId: process.env.SPAWNEA_SESSION_ID }
+            ).catch(() => null);
+            parent = status?.session?.parentSessionId || process.env.SPAWNEA_SESSION_ID;
+          }
           if (!parent) throw new Error('--parent <id> is required (or set SPAWNEA_SESSION_ID)');
+          const task = String(parsed.flags.task || '');
           if (!task) throw new Error('--task "<description>" is required');
 
           const agent = typeof parsed.flags.agent === 'string' ? parsed.flags.agent : undefined;
