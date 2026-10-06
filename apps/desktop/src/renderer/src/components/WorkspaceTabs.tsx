@@ -37,6 +37,7 @@ import {
   UploadCloud,
   FileDiff,
   Network,
+  Bookmark,
 } from 'lucide-react';
 import { AgentContextView } from './AgentContextView';
 
@@ -62,6 +63,8 @@ interface WorkspaceTabsProps {
   onAttach?: (sessionId: string) => void;
   onDetach?: (sessionId: string) => void;
   onDelete?: (sessionId: string) => void;
+  onSaveLayout?: (sessionId: string) => void;
+  onResurrect?: (sessionId: string) => void;
   onForgetLocally?: (sessionId: string) => void;
   onStatusChange?: (sessionId: string, status: Session['status']) => void;
 }
@@ -128,6 +131,8 @@ export function WorkspaceTabs({
   onAttach,
   onDetach,
   onDelete,
+  onSaveLayout,
+  onResurrect,
   onForgetLocally,
   onStatusChange,
 }: WorkspaceTabsProps): React.JSX.Element {
@@ -622,6 +627,7 @@ export function WorkspaceTabs({
                 onAttach={onAttach}
                 onDetach={onDetach}
                 onDelete={onDelete}
+                onResurrect={onResurrect}
                 onForgetLocally={onForgetLocally}
                 onStatusChange={onStatusChange}
               />
@@ -676,9 +682,23 @@ export function WorkspaceTabs({
         {/* Details Panel */}
         {activeTab === 'details' && (
           <div className="h-full rounded-lg border border-[#30363d] bg-[#161b22] p-5 text-xs text-zinc-300 overflow-y-auto">
-            <h4 className="text-sm font-semibold text-white mb-4 pb-2 border-b border-[#30363d]">
-              Session Entity Details
-            </h4>
+            <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#30363d]">
+              <h4 className="text-sm font-semibold text-white">
+                Session Entity Details
+              </h4>
+              {session.status !== 'done' && onSaveLayout && (
+                <button
+                  type="button"
+                  data-testid="save-layout-details-button"
+                  onClick={() => onSaveLayout(session.id)}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#21262d] hover:bg-[#30363d] text-zinc-300 text-[11px] transition-colors cursor-pointer"
+                  title="Save active session layout (tmux windows and panes)"
+                >
+                  <Bookmark className="w-3 h-3 text-emerald-400" />
+                  <span>Save Layout</span>
+                </button>
+              )}
+            </div>
             <dl className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <DetailCard
                 label="Session ID"
@@ -724,6 +744,22 @@ export function WorkspaceTabs({
                 mono={false}
                 testId="agent-harness"
               />
+
+              {session.agentSessionId && (
+                <DetailCard
+                  label="Agent Session ID"
+                  value={session.agentSessionId}
+                  testId="agent-session-id"
+                />
+              )}
+
+              {session.savedTopology?.windows && (
+                <DetailCard
+                  label="Saved Topology"
+                  value={`${session.savedTopology.windows.length} window(s), ${session.savedTopology.windows.reduce((sum, w) => sum + (w.panes?.length || 0), 0)} pane(s)`}
+                  testId="saved-topology"
+                />
+              )}
 
               <DetailCard
                 label="Created At"

@@ -156,6 +156,7 @@ export function App(): React.JSX.Element {
   const [controlFinalizationRequests, setControlFinalizationRequests] = useState<ControlFinalizationRequest[]>([]);
   const gitRequestGeneration = useRef(0);
   const activeGitRequests = useRef(new Map<string, Promise<GitStatusResult>>());
+  const inFlightResurrectRef = useRef<Set<string>>(new Set());
 
   const handleGitStatusChange = useCallback((sessionId: string, status: GitStatusResult) => {
     gitRequestGeneration.current += 1;
@@ -852,6 +853,42 @@ export function App(): React.JSX.Element {
     }
   };
 
+  const handleSaveSessionLayout = async (sessionId: string) => {
+    if (!window.spawneaApi?.saveSessionLayout) return;
+    try {
+      const topology = await window.spawneaApi.saveSessionLayout(sessionId);
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? { ...s, savedTopology: topology, agentSessionId: topology.agentSessionId || s.agentSessionId }
+            : s
+        )
+      );
+    } catch (error) {
+      console.error('Failed to save session layout:', error);
+      window.alert(error instanceof Error ? error.message : 'Failed to save session layout.');
+    }
+  };
+
+  const handleResurrectSession = async (sessionId: string) => {
+    if (!window.spawneaApi?.resurrectSession) return;
+    if (inFlightResurrectRef.current.has(sessionId)) return;
+    inFlightResurrectRef.current.add(sessionId);
+
+    try {
+      const resurrected = await window.spawneaApi.resurrectSession(sessionId);
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? resurrected : s))
+      );
+      setActiveSessionId(sessionId);
+    } catch (error) {
+      console.error('Failed to resurrect session:', error);
+      window.alert(error instanceof Error ? error.message : 'Failed to resurrect session.');
+    } finally {
+      inFlightResurrectRef.current.delete(sessionId);
+    }
+  };
+
   const handleCloseCreateChildModal = useCallback(() => {
     setSessionToCreateChildFor(null);
   }, []);
@@ -1328,6 +1365,8 @@ export function App(): React.JSX.Element {
               onDelete={handleDeleteSession}
               onUnadopt={handleRequestUnadoptSession}
               onFinish={handleRequestFinishSession}
+              onSaveLayout={handleSaveSessionLayout}
+              onResurrect={handleResurrectSession}
               onReportFeedback={() => setIsFeedbackModalOpen(true)}
               onOpenQuickSwitcher={() => setIsQuickSwitcherOpen(true)}
               onRename={handleRenameSession}
@@ -1350,6 +1389,8 @@ export function App(): React.JSX.Element {
               onAttach={handleAttachSession}
               onDetach={handleDetachSession}
               onDelete={handleDeleteSession}
+              onSaveLayout={handleSaveSessionLayout}
+              onResurrect={handleResurrectSession}
               onForgetLocally={handleForgetSessionLocally}
               onStatusChange={handleSessionStatusChange}
             />

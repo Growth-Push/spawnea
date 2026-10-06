@@ -20,6 +20,8 @@ import {
   Check,
   X,
   FileDiff,
+  Bookmark,
+  RotateCcw,
 } from 'lucide-react';
 import { AgentIcon } from './AgentIcon';
 import { SessionSourceBadge } from './SessionSourceBadge';
@@ -38,6 +40,8 @@ interface ContextBarProps {
   onDelete?: (sessionId: string) => void;
   onUnadopt?: (sessionId: string) => void;
   onFinish?: (sessionId: string) => void;
+  onSaveLayout?: (sessionId: string) => void;
+  onResurrect?: (sessionId: string) => void;
   onReportFeedback?: (sessionId: string) => void;
   onOpenQuickSwitcher?: () => void;
   onRename?: (sessionId: string, title: string) => Promise<void>;
@@ -57,6 +61,8 @@ export function ContextBar({
   onDelete,
   onUnadopt,
   onFinish,
+  onSaveLayout,
+  onResurrect,
   onReportFeedback,
   onOpenQuickSwitcher,
   onRename,
@@ -234,6 +240,23 @@ export function ContextBar({
               </span>
             )}
             <SessionSourceBadge session={session} />
+            {session.agentSessionId && (
+              <button
+                type="button"
+                data-testid="contextbar-agent-session-badge"
+                className="text-[9px] font-mono font-medium px-1.5 py-0.2 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 hover:border-cyan-400 hover:bg-cyan-900/60 transition-colors shrink-0 cursor-pointer"
+                title={`Agent Session ID: ${session.agentSessionId} (Click to copy)`}
+                onClick={() => {
+                  if (session.agentSessionId) {
+                    void navigator.clipboard.writeText(session.agentSessionId).catch((err) => {
+                      console.warn('Failed to copy agent session ID to clipboard', err);
+                    });
+                  }
+                }}
+              >
+                ID: {session.agentSessionId.length > 10 ? `${session.agentSessionId.slice(0, 10)}…` : session.agentSessionId}
+              </button>
+            )}
           </div>
           {renameError ? (
             <span role="alert" className="text-[9px] text-rose-400 truncate" title={renameError}>
@@ -429,18 +452,48 @@ export function ContextBar({
             </button>
           )}
 
-          {/* State: Stopped / Concluded (done, error) -> Next: Delete */}
-          {(session.status === 'done' || session.status === 'error') && onDelete && (
+          {/* Session Layout Snapshot Save (Task 20) */}
+          {session.status !== 'done' && onSaveLayout && (
             <button
               type="button"
-              data-testid="session-delete-button"
-              onClick={() => onDelete(session.id)}
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 rounded-md transition-colors cursor-pointer"
-              title="Delete session record completely"
+              data-testid="session-save-layout-button"
+              onClick={() => onSaveLayout(session.id)}
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:text-white bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded-md transition-colors cursor-pointer"
+              title="Save active session layout (tmux windows and panes) for recovery"
             >
-              <Trash2 className="w-3 h-3" />
-              <span>Delete</span>
+              <Bookmark className="w-3 h-3 text-emerald-400" />
+              <span>Save Layout</span>
             </button>
+          )}
+
+          {/* State: Stopped / Concluded (done, error) -> Next: Resurrect or Delete */}
+          {(session.status === 'done' || session.status === 'error') && (
+            <>
+              {onResurrect && (
+                <button
+                  type="button"
+                  data-testid="session-resurrect-button"
+                  onClick={() => onResurrect(session.id)}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-md transition-colors cursor-pointer"
+                  title="Recreate tmux session and restore windows/panes at saved paths"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Resurrect</span>
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  data-testid="session-delete-button"
+                  onClick={() => onDelete(session.id)}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 rounded-md transition-colors cursor-pointer"
+                  title="Delete session record completely"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Delete</span>
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>

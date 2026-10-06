@@ -314,6 +314,92 @@ describe('Domain Repositories & Logging Integration', () => {
       expect(await repos.sessions.findById('sess-1')).toBeNull();
     });
 
+    it('persists and updates session topology and agent session id', async () => {
+      const now = new Date();
+      const session = await repos.sessions.save({
+        id: 'sess-topo-1',
+        name: 'Topology Session',
+        serverId: 'srv-1',
+        projectId: 'proj-1',
+        agentId: 'agent-1',
+        task: 'Test topology save',
+        worktreePath: '/code/spawnea',
+        branch: 'main',
+        tmuxSessionName: 'spawnea-topo-1',
+        status: 'working',
+        agentSessionId: 'codex-conv-12345',
+        savedTopology: {
+          savedAt: now,
+          sessionName: 'spawnea-topo-1',
+          windows: [
+            {
+              index: 0,
+              name: 'main',
+              active: true,
+              layout: 'layout-code',
+              panes: [
+                {
+                  windowIndex: 0,
+                  paneIndex: 0,
+                  cwd: '/code/spawnea',
+                  title: 'editor',
+                  active: true,
+                },
+                {
+                  windowIndex: 0,
+                  paneIndex: 1,
+                  cwd: '/code/spawnea/packages',
+                  title: 'terminal',
+                  active: false,
+                },
+              ],
+            },
+          ],
+          agentSessionId: 'codex-conv-12345',
+        },
+      });
+
+      expect(session.agentSessionId).toBe('codex-conv-12345');
+      expect(session.savedTopology).toBeDefined();
+      expect(session.savedTopology?.windows).toHaveLength(1);
+      expect(session.savedTopology?.windows[0].panes).toHaveLength(2);
+      expect(session.savedTopology?.windows[0].panes[1].cwd).toBe('/code/spawnea/packages');
+
+      // Update topology
+      const updated = await repos.sessions.update('sess-topo-1', {
+        agentSessionId: 'claude-sess-999',
+        savedTopology: {
+          savedAt: new Date(),
+          sessionName: 'spawnea-topo-1',
+          windows: [
+            {
+              index: 0,
+              name: 'updated',
+              active: true,
+              panes: [
+                {
+                  windowIndex: 0,
+                  paneIndex: 0,
+                  cwd: '/code/spawnea/apps',
+                  active: true,
+                },
+              ],
+            },
+          ],
+        },
+      });
+
+      expect(updated.agentSessionId).toBe('claude-sess-999');
+      expect(updated.savedTopology?.windows[0].name).toBe('updated');
+      expect(updated.savedTopology?.windows[0].panes[0].cwd).toBe('/code/spawnea/apps');
+
+      const fetched = await repos.sessions.findById('sess-topo-1');
+      expect(fetched?.agentSessionId).toBe('claude-sess-999');
+      expect(fetched?.savedTopology?.windows[0].panes[0].cwd).toBe('/code/spawnea/apps');
+
+      await repos.sessions.delete('sess-topo-1');
+    });
+
     it('prevents deletion of server/project/agent while session exists (FK restrict)', async () => {
       await repos.sessions.save({
         id: 'sess-fk-test',

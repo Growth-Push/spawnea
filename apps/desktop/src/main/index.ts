@@ -566,6 +566,20 @@ function registerIpcHandlers(
     return sessManager.sendPrompt(sessionId, prompt);
   });
 
+  ipcMain.handle('sessions:saveLayout', async (event, sessionId: string) => {
+    if (!mainWindowRef || mainWindowRef.isDestroyed() || event.sender !== mainWindowRef.webContents) {
+      throw new Error('Unauthorized sessions:saveLayout sender');
+    }
+    return sessManager.saveSessionLayout(sessionId);
+  });
+
+  ipcMain.handle('sessions:resurrect', async (event, sessionId: string) => {
+    if (!mainWindowRef || mainWindowRef.isDestroyed() || event.sender !== mainWindowRef.webContents) {
+      throw new Error('Unauthorized sessions:resurrect sender');
+    }
+    return sessManager.resurrectSession(sessionId);
+  });
+
   ipcMain.handle('shell:openExternalUrl', async (_event, rawUrl: string) => {
     let url: URL;
     try {
