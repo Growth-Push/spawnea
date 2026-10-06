@@ -1697,6 +1697,29 @@ up 1 day, 5 hours
       )).rejects.toThrow("'mcp-validated' finalization origin is only valid for close requests");
     });
 
+    it('allows MCP-validated close with stashChanges: true on a dirty worktree', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Stash close test',
+        baseBranch: 'main',
+      });
+
+      const worktree = await sessionManager.resolveSessionWorktreePath(session);
+      await mockHost.writeFile(worktree.value, 'dirty-file.txt', 'dirty content');
+      worktree.release();
+
+      const result = await sessionManager.finishSession(
+        session.id,
+        'close',
+        { stashChanges: true },
+        'mcp-validated'
+      );
+      expect(result).toEqual({ action: 'close', removed: true });
+    });
+
     it('rejects finishing an unmanaged session', async () => {
       const regularSession = await sessionManager.createSession({
         serverId: 'dev-workstation',

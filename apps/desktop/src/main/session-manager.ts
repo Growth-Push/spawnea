@@ -1762,9 +1762,9 @@ export class SessionManager {
           // 2. Verify termination before changing any files.
           await this.stopSession(sessionId);
 
-          // MCP-validated closes never discard work: with the runtime stopped, require a
-          // verified clean worktree so late writes or an unreadable status cannot be lost.
-          if (origin === 'mcp-validated') {
+          // MCP-validated closes that discard changes (stashChanges: false) never discard work:
+          // with the runtime stopped, require a verified clean worktree so late writes or an unreadable status cannot be lost.
+          if (origin === 'mcp-validated' && !options.stashChanges) {
             const postStopStatus = await this.getGitStatus(sessionId).catch(() => null);
             if (!postStopStatus || postStopStatus.unavailable) {
               throw new Error(`Session '${sessionId}' worktree status could not be verified; aborting close to prevent data loss`);
