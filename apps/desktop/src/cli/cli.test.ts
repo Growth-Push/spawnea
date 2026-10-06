@@ -7,7 +7,7 @@ import { ControlMcpGateway } from '../main/control-mcp-gateway.js';
 import type { AgentControlService as AgentControlServiceType } from '../main/agent-control-service.js';
 import { ControlCliClient } from './client.js';
 import { parseArgs, runCli } from './index.js';
-import { pollTurn, sendPrompt, sendAndWaitPrompt, showSkillPrompt, waitTurn } from './commands.js';
+import { createSession, createChild, pollTurn, sendPrompt, sendAndWaitPrompt, showSkillPrompt, waitTurn } from './commands.js';
 
 describe('Spawnea Control CLI', () => {
   const gateways: ControlMcpGateway[] = [];
@@ -190,6 +190,20 @@ describe('Spawnea Control CLI', () => {
       expect(mockClient.callTool).not.toHaveBeenCalled();
     });
 
+    it('validates timeoutMs in createSession and createChild upfront', async () => {
+      const mockClient = { callTool: vi.fn() } as unknown as ControlCliClient;
+      await expect(
+        createSession(mockClient, { project: 'proj', task: 'task', timeoutMs: -100 })
+      ).rejects.toThrow('Invalid timeoutMs');
+      await expect(
+        createSession(mockClient, { project: 'proj', task: 'task', timeoutMs: NaN })
+      ).rejects.toThrow('Invalid timeoutMs');
+      await expect(
+        createChild(mockClient, { parent: 'sess', task: 'task', timeoutMs: 0 })
+      ).rejects.toThrow('Invalid timeoutMs');
+      expect(mockClient.callTool).not.toHaveBeenCalled();
+    });
+
     it('accumulates streamed output across working polls until turn completion', async () => {
       const calls: any[] = [];
       const mockClient = {
@@ -282,7 +296,7 @@ describe('Spawnea Control CLI', () => {
       expect(result.output).not.toContain('streaming chunk');
     });
 
-    it('bounds turn output draining by the configured deadline', async () => {
+    it('bounds turn output draining by the configured deadline and fails if output remains truncated', async () => {
       let drainedCalls = 0;
       const mockClient = {
         callTool: vi.fn().mockImplementation(async (name) => {
@@ -301,11 +315,35 @@ describe('Spawnea Control CLI', () => {
         }),
       } as unknown as ControlCliClient;
 
-      // With a 0.05s timeout, draining should terminate when deadline expires
-      const result = await pollTurn(mockClient, 'turn-drain', 0.05);
-      expect(result.status).toBe('completed');
+      // With a 0.05s timeout, draining should terminate when deadline expires and fail because truncated remained true
+      await expect(pollTurn(mockClient, 'turn-drain', 0.05)).rejects.toThrow(
+        /draining remaining output timed out/
+      );
       expect(drainedCalls).toBeGreaterThan(0);
       expect(drainedCalls).toBeLessThan(10);
+    });
+
+    it('successfully drains all output when draining completes before deadline', async () => {
+      let drainedCalls = 0;
+      const mockClient = {
+        callTool: vi.fn().mockImplementation(async (name) => {
+          if (name === 'spawnea_get_turn') {
+            drainedCalls++;
+            return {
+              turnId: 'turn-drain-success',
+              status: 'completed',
+              cursor: drainedCalls < 2 ? 'next-cursor' : undefined,
+              truncated: drainedCalls < 2,
+              output: `chunk-${drainedCalls} `,
+            };
+          }
+          return {};
+        }),
+      } as unknown as ControlCliClient;
+
+      const result = await pollTurn(mockClient, 'turn-drain-success', 5);
+      expect(result.status).toBe('completed');
+      expect(result.output).toBe('chunk-1 chunk-2 ');
     });
 
     it('sets process.exitCode = 1 when sendPrompt cannot confirm delivery', async () => {
@@ -571,6 +609,14 @@ describe('Spawnea Control CLI', () => {
       await expect(
         runCli(['child', 'create', '--parent', 'sess-e2e-1', '--task', 'Subtask', '--workspace', 'invalid-type', '--runtime-file', runtimeFile])
       ).rejects.toThrow("Invalid --workspace: 'invalid-type'");
+
+      // Test invalid timeout rejection
+      await expect(
+        runCli(['session', 'create', '--project', 'spawnea', '--task', 'Root', '--timeout', 'invalid', '--runtime-file', runtimeFile])
+      ).rejects.toThrow("Invalid timeout: 'invalid'");
+      await expect(
+        runCli(['child', 'create', '--parent', 'sess-e2e-1', '--task', 'Subtask', '--timeout', '-10', '--runtime-file', runtimeFile])
+      ).rejects.toThrow("Invalid timeout: '-10'");
 
       // Test rejection of explicitly empty session identity
       const origEnv = process.env.SPAWNEA_SESSION_ID;

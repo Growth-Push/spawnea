@@ -738,6 +738,42 @@ describe('Spawnea MCP v1 contract', () => {
       );
     });
 
+    it('resolves default serverId from project hostId when serverId is omitted and host has custom id and name', async () => {
+      const createRootSession = vi.fn().mockResolvedValue({
+        apiVersion: 'v1',
+        sessionId: 'dev-root',
+        sessionCreated: true,
+      });
+      const getState = vi.fn().mockResolvedValue({
+        apiVersion: 'v1',
+        sessions: [],
+        hosts: [
+          { id: 'dev-workstation', name: 'Development Workstation', enabled: true },
+        ],
+        projects: [{ id: 'spawnea-proj', name: 'Spawnea', hostId: 'dev-workstation' }],
+        harnesses: [{ id: 'dev-workstation:codex', name: 'Codex', kind: 'codex' }],
+      });
+
+      const client = await connectCli({
+        createRootSession,
+        getState,
+      } as unknown as AgentControlService);
+
+      const result = await client.callTool({
+        name: 'spawnea_create_session',
+        arguments: {
+          projectId: 'spawnea-proj',
+          task: 'Custom workstation task',
+        },
+      });
+
+      expect(result.structuredContent).toMatchObject({ sessionId: 'dev-root' });
+      expect(createRootSession).toHaveBeenCalledWith(
+        expect.objectContaining({ serverId: 'dev-workstation', projectId: 'spawnea-proj' }),
+        { allowRemoteHost: true }
+      );
+    });
+
     it('calls closeChildSession when closing session in scoped CLI MCP', async () => {
       const closeChildSession = vi.fn().mockResolvedValue({
         apiVersion: 'v1',

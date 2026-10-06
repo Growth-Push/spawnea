@@ -85,6 +85,9 @@ export interface CreateSessionOptions extends OutputOptions {
 }
 
 export async function createSession(client: ControlCliClient, options: CreateSessionOptions): Promise<void> {
+  if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)) {
+    throw new Error(`Invalid timeoutMs: '${options.timeoutMs}'. Expected positive number of milliseconds.`);
+  }
   const result = await client.callTool('spawnea_create_session', {
     projectId: options.project,
     task: options.task,
@@ -122,6 +125,9 @@ export interface CreateChildOptions extends OutputOptions {
 }
 
 export async function createChild(client: ControlCliClient, options: CreateChildOptions): Promise<void> {
+  if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)) {
+    throw new Error(`Invalid timeoutMs: '${options.timeoutMs}'. Expected positive number of milliseconds.`);
+  }
   const result = await client.callTool('spawnea_create_child_session', {
     parentSession: options.parent,
     task: options.task,
@@ -256,6 +262,10 @@ export async function pollTurn(
           accumulatedOutput += nextChunk.output;
         }
         finalTurn = nextChunk;
+      }
+
+      if (finalTurn.truncated) {
+        throw new Error(`Turn ${turnId} completed, but draining remaining output timed out after ${timeoutSec} seconds.`);
       }
 
       finalTurn = { ...finalTurn, output: accumulatedOutput || finalTurn.output || '' };

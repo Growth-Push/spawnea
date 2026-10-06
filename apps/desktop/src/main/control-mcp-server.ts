@@ -461,10 +461,8 @@ export function createCliSpawneaMcpServer(
         throw new Error('Creating root sessions is not permitted from a scoped session context');
       }
       const state = await control.getState();
-      const localHost = state.hosts.find(
-        (h) => h.enabled && (h.id === 'local' || h.id === 'localhost' || h.name.toLowerCase().includes('local'))
-      ) ?? state.hosts.find((h) => h.id === 'local' || h.id === 'localhost');
-      const serverId = request.serverId ?? localHost?.id ?? 'local';
+      const selectedProject = state.projects?.find((p) => p.id === request.projectId);
+      const serverId = request.serverId ?? selectedProject?.hostId ?? state.hosts[0]?.id ?? 'local';
       const availableHarnesses = state.harnesses.filter((h) => !h.id.includes(':') || h.id.startsWith(`${serverId}:`));
       let resolvedAgentId = request.agentId;
       if (resolvedAgentId && !availableHarnesses.some((h) => h.id === resolvedAgentId)) {
