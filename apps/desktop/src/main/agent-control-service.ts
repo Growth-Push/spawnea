@@ -218,7 +218,15 @@ export class AgentControlService {
     if (!force && ['working', 'starting'].includes(session.status)) {
       throw new Error(`Session '${sessionId}' is currently ${session.status}; pass force=true to close`);
     }
-    await this.sessionManager.deleteSession(sessionId, 'close-all');
+
+    if (session.managedWorktree && !force) {
+      const gitStatus = await this.sessionManager.getGitStatus(sessionId).catch(() => null);
+      if (gitStatus && (!gitStatus.isClean || gitStatus.totalChanges > 0)) {
+        throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; pass force=true to close`);
+      }
+    }
+
+    await this.sessionManager.deleteSession(sessionId, 'leave-children');
     this.notifyDataChanged?.();
     return { apiVersion: SPAWNEA_CONTROL_API_VERSION, sessionId, removed: true };
   }

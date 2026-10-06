@@ -199,7 +199,20 @@ export async function waitTurn(client: ControlCliClient, options: WaitTurnOption
     version = turn.version ?? version;
 
     if (turn.status === 'completed' || turn.status === 'needs_input') {
-      const finalTurn = { ...turn, output: accumulatedOutput || turn.output };
+      let finalTurn = { ...turn };
+      while (finalTurn.truncated && finalTurn.cursor) {
+        const nextChunk = await client.callTool('spawnea_get_turn', {
+          turnId: options.turn,
+          cursor: finalTurn.cursor,
+          waitMs: 5000,
+          outputMode: 'compact',
+        });
+        if (nextChunk.output) {
+          accumulatedOutput += nextChunk.output;
+        }
+        finalTurn = nextChunk;
+      }
+      finalTurn = { ...finalTurn, output: accumulatedOutput || finalTurn.output };
       if (options.json) {
         console.log(JSON.stringify(finalTurn, null, 2));
       } else {
@@ -266,7 +279,20 @@ export async function sendAndWaitPrompt(client: ControlCliClient, options: SendA
     version = turn.version ?? version;
 
     if (turn.status === 'completed' || turn.status === 'needs_input') {
-      const finalTurn = { ...turn, output: accumulatedOutput || turn.output };
+      let finalTurn = { ...turn };
+      while (finalTurn.truncated && finalTurn.cursor) {
+        const nextChunk = await client.callTool('spawnea_get_turn', {
+          turnId,
+          cursor: finalTurn.cursor,
+          waitMs: 5000,
+          outputMode: 'compact',
+        });
+        if (nextChunk.output) {
+          accumulatedOutput += nextChunk.output;
+        }
+        finalTurn = nextChunk;
+      }
+      finalTurn = { ...finalTurn, output: accumulatedOutput || finalTurn.output };
       if (options.json) {
         console.log(JSON.stringify(finalTurn, null, 2));
       } else {

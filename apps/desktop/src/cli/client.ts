@@ -74,6 +74,7 @@ export class ControlCliClient {
   private async init(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const socket = createConnection(this.descriptor.socketPath);
+      socket.setEncoding('utf8');
       this.socket = socket;
 
       const onError = (err: Error) => {

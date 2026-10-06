@@ -274,10 +274,8 @@ export async function runCli(argv: string[]): Promise<void> {
 // Auto-run if executed directly as main module in Node.js
 if (
   process.argv[1] &&
-  (process.argv[1].endsWith('spawnea-cli.js') ||
-    process.argv[1].endsWith('src/cli/index.ts') ||
-    process.argv[1].endsWith('spawnea.mjs') ||
-    process.argv[1].endsWith('/spawnea')) &&
+  (process.argv[1].endsWith('spawnea-cli.js') || process.argv[1].endsWith('src/cli/index.ts')) &&
+  !process.argv[1].endsWith('spawnea.mjs') &&
   !process.argv.includes('--spawnea-cli')
 ) {
   runCli(process.argv.slice(2)).catch((err) => {

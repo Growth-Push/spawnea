@@ -6,7 +6,7 @@ if (shouldRunCli(process.argv)) {
   const cliArgs = cliIdx !== -1 ? process.argv.slice(cliIdx + 1) : process.argv.slice(2);
   try {
     await runCli(cliArgs);
-    process.exit(0);
+    process.exit(process.exitCode ?? 0);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`spawnea error: ${message}`);
