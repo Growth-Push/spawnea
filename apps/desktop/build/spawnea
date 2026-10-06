@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+
+PRG="$0"
+while [ -L "$PRG" ]; do
+  target=$(readlink "$PRG")
+  case "$target" in
+    /*) PRG="$target" ;;
+    *) PRG="$(dirname "$PRG")/$target" ;;
+  esac
+done
+
+resource_dir=$(CDPATH= cd -- "$(dirname -- "$PRG")" && pwd)
+app_dir=$(CDPATH= cd -- "$resource_dir/.." && pwd)
+if [ -x "$app_dir/MacOS/Spawnea" ]; then
+  electron_binary="$app_dir/MacOS/Spawnea"
+else
+  electron_binary="$app_dir/Spawnea"
+fi
+
+if [ ! -x "$electron_binary" ]; then
+  printf '%s\n' "Spawnea Electron executable was not found relative to $0" >&2
+  exit 1
+fi
+
+case "$(uname -s)" in
+  Linux) exec "$electron_binary" --no-sandbox --spawnea-cli "$@" ;;
+  *) exec "$electron_binary" --spawnea-cli "$@" ;;
+esac

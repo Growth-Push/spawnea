@@ -111,6 +111,7 @@ export interface AgentControlServiceOptions {
 
 export interface ScopedAgentControlService {
   closeSharedChildSession(sessionId: string, force?: boolean): ReturnType<SessionManager['closeSharedChildSession']>;
+  closeChildSession(sessionId: string, force?: boolean): Promise<{ apiVersion: typeof SPAWNEA_CONTROL_API_VERSION; sessionId: string; removed: boolean }>;
   preflightIntegration(sessionId: string): ReturnType<SessionManager['preflightIntegration']>;
   getState(): Promise<ControlStateSnapshot>;
   createSessions(request: ControlCreateSessionsRequest): Promise<ControlCreateSessionsResult>;
@@ -133,6 +134,7 @@ export interface ScopedAgentControlService {
 export interface BootstrapAgentControlService {
   getState(): Promise<ControlBootstrapState>;
   createSession(request: ControlCreateSessionRequest): Promise<ControlCreateSessionResult>;
+  isHarnessAvailableForHost?(harnessId: string, hostId: string): boolean;
 }
 
 function toIso(value: Date | string): string {
@@ -209,41 +211,110 @@ export class AgentControlService {
     return this.sessionManager.closeSharedChildSession(sessionId, force);
   }
 
+  closeChildSession(sessionId: string, force?: boolean) {
+    return this.closeSession(sessionId, force);
+  }
+
+  async closeSession(
+    sessionId: string,
+    force = false,
+  ): Promise<{ apiVersion: typeof SPAWNEA_CONTROL_API_VERSION; sessionId: string; removed: boolean }> {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session) throw new Error(`Session '${sessionId}' not found`);
+    if (!force && ['working', 'starting'].includes(session.status)) {
+      throw new Error(`Session '${sessionId}' is currently ${session.status}; pass force=true to close`);
+    }
+
+    if (session.managedWorktree) {
+      const result = await this.sessionManager.finishSession(
+        sessionId,
+        'close',
+        { stashChanges: false },
+        'mcp-validated'
+      );
+      this.notifyDataChanged?.();
+      return { apiVersion: SPAWNEA_CONTROL_API_VERSION, sessionId, removed: result.removed };
+    }
+
+    await this.sessionManager.deleteSession(sessionId, 'leave-children');
+    if (await this.repos.sessions.findById(sessionId)) {
+      throw new Error(`Session '${sessionId}' runtime stopped but session record could not be removed`);
+    }
+    this.notifyDataChanged?.();
+    return { apiVersion: SPAWNEA_CONTROL_API_VERSION, sessionId, removed: true };
+  }
+
   createBootstrapControl(): BootstrapAgentControlService {
     return {
       getState: () => this.getBootstrapState(),
       createSession: (request) => this.createRootSession(request),
+      isHarnessAvailableForHost: (harnessId, hostId) => this.isHarnessAvailableForHost(harnessId, hostId),
     };
   }
 
   async createScopedControl(
-    rootSessionId: string,
-    options: { allowRootPrompts?: boolean } = {},
+    sessionOrRootId: string,
+    options: { allowRootPrompts?: boolean; allowChildSession?: boolean } = {},
   ): Promise<ScopedAgentControlService> {
     const allowRootPrompts = options.allowRootPrompts === true;
-    const validateRoot = async () => {
-      const root = await this.repos.sessions.findById(rootSessionId);
-      const server = root ? await this.repos.servers.findById(root.serverId) : null;
-      if (!root || root.parentSessionId || !server?.enabled || !isLocalControlHost(server) ||
-          ['done', 'error', 'disconnected'].includes(root.status)) {
+    const allowChildSession = options.allowChildSession === true;
+
+    const caller = await this.repos.sessions.findById(sessionOrRootId);
+    if (!caller) {
+      throw new Error('MCP session identity is not an active local root');
+    }
+    const isChild = Boolean(caller.parentSessionId);
+    if (isChild && !allowChildSession) {
+      throw new Error('MCP session identity is not an active local root');
+    }
+
+    let root = caller;
+    while (root.parentSessionId) {
+      const parent = await this.repos.sessions.findById(root.parentSessionId);
+      if (!parent) {
         throw new Error('MCP session identity is not an active local root');
       }
-      return root;
+      root = parent;
+    }
+    const rootSessionId = root.id;
+
+    const validateRoot = async () => {
+      const currentCaller = await this.repos.sessions.findById(sessionOrRootId);
+      if (!currentCaller || ['done', 'error', 'disconnected'].includes(currentCaller.status)) {
+        throw new Error('MCP session identity is not an active local root');
+      }
+      const currentRoot = await this.repos.sessions.findById(rootSessionId);
+      const server = currentRoot ? await this.repos.servers.findById(currentRoot.serverId) : null;
+      if (!currentRoot || !server?.enabled || !isLocalControlHost(server) ||
+          ['done', 'error', 'disconnected'].includes(currentRoot.status)) {
+        throw new Error('MCP session identity is not an active local root');
+      }
+      return currentRoot;
     };
     const resolveInScope = async (sessionId: string, allowRoot = false): Promise<Session> => {
-      const root = await validateRoot();
+      const currentRoot = await validateRoot();
       const session = await this.repos.sessions.findById(sessionId);
-      if (!session || (session.id !== root.id && session.parentSessionId !== root.id) || (!allowRoot && session.id === root.id)) {
+      if (!session) {
+        throw new Error('Session is outside the authenticated MCP scope');
+      }
+      const isRoot = session.id === currentRoot.id;
+      const isCaller = session.id === sessionOrRootId;
+      const isRootChildOrSibling = session.parentSessionId === currentRoot.id;
+      const isCallerChild = session.parentSessionId === sessionOrRootId;
+      if (!isRoot && !isCaller && !isRootChildOrSibling && !isCallerChild) {
+        throw new Error('Session is outside the authenticated MCP scope');
+      }
+      if (!allowRoot && isRoot) {
         throw new Error('Session is outside the authenticated MCP scope');
       }
       return session;
     };
 
-    const root = await this.repos.sessions.findById(rootSessionId);
-    const rootServer = root ? await this.repos.servers.findById(root.serverId) : null;
+    const rootServer = await this.repos.servers.findById(root.serverId);
     const localHost = rootServer && isLocalControlHost(rootServer);
-    const active = root && !['done', 'error', 'disconnected'].includes(root.status);
-    if (!root || root.parentSessionId || !rootServer?.enabled || !localHost || !active) {
+    const rootActive = !['done', 'error', 'disconnected'].includes(root.status);
+    const callerActive = !['done', 'error', 'disconnected'].includes(caller.status);
+    if (!rootServer?.enabled || !localHost || !rootActive || !callerActive) {
       throw new Error('MCP session identity is not an active local root');
     }
 
@@ -252,19 +323,34 @@ export class AgentControlService {
         await resolveInScope(sessionId);
         return this.closeSharedChildSession(sessionId, force);
       },
+      closeChildSession: async (sessionId, force) => {
+        const session = await resolveInScope(sessionId, true);
+        if (session.id === rootSessionId) {
+          throw new Error('Root session cannot be closed from within scoped session control');
+        }
+        if (session.managedWorktree) {
+          return this.closeSession(sessionId, force);
+        }
+        return this.closeSharedChildSession(sessionId, force);
+      },
       preflightIntegration: async (sessionId) => {
         await resolveInScope(sessionId);
         return this.sessionManager.preflightIntegration(sessionId);
       },
       getState: async () => {
-        const root = await validateRoot();
+        const currentRoot = await validateRoot();
         const state = await this.getState();
-        const sessions = state.sessions.filter((item) => item.id === rootSessionId || item.parentSessionId === rootSessionId);
+        const sessions = state.sessions.filter((item) =>
+          item.id === rootSessionId ||
+          item.parentSessionId === rootSessionId ||
+          item.id === sessionOrRootId ||
+          item.parentSessionId === sessionOrRootId
+        );
         const hostIds = new Set(sessions.map((item) => item.host?.id));
         const projectIds = new Set(sessions.map((item) => item.project?.id));
         const allAgents = await this.repos.agents.findAll();
         const availableHarnesses: ControlHarnessView[] = allAgents
-          .filter((agent) => this.isHarnessAvailableForHost(agent.id, root.serverId))
+          .filter((agent) => this.isHarnessAvailableForHost(agent.id, currentRoot.serverId))
           .map((agent) => this.toHarnessView(agent));
         return {
           ...state,
@@ -289,19 +375,42 @@ export class AgentControlService {
         return this.renameSession(request);
       },
       createChildSession: async (request) => {
-        await resolveInScope(request.parentSession, true);
-        return this.createChildSession(request);
+        const currentRoot = await validateRoot();
+        const parentId = request.parentSession ?? currentRoot.id;
+        const parent = await resolveInScope(parentId, true);
+        const effectiveParentId = parent.parentSessionId ? currentRoot.id : parent.id;
+        return this.createChildSession({
+          ...request,
+          parentSession: effectiveParentId,
+        });
       },
       listSessions: async () => {
         await validateRoot();
         const state = await this.getState();
-        return { apiVersion: state.apiVersion, sessions: state.sessions.filter((item) => item.id === rootSessionId || item.parentSessionId === rootSessionId) };
+        return {
+          apiVersion: state.apiVersion,
+          sessions: state.sessions.filter((item) =>
+            item.id === rootSessionId ||
+            item.parentSessionId === rootSessionId ||
+            item.id === sessionOrRootId ||
+            item.parentSessionId === sessionOrRootId
+          ),
+        };
       },
       sendPrompt: async (request) => {
         let target = await this.repos.sessions.findById(request.target);
-        if (request.parentSession && request.parentSession !== rootSessionId) throw new Error('Session is outside the authenticated MCP scope');
+        if (request.parentSession && request.parentSession !== rootSessionId && request.parentSession !== sessionOrRootId) {
+          throw new Error('Session is outside the authenticated MCP scope');
+        }
         if (!target) target = await this.repos.sessions.findByParentAndAlias(rootSessionId, request.target);
+        if (!target && isChild) target = await this.repos.sessions.findByParentAndAlias(sessionOrRootId, request.target);
         if (!target) throw new Error('Session is outside the authenticated MCP scope');
+        if (target.id === sessionOrRootId && (isChild || !allowRootPrompts)) {
+          throw new Error('Session is outside the authenticated MCP scope');
+        }
+        if (target.id === rootSessionId && !allowRootPrompts) {
+          throw new Error('Session is outside the authenticated MCP scope');
+        }
         await resolveInScope(target.id, allowRootPrompts);
         return this.sendPrompt({ ...request, target: target.id });
       },
@@ -621,7 +730,7 @@ export class AgentControlService {
     };
   }
 
-  private isHarnessAvailableForHost(harnessId: string, hostId: string): boolean {
+  isHarnessAvailableForHost(harnessId: string, hostId: string): boolean {
     const catalog = this.getActiveCatalog?.();
     if (catalog) {
       const catalogHost = catalog.hosts[hostId];
@@ -652,34 +761,60 @@ export class AgentControlService {
     return this.isHarnessAvailableForHost(harnessId, hostId);
   }
 
-  private isBootstrapProjectAvailable(projectId: string, hostId: string): boolean {
+  private isProjectAvailableForHost(projectId: string, hostId: string): boolean {
     if (!projectId.includes(':')) return true;
     const prefix = `${hostId}:`;
     if (!projectId.startsWith(prefix)) return false;
     const catalogHost = this.getActiveCatalog?.()?.hosts[hostId];
-    if (!catalogHost?.enabled || catalogHost.ssh) return false;
+    if (!catalogHost || catalogHost.enabled === false) return false;
     return catalogHost.projects[projectId.slice(prefix.length)]?.enabled === true;
   }
 
-  private async validateBootstrapRootRequest(request: ControlCreateSessionRequest): Promise<void> {
+  private isBootstrapProjectAvailable(projectId: string, hostId: string): boolean {
+    const catalogHost = this.getActiveCatalog?.()?.hosts[hostId];
+    if (catalogHost && (catalogHost.enabled === false || catalogHost.ssh)) return false;
+    return this.isProjectAvailableForHost(projectId, hostId);
+  }
+
+  private async validateRootRequest(
+    request: ControlCreateSessionRequest,
+    allowRemoteHost = false,
+  ): Promise<void> {
     const [host, project, harness] = await Promise.all([
       this.repos.servers.findById(request.serverId),
       this.repos.projects.findById(request.projectId),
       this.repos.agents.findById(request.agentId),
     ]);
-    if (!host || !host.enabled || !isLocalControlHost(host)) {
-      throw new Error('Bootstrap root creation requires an enabled local host');
+    if (!host || !host.enabled) {
+      throw new Error(`Host '${request.serverId}' is not enabled or not found`);
     }
-    if (!project || project.serverId !== host.id ||
-        !this.isBootstrapProjectAvailable(project.id, host.id)) {
-      throw new Error(`Project '${request.projectId}' is not available on bootstrap host '${host.id}'`);
+    if (!project || project.serverId !== host.id) {
+      throw new Error(`Project '${request.projectId}' is not available on host '${host.id}'`);
     }
-    if (!harness || !this.isBootstrapHarnessAvailable(harness.id, host.id)) {
-      throw new Error(`Harness '${request.agentId}' is not available on bootstrap host '${host.id}'`);
+    if (!allowRemoteHost) {
+      if (!isLocalControlHost(host)) {
+        throw new Error('Bootstrap root creation requires an enabled local host');
+      }
+      if (!this.isBootstrapProjectAvailable(project.id, host.id)) {
+        throw new Error(`Project '${request.projectId}' is not available on bootstrap host '${host.id}'`);
+      }
+      if (!harness || !this.isBootstrapHarnessAvailable(harness.id, host.id)) {
+        throw new Error(`Harness '${request.agentId}' is not available on bootstrap host '${host.id}'`);
+      }
+    } else {
+      if (!this.isProjectAvailableForHost(project.id, host.id)) {
+        throw new Error(`Project '${request.projectId}' is not available on host '${host.id}'`);
+      }
+      if (!harness || !this.isHarnessAvailableForHost(harness.id, host.id)) {
+        throw new Error(`Harness '${request.agentId}' is not available on host '${host.id}'`);
+      }
     }
   }
 
-  private async createRootSession(request: ControlCreateSessionRequest): Promise<ControlCreateSessionResult> {
+  async createRootSession(
+    request: ControlCreateSessionRequest,
+    options: { allowRemoteHost?: boolean } = {},
+  ): Promise<ControlCreateSessionResult> {
     const fingerprint = JSON.stringify({
       serverId: request.serverId,
       projectId: request.projectId,
@@ -705,7 +840,7 @@ export class AgentControlService {
 
     const operation = (async (): Promise<ControlCreateSessionResult> => {
       try {
-        await this.validateBootstrapRootRequest(request);
+        await this.validateRootRequest(request, options.allowRemoteHost);
         const session = await this.sessionManager.createSession({
           serverId: request.serverId,
           projectId: request.projectId,

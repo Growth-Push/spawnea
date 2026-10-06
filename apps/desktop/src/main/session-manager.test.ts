@@ -1771,6 +1771,103 @@ up 1 day, 5 hours
       )).rejects.toThrow("'mcp-validated' finalization origin is only valid for close requests");
     });
 
+    it('allows MCP-validated close with stashChanges: true on a dirty worktree', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Stash close test',
+        baseBranch: 'main',
+      });
+
+      const worktree = await sessionManager.resolveSessionWorktreePath(session);
+      await mockHost.writeFile(join(worktree.value, 'dirty-file.txt'), 'dirty content');
+      worktree.release();
+
+      const result = await sessionManager.finishSession(
+        session.id,
+        'close',
+        { stashChanges: true },
+        'mcp-validated'
+      );
+      expect(result).toEqual({ action: 'close', removed: true });
+    });
+
+    it('rejects MCP-validated close with stashChanges: false on a dirty worktree', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Discard close test on dirty worktree',
+        baseBranch: 'main',
+      });
+
+      mockHost.customRules.push(
+        {
+          pattern: 'git rev-parse --is-inside-work-tree',
+          response: { stdout: 'true\n', stderr: '', exitCode: 0 },
+        },
+        {
+          pattern: 'git status --porcelain=v1 -uall',
+          response: { stdout: '?? dirty-file.txt\n', stderr: '', exitCode: 0 },
+        }
+      );
+
+      await expect(
+        sessionManager.finishSession(
+          session.id,
+          'close',
+          { stashChanges: false },
+          'mcp-validated'
+        )
+      ).rejects.toThrow(
+        `Session '${session.id}' has uncommitted changes in managed worktree; finalize or stash changes before closing`
+      );
+
+      expect(await repos.sessions.findById(session.id)).toBeDefined();
+    });
+
+    it('rejects MCP-validated close with stashChanges: false when worktree contains ignored files', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Discard close test on ignored file worktree',
+        baseBranch: 'main',
+      });
+
+      mockHost.customRules.push(
+        {
+          pattern: 'git rev-parse --is-inside-work-tree',
+          response: { stdout: 'true\n', stderr: '', exitCode: 0 },
+        },
+        {
+          pattern: 'git status --porcelain=v1 -uall',
+          response: { stdout: '', stderr: '', exitCode: 0 },
+        },
+        {
+          pattern: 'git status --porcelain=v1 --ignored --untracked-files=all',
+          response: { stdout: '!! .env\n', stderr: '', exitCode: 0 },
+        }
+      );
+
+      await expect(
+        sessionManager.finishSession(
+          session.id,
+          'close',
+          { stashChanges: false },
+          'mcp-validated'
+        )
+      ).rejects.toThrow(
+        `Session '${session.id}' has ignored files in managed worktree; finalize or stash changes before closing`
+      );
+
+      expect(await repos.sessions.findById(session.id)).toBeDefined();
+    });
+
     it('rejects finishing an unmanaged session', async () => {
       const regularSession = await sessionManager.createSession({
         serverId: 'dev-workstation',
@@ -1821,6 +1918,31 @@ up 1 day, 5 hours
       // Session record and context removed
       expect(await repos.sessions.findById(session.id)).toBeNull();
       expect(await contextStore.load(session.id)).toBeNull();
+    });
+
+    it('reports whether worktree removal was recorded in session context', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Recorded removal check',
+        baseBranch: 'main',
+      });
+
+      expect(await sessionManager.isWorktreeRemovalRecorded(session.id, 'close')).toBe(false);
+
+      const existingContext = await contextStore.load(session.id);
+      expect(existingContext).toBeDefined();
+      if (existingContext) {
+        await contextStore.save({
+          ...existingContext,
+          finalization: { action: 'close', worktreeRemoved: true },
+        });
+      }
+
+      expect(await sessionManager.isWorktreeRemovalRecorded(session.id, 'close')).toBe(true);
+      expect(await sessionManager.isWorktreeRemovalRecorded(session.id, 'integrate')).toBe(false);
     });
 
     it('finalizes a managed worktree session with action integrate', async () => {

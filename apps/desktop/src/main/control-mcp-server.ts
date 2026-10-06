@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { SPAWNEA_CONTROL_API_VERSION } from '@spawnea/domain';
 import type {
+  AgentControlService,
   BootstrapAgentControlService,
   ScopedAgentControlService,
 } from './agent-control-service.js';
@@ -378,6 +380,238 @@ export function createBootstrapSpawneaMcpServer(
         throw error;
       }
     })()
+  );
+
+  return server;
+}
+
+export interface CreateCliSpawneaMcpServerOptions {
+  isScoped?: boolean;
+}
+
+export function createCliSpawneaMcpServer(
+  control: AgentControlService | ScopedAgentControlService,
+  options: CreateCliSpawneaMcpServerOptions = {},
+): McpServer {
+  const isScoped = options.isScoped ?? !('createRootSession' in control);
+  const server = new McpServer({
+    name: 'spawnea-control-cli',
+    version: '1.0.0',
+  });
+
+  server.registerTool(
+    'spawnea_list_sessions',
+    {
+      title: 'List Spawnea sessions',
+      description: 'List all active sessions and their status.',
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    safeTool(async () => {
+      const state = await control.getState();
+      return { apiVersion: state.apiVersion, sessions: state.sessions };
+    })
+  );
+
+  server.registerTool(
+    'spawnea_status',
+    {
+      title: 'Get session status',
+      description: 'Get detailed session information including worktree and status.',
+      inputSchema: z.object({ sessionId: z.string().min(1).max(200) }),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ sessionId }) => safeTool(async () => {
+      const state = await control.getState();
+      let session = state.sessions.find((s) => s.id === sessionId);
+      if (!session) {
+        const matches = state.sessions.filter(
+          (s) => s.id.startsWith(sessionId) || s.name.toLowerCase() === sessionId.toLowerCase()
+        );
+        if (matches.length > 1) {
+          throw new Error(`Ambiguous session identifier '${sessionId}': matches ${matches.map((m) => m.id).join(', ')}`);
+        }
+        session = matches[0];
+      }
+      if (!session) {
+        throw new Error(`Session '${sessionId}' not found`);
+      }
+      return { apiVersion: state.apiVersion, session };
+    })()
+  );
+
+  server.registerTool(
+    'spawnea_create_session',
+    {
+      title: 'Create a root Spawnea session',
+      description: 'Create one independent root Spawnea session.',
+      inputSchema: z.object({
+        projectId: z.string().min(1).max(200),
+        task: z.string().trim().min(1).max(10_000),
+        agentId: z.string().min(1).max(200).optional(),
+        serverId: z.string().min(1).max(200).optional(),
+        baseBranch: z.string().trim().min(1).max(240).optional(),
+        useWorktree: z.boolean().optional(),
+        clientRequestId: z.string().min(1).max(120).optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async (request) => safeTool(async () => {
+      if (isScoped || !('createRootSession' in control)) {
+        throw new Error('Creating root sessions is not permitted from a scoped session context');
+      }
+      const state = await control.getState();
+      const selectedProject = state.projects?.find((p) => p.id === request.projectId);
+      const serverId = request.serverId ?? selectedProject?.hostId ?? state.hosts[0]?.id ?? 'local';
+      const isAvailable = (h: { id: string }) => {
+        if ('isHarnessAvailableForHost' in control && typeof (control as any).isHarnessAvailableForHost === 'function') {
+          return (control as any).isHarnessAvailableForHost(h.id, serverId);
+        }
+        return !h.id.includes(':') || h.id.startsWith(`${serverId}:`);
+      };
+      const availableHarnesses = state.harnesses.filter((h) => {
+        if (h.id.includes(':') && !h.id.startsWith(`${serverId}:`)) return false;
+        return isAvailable(h);
+      });
+      let resolvedAgentId = request.agentId;
+      if (resolvedAgentId && !availableHarnesses.some((h) => h.id === resolvedAgentId)) {
+        const match = availableHarnesses.find(
+          (h) => h.name.toLowerCase() === resolvedAgentId?.toLowerCase() ||
+                 (h.harness && h.harness.toLowerCase() === resolvedAgentId?.toLowerCase()) ||
+                 (h.kind && h.kind.toLowerCase() === resolvedAgentId?.toLowerCase()) ||
+                 h.id.endsWith(`:${resolvedAgentId}`)
+        );
+        if (match) resolvedAgentId = match.id;
+      }
+      if (!resolvedAgentId) {
+        const defaultHarness = availableHarnesses.find((h) => h.kind !== 'shell') ?? availableHarnesses[0];
+        if (!defaultHarness) {
+          throw new Error(`No harness available on server '${serverId}'`);
+        }
+        resolvedAgentId = defaultHarness.id;
+      }
+
+      const clientRequestId = request.clientRequestId ?? randomUUID();
+      return control.createRootSession({
+        clientRequestId,
+        serverId,
+        projectId: request.projectId,
+        agentId: resolvedAgentId,
+        task: request.task,
+        baseBranch: request.baseBranch,
+        useWorktree: request.useWorktree ?? true,
+      }, { allowRemoteHost: true });
+    })()
+  );
+
+  server.registerTool(
+    'spawnea_create_child_session',
+    {
+      title: 'Create a child session',
+      description: 'Create a child session under a parent session.',
+      inputSchema: z.object({
+        parentSession: z.string().min(1).max(200),
+        task: z.string().trim().min(1).max(4_000),
+        name: z.string().trim().min(1).max(120).optional(),
+        workspace: z.enum(['same-project', 'new-worktree']).optional(),
+        agentId: z.string().min(1).max(240).optional(),
+        serverId: z.string().min(1).max(200).optional(),
+        projectId: z.string().min(1).max(240).optional(),
+        model: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/).optional(),
+        initialPrompt: z.string().min(1).max(32_000).optional(),
+        clientRequestId: z.string().min(1).max(120).optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async (input) => safeTool(async () => {
+      let agentId = input.agentId;
+      if (agentId) {
+        const state = await control.getState();
+        const parent = state.sessions.find((s) => s.id === input.parentSession);
+        const serverId = input.serverId ?? parent?.host?.id ?? 'local';
+        const availableHarnesses = state.harnesses.filter((h) => !h.id.includes(':') || h.id.startsWith(`${serverId}:`));
+        const match = availableHarnesses.find(
+          (h) => h.id === agentId ||
+                 h.name.toLowerCase() === agentId?.toLowerCase() ||
+                 h.harness.toLowerCase() === agentId?.toLowerCase() ||
+                 h.kind.toLowerCase() === agentId?.toLowerCase() ||
+                 h.id.endsWith(`:${agentId}`)
+        );
+        if (match) agentId = match.id;
+      }
+      return control.createChildSession({
+        ...input,
+        workspace: input.workspace ?? 'same-project',
+        agentId,
+      });
+    })()
+  );
+
+  server.registerTool(
+    'spawnea_send_prompt',
+    {
+      title: 'Send prompt to session',
+      description: 'Submit prompt text to a session or child terminal.',
+      inputSchema: z.object({
+        target: z.string().min(1).max(200),
+        prompt: z.string().min(1).max(32_000),
+        clientRequestId: z.string().min(1).max(120).optional(),
+        parentSession: z.string().min(1).max(200).optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async (input) => safeTool(() => control.sendPrompt(input))()
+  );
+
+  server.registerTool(
+    'spawnea_get_turn',
+    {
+      title: 'Read or wait for a turn',
+      description: 'Read terminal output produced after a prompt.',
+      inputSchema: z.object({
+        turnId: z.string().uuid(),
+        cursor: z.string().min(1).max(240).optional(),
+        afterVersion: z.number().int().nonnegative().optional(),
+        waitMs: z.number().int().min(0).max(30_000).optional(),
+        outputMode: z.enum(['compact', 'raw']).optional(),
+        maxBytes: z.number().int().min(1).max(131_072).optional(),
+      }),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    async (input) => safeTool(() => control.getTurn(input))()
+  );
+
+  server.registerTool(
+    'spawnea_close_session',
+    {
+      title: 'Close a session',
+      description: 'Close an active session or child.',
+      inputSchema: z.object({
+        sessionId: z.string().min(1).max(200),
+        force: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+    },
+    async ({ sessionId, force }) => safeTool(async () => {
+      if (isScoped) {
+        return control.closeChildSession(sessionId, force);
+      }
+      if ('closeSession' in control) {
+        return control.closeSession(sessionId, force);
+      }
+      return control.closeChildSession(sessionId, force);
+    })()
+  );
+
+  server.registerTool(
+    'spawnea_get_state',
+    {
+      title: 'Get Spawnea state',
+      description: 'Get full Spawnea state including sessions, hosts, projects, harnesses.',
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    safeTool(() => control.getState())
   );
 
   return server;

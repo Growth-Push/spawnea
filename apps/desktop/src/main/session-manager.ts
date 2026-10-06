@@ -1550,12 +1550,14 @@ export class SessionManager {
                     releaseRepo = repositoryPath.release;
                     const worktreePath = await this.resolveSessionWorktreePath(session);
                     releaseWorktree = worktreePath.release;
-                    await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value).catch(() => false);
+                    const removed = await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value).catch(() => false);
+                    if (!removed) {
+                      throw new Error(`Failed to remove managed worktree for session '${sessionId}'`);
+                    }
                   } else {
                     this.logger.warn('Managed worktree preserved: project path could not be resolved', { sessionId });
+                    throw new Error(`Cannot delete session '${sessionId}': project repository path could not be resolved to clean up managed worktree`);
                   }
-                } catch (err) {
-                  this.logger.warn('Failed to clean up managed worktree during session deletion', { sessionId, error: err });
                 } finally {
                   releaseRepo();
                   releaseWorktree();
@@ -1792,6 +1794,29 @@ export class SessionManager {
           // 2. Verify termination before changing any files.
           await this.stopSession(sessionId);
 
+          // MCP-validated closes that discard changes (stashChanges: false) never discard work:
+          // with the runtime stopped, require a verified clean worktree so late writes or an unreadable status cannot be lost.
+          if (origin === 'mcp-validated' && !options.stashChanges) {
+            const postStopStatus = await this.getGitStatus(sessionId).catch(() => null);
+            if (!postStopStatus || postStopStatus.unavailable) {
+              throw new Error(`Session '${sessionId}' worktree status could not be verified; aborting close to prevent data loss`);
+            }
+            if (!postStopStatus.isClean || postStopStatus.totalChanges > 0) {
+              throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
+            }
+
+            const ignoredStatus = await host.execute('git status --porcelain=v1 --ignored --untracked-files=all', {
+              cwd: identity.worktreePath,
+            }).catch(() => null);
+            if (!ignoredStatus || ignoredStatus.exitCode !== 0) {
+              throw new Error(`Session '${sessionId}' worktree ignored status could not be verified; aborting close to prevent data loss`);
+            }
+            const hasIgnored = ignoredStatus.stdout.split('\n').some((line) => line.startsWith('!! '));
+            if (hasIgnored) {
+              throw new Error(`Session '${sessionId}' has ignored files in managed worktree; finalize or stash changes before closing`);
+            }
+          }
+
           // 3. Preserve or discard local changes before removing the worktree.
           if (options.stashChanges) {
             await this.gitService.stashManagedWorktreeChanges(host, identity);
@@ -1852,6 +1877,11 @@ export class SessionManager {
         }
       }
     }
+  }
+
+  async isWorktreeRemovalRecorded(sessionId: string, action: FinishSessionAction = 'close'): Promise<boolean> {
+    const existingContext = await this.contextStore.load(sessionId);
+    return existingContext?.finalization?.action === action && existingContext.finalization.worktreeRemoved === true;
   }
 
   async preflightIntegration(sessionId: string) {

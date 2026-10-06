@@ -298,3 +298,5 @@ export interface GitDiffResult {
   totalDeletions: number;
   totalFilesChanged: number;
 }
+
+export * from './skill-prompt.js';

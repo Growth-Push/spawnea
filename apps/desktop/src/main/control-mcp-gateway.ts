@@ -11,7 +11,11 @@ import {
   type Logger,
 } from '@spawnea/domain';
 import type { AgentControlService } from './agent-control-service.js';
-import { createBootstrapSpawneaMcpServer, createSpawneaMcpServer } from './control-mcp-server.js';
+import {
+  createBootstrapSpawneaMcpServer,
+  createCliSpawneaMcpServer,
+  createSpawneaMcpServer,
+} from './control-mcp-server.js';
 import { resolveControlRuntimeFile, resolveControlSocketPath } from './control-runtime.js';
 
 const AUTH_TIMEOUT_MS = 3_000;
@@ -71,6 +75,7 @@ export class ControlMcpGateway {
   private readonly logger: Logger;
   private readonly token = randomBytes(32).toString('hex');
   private readonly handles = new Set<StdioServerHandle>();
+  private readonly sockets = new Set<Socket>();
   private server: NetServer | null = null;
   private ownsSocketPath = false;
   private ownsRuntimeFilePath = false;
@@ -128,7 +133,11 @@ export class ControlMcpGateway {
     }
     await this.clearStaleRuntime();
 
-    const server = createServer((socket) => this.authenticate(socket));
+    const server = createServer((socket) => {
+      this.sockets.add(socket);
+      socket.once('close', () => this.sockets.delete(socket));
+      this.authenticate(socket);
+    });
     this.server = server;
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error) => {
@@ -184,7 +193,7 @@ export class ControlMcpGateway {
       const newline = buffered.indexOf(0x0a);
       if (newline === -1) return;
 
-      let auth: { type?: unknown; token?: unknown; sessionId?: unknown };
+      let auth: { type?: unknown; token?: unknown; sessionId?: unknown; mode?: unknown };
       try {
         auth = JSON.parse(buffered.subarray(0, newline).toString('utf8'));
       } catch {
@@ -199,16 +208,23 @@ export class ControlMcpGateway {
       if (typeof auth.sessionId === 'string') {
         let scopedControl: Awaited<ReturnType<AgentControlService['createScopedControl']>>;
         const deadline = Date.now() + AUTH_TIMEOUT_MS;
+        const scopedOptions = auth.mode === 'cli' ? { allowChildSession: true } : undefined;
         while (true) {
           try {
-            scopedControl = await this.control.createScopedControl(auth.sessionId);
+            scopedControl = scopedOptions
+              ? await this.control.createScopedControl(auth.sessionId, scopedOptions)
+              : await this.control.createScopedControl(auth.sessionId);
             break;
           } catch {
             if (socket.destroyed || Date.now() >= deadline) return fail();
             await new Promise((resolve) => setTimeout(resolve, AUTH_SCOPE_RETRY_INTERVAL_MS));
           }
         }
-        createServer = () => createSpawneaMcpServer(scopedControl);
+        createServer = auth.mode === 'cli'
+          ? () => createCliSpawneaMcpServer(scopedControl, { isScoped: true })
+          : () => createSpawneaMcpServer(scopedControl);
+      } else if (auth.mode === 'cli') {
+        createServer = () => createCliSpawneaMcpServer(this.control, { isScoped: false });
       } else {
         const bootstrapControl = this.control.createBootstrapControl();
         createServer = () => createBootstrapSpawneaMcpServer(
@@ -240,6 +256,10 @@ export class ControlMcpGateway {
     const handles = Array.from(this.handles);
     this.handles.clear();
     await Promise.allSettled(handles.map((handle) => handle.close()));
+    for (const socket of this.sockets) {
+      socket.destroy();
+    }
+    this.sockets.clear();
     if (this.server) {
       const server = this.server;
       this.server = null;
