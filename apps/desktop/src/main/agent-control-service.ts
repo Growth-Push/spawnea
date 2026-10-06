@@ -225,19 +225,6 @@ export class AgentControlService {
     }
 
     if (session.managedWorktree) {
-      await this.sessionManager.stopSession(sessionId);
-
-      const worktreeAlreadyRemoved = (await this.sessionManager.isWorktreeRemovalRecorded?.(sessionId, 'close')) ?? false;
-      if (!worktreeAlreadyRemoved) {
-        const gitStatus = await this.sessionManager.getGitStatus(sessionId).catch(() => null);
-        if (!gitStatus || gitStatus.unavailable) {
-          throw new Error(`Session '${sessionId}' worktree status could not be verified; aborting close to prevent data loss`);
-        }
-        if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
-          throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
-        }
-      }
-
       const result = await this.sessionManager.finishSession(
         sessionId,
         'close',
