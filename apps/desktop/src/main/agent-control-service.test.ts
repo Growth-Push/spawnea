@@ -1551,6 +1551,78 @@ describe('AgentControlService', () => {
           'Root session cannot be closed from within scoped session control'
         );
       });
+
+      it('supports scoped control for child session when allowChildSession is true', async () => {
+        await repositories.servers.save({
+          id: 'local-child-scope',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('root-parent', {
+            serverId: 'local-child-scope',
+            status: 'idle',
+          })
+        );
+
+        await repositories.sessions.save(
+          session('child-terminal', {
+            serverId: 'local-child-scope',
+            parentSessionId: 'root-parent',
+            status: 'idle',
+          })
+        );
+
+        // Without allowChildSession, it must reject child session identity
+        await expect(service.createScopedControl('child-terminal')).rejects.toThrow(
+          'MCP session identity is not an active local root'
+        );
+
+        // With allowChildSession, it succeeds and scopes to the child's family
+        const childScoped = await service.createScopedControl('child-terminal', { allowChildSession: true });
+        const state = await childScoped.getState();
+        expect(state.sessions.map((s) => s.id)).toContain('child-terminal');
+        expect(state.sessions.map((s) => s.id)).toContain('root-parent');
+
+        const list = await childScoped.listSessions();
+        expect(list.sessions.map((s) => s.id)).toContain('child-terminal');
+
+        // Cannot close the root from the child's scope
+        await expect(childScoped.closeChildSession('root-parent')).rejects.toThrow(
+          'Root session cannot be closed from within scoped session control'
+        );
+      });
+
+      it('rejects closing a dirty managed worktree session via unscoped closeSession even with force', async () => {
+        await repositories.servers.save({
+          id: 'local-unscoped-close',
+          name: 'Local Host',
+          host: 'localhost',
+          sshPort: 22,
+          enabled: true,
+        });
+
+        await repositories.sessions.save(
+          session('dirty-unscoped-sess', {
+            serverId: 'local-unscoped-close',
+            managedWorktree: true,
+            status: 'idle',
+          })
+        );
+
+        sessionManager.getGitStatus.mockResolvedValueOnce({
+          isClean: false,
+          totalChanges: 3,
+        });
+
+        await expect(service.closeSession('dirty-unscoped-sess', true)).rejects.toThrow(
+          "Session 'dirty-unscoped-sess' has uncommitted changes in managed worktree; finalize or stash changes before closing"
+        );
+        expect(sessionManager.deleteSession).not.toHaveBeenCalledWith('dirty-unscoped-sess', expect.anything());
+      });
     });
   });
 });

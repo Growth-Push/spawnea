@@ -111,7 +111,7 @@ export class ControlCliClient {
           type: 'spawnea-auth',
           token: this.descriptor.token,
           mode: 'cli',
-          sessionId: this.sessionId || undefined,
+          sessionId: this.sessionId !== undefined ? this.sessionId : undefined,
         };
         socket.write(`${JSON.stringify(auth)}\n`);
         resolve();

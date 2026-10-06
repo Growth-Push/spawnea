@@ -1518,12 +1518,14 @@ export class SessionManager {
                     releaseRepo = repositoryPath.release;
                     const worktreePath = await this.resolveSessionWorktreePath(session);
                     releaseWorktree = worktreePath.release;
-                    await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value).catch(() => false);
+                    const removed = await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value).catch(() => false);
+                    if (!removed) {
+                      throw new Error(`Failed to remove managed worktree for session '${sessionId}'`);
+                    }
                   } else {
                     this.logger.warn('Managed worktree preserved: project path could not be resolved', { sessionId });
+                    throw new Error(`Cannot delete session '${sessionId}': project repository path could not be resolved to clean up managed worktree`);
                   }
-                } catch (err) {
-                  this.logger.warn('Failed to clean up managed worktree during session deletion', { sessionId, error: err });
                 } finally {
                   releaseRepo();
                   releaseWorktree();

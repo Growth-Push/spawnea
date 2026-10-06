@@ -483,6 +483,21 @@ describe('Spawnea Control CLI', () => {
       await expect(
         runCli(['child', 'create', '--parent', 'sess-e2e-1', '--task', 'Subtask', '--workspace', 'invalid-type', '--runtime-file', runtimeFile])
       ).rejects.toThrow("Invalid --workspace: 'invalid-type'");
+
+      // Test rejection of explicitly empty session identity
+      const origEnv = process.env.SPAWNEA_SESSION_ID;
+      try {
+        process.env.SPAWNEA_SESSION_ID = '';
+        await expect(
+          runCli(['list', '--runtime-file', runtimeFile])
+        ).rejects.toThrow(/closed connection|connection closed/i);
+      } finally {
+        if (origEnv !== undefined) {
+          process.env.SPAWNEA_SESSION_ID = origEnv;
+        } else {
+          delete process.env.SPAWNEA_SESSION_ID;
+        }
+      }
     });
   });
 });

@@ -224,13 +224,14 @@ export class AgentControlService {
       throw new Error(`Session '${sessionId}' is currently ${session.status}; pass force=true to close`);
     }
 
-    if (session.managedWorktree && !force) {
+    if (session.managedWorktree) {
       const gitStatus = await this.sessionManager.getGitStatus(sessionId).catch(() => null);
       if (!gitStatus) {
-        throw new Error(`Session '${sessionId}' worktree status could not be verified; pass force=true to close`);
-      }
-      if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
-        throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; pass force=true to close`);
+        if (!force) {
+          throw new Error(`Session '${sessionId}' worktree status could not be verified; pass force=true to close`);
+        }
+      } else if (!gitStatus.isClean || gitStatus.totalChanges > 0) {
+        throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
       }
     }
 
@@ -247,33 +248,68 @@ export class AgentControlService {
   }
 
   async createScopedControl(
-    rootSessionId: string,
-    options: { allowRootPrompts?: boolean } = {},
+    sessionOrRootId: string,
+    options: { allowRootPrompts?: boolean; allowChildSession?: boolean } = {},
   ): Promise<ScopedAgentControlService> {
     const allowRootPrompts = options.allowRootPrompts === true;
-    const validateRoot = async () => {
-      const root = await this.repos.sessions.findById(rootSessionId);
-      const server = root ? await this.repos.servers.findById(root.serverId) : null;
-      if (!root || root.parentSessionId || !server?.enabled || !isLocalControlHost(server) ||
-          ['done', 'error', 'disconnected'].includes(root.status)) {
+    const allowChildSession = options.allowChildSession === true;
+
+    const caller = await this.repos.sessions.findById(sessionOrRootId);
+    if (!caller) {
+      throw new Error('MCP session identity is not an active local root');
+    }
+    const isChild = Boolean(caller.parentSessionId);
+    if (isChild && !allowChildSession) {
+      throw new Error('MCP session identity is not an active local root');
+    }
+
+    let root = caller;
+    while (root.parentSessionId) {
+      const parent = await this.repos.sessions.findById(root.parentSessionId);
+      if (!parent) {
         throw new Error('MCP session identity is not an active local root');
       }
-      return root;
+      root = parent;
+    }
+    const rootSessionId = root.id;
+
+    const validateRoot = async () => {
+      const currentCaller = await this.repos.sessions.findById(sessionOrRootId);
+      if (!currentCaller || ['done', 'error', 'disconnected'].includes(currentCaller.status)) {
+        throw new Error('MCP session identity is not an active local root');
+      }
+      const currentRoot = await this.repos.sessions.findById(rootSessionId);
+      const server = currentRoot ? await this.repos.servers.findById(currentRoot.serverId) : null;
+      if (!currentRoot || !server?.enabled || !isLocalControlHost(server) ||
+          ['done', 'error', 'disconnected'].includes(currentRoot.status)) {
+        throw new Error('MCP session identity is not an active local root');
+      }
+      return currentRoot;
     };
     const resolveInScope = async (sessionId: string, allowRoot = false): Promise<Session> => {
-      const root = await validateRoot();
+      const currentRoot = await validateRoot();
       const session = await this.repos.sessions.findById(sessionId);
-      if (!session || (session.id !== root.id && session.parentSessionId !== root.id) || (!allowRoot && session.id === root.id)) {
+      if (!session) {
+        throw new Error('Session is outside the authenticated MCP scope');
+      }
+      const isRoot = session.id === currentRoot.id;
+      const isCaller = session.id === sessionOrRootId;
+      const isRootChildOrSibling = session.parentSessionId === currentRoot.id;
+      const isCallerChild = session.parentSessionId === sessionOrRootId;
+      if (!isRoot && !isCaller && !isRootChildOrSibling && !isCallerChild) {
+        throw new Error('Session is outside the authenticated MCP scope');
+      }
+      if (!allowRoot && isRoot) {
         throw new Error('Session is outside the authenticated MCP scope');
       }
       return session;
     };
 
-    const root = await this.repos.sessions.findById(rootSessionId);
-    const rootServer = root ? await this.repos.servers.findById(root.serverId) : null;
+    const rootServer = await this.repos.servers.findById(root.serverId);
     const localHost = rootServer && isLocalControlHost(rootServer);
-    const active = root && !['done', 'error', 'disconnected'].includes(root.status);
-    if (!root || root.parentSessionId || !rootServer?.enabled || !localHost || !active) {
+    const rootActive = !['done', 'error', 'disconnected'].includes(root.status);
+    const callerActive = !['done', 'error', 'disconnected'].includes(caller.status);
+    if (!rootServer?.enabled || !localHost || !rootActive || !callerActive) {
       throw new Error('MCP session identity is not an active local root');
     }
 
@@ -310,14 +346,19 @@ export class AgentControlService {
         return this.sessionManager.preflightIntegration(sessionId);
       },
       getState: async () => {
-        const root = await validateRoot();
+        const currentRoot = await validateRoot();
         const state = await this.getState();
-        const sessions = state.sessions.filter((item) => item.id === rootSessionId || item.parentSessionId === rootSessionId);
+        const sessions = state.sessions.filter((item) =>
+          item.id === rootSessionId ||
+          item.parentSessionId === rootSessionId ||
+          item.id === sessionOrRootId ||
+          item.parentSessionId === sessionOrRootId
+        );
         const hostIds = new Set(sessions.map((item) => item.host?.id));
         const projectIds = new Set(sessions.map((item) => item.project?.id));
         const allAgents = await this.repos.agents.findAll();
         const availableHarnesses: ControlHarnessView[] = allAgents
-          .filter((agent) => this.isHarnessAvailableForHost(agent.id, root.serverId))
+          .filter((agent) => this.isHarnessAvailableForHost(agent.id, currentRoot.serverId))
           .map((agent) => this.toHarnessView(agent));
         return {
           ...state,
@@ -342,18 +383,34 @@ export class AgentControlService {
         return this.renameSession(request);
       },
       createChildSession: async (request) => {
-        await resolveInScope(request.parentSession, true);
-        return this.createChildSession(request);
+        const currentRoot = await validateRoot();
+        const parentId = request.parentSession ?? (isChild ? sessionOrRootId : currentRoot.id);
+        const parent = await resolveInScope(parentId, true);
+        return this.createChildSession({
+          ...request,
+          parentSession: parent.id,
+        });
       },
       listSessions: async () => {
         await validateRoot();
         const state = await this.getState();
-        return { apiVersion: state.apiVersion, sessions: state.sessions.filter((item) => item.id === rootSessionId || item.parentSessionId === rootSessionId) };
+        return {
+          apiVersion: state.apiVersion,
+          sessions: state.sessions.filter((item) =>
+            item.id === rootSessionId ||
+            item.parentSessionId === rootSessionId ||
+            item.id === sessionOrRootId ||
+            item.parentSessionId === sessionOrRootId
+          ),
+        };
       },
       sendPrompt: async (request) => {
         let target = await this.repos.sessions.findById(request.target);
-        if (request.parentSession && request.parentSession !== rootSessionId) throw new Error('Session is outside the authenticated MCP scope');
+        if (request.parentSession && request.parentSession !== rootSessionId && request.parentSession !== sessionOrRootId) {
+          throw new Error('Session is outside the authenticated MCP scope');
+        }
         if (!target) target = await this.repos.sessions.findByParentAndAlias(rootSessionId, request.target);
+        if (!target && isChild) target = await this.repos.sessions.findByParentAndAlias(sessionOrRootId, request.target);
         if (!target) throw new Error('Session is outside the authenticated MCP scope');
         await resolveInScope(target.id, allowRootPrompts);
         return this.sendPrompt({ ...request, target: target.id });

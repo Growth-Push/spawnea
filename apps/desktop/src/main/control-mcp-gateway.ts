@@ -208,9 +208,12 @@ export class ControlMcpGateway {
       if (typeof auth.sessionId === 'string') {
         let scopedControl: Awaited<ReturnType<AgentControlService['createScopedControl']>>;
         const deadline = Date.now() + AUTH_TIMEOUT_MS;
+        const scopedOptions = auth.mode === 'cli' ? { allowChildSession: true } : undefined;
         while (true) {
           try {
-            scopedControl = await this.control.createScopedControl(auth.sessionId);
+            scopedControl = scopedOptions
+              ? await this.control.createScopedControl(auth.sessionId, scopedOptions)
+              : await this.control.createScopedControl(auth.sessionId);
             break;
           } catch {
             if (socket.destroyed || Date.now() >= deadline) return fail();

@@ -158,7 +158,7 @@ export async function runCli(argv: string[]): Promise<void> {
     client = await ControlCliClient.connect({
       profile,
       runtimeFile,
-      sessionId: process.env.SPAWNEA_SESSION_ID || undefined,
+      sessionId: process.env.SPAWNEA_SESSION_ID !== undefined ? process.env.SPAWNEA_SESSION_ID : undefined,
     });
 
     switch (parsed.command) {
