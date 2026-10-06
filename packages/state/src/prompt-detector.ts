@@ -32,6 +32,72 @@ export interface PromptDetectorOptions {
   tailLinesCount?: number;
 }
 
+const HERMES_MENU = /Hermes(?:\s+Agent)?\s+needs your input|to select,\s*Enter to (?:confirm|lock)|Tab next question/i;
+const HERMES_PROGRESS = /\b(?:formulating|pondering|reviewing|searching|executing|synthesizing|generating)\.{2,3}/i;
+const HERMES_INTERRUPT = /msg=interrupt|\/steer|\/queue|Ctrl\+C cancel/i;
+const HERMES_STOPWATCH = /[|│]\s*⏱\s*\d+/;
+const HERMES_QUESTION_PROMPT = /^\s*\?\s*[>❯›][^a-zA-Z0-9]*$/;
+const HERMES_IDLE_CHECK = /^\s*⚕[^\n]*[|│]\s*✓\s*\d+(?:ms|[smh])(?:\s|$)/i;
+
+/**
+ * A Hermes choice footer stays in the scrollback after the menu closes.
+ * A later progress verb, interrupt footer, or completion checkmark is the
+ * current turn. The stopwatch painted under an open menu is not.
+ */
+function statusAfterHermesMenu(lines: string[]): PromptDetectionResult | undefined {
+  let footer = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (HERMES_MENU.test(lines[i])) {
+      footer = i;
+    }
+  }
+  if (footer < 0) {
+    return undefined;
+  }
+
+  for (let i = lines.length - 1; i > footer; i--) {
+    const line = lines[i].trim();
+    if (!line || HERMES_QUESTION_PROMPT.test(line)) {
+      continue;
+    }
+    if (HERMES_STOPWATCH.test(line) && !HERMES_INTERRUPT.test(line)) {
+      continue;
+    }
+    if (HERMES_PROGRESS.test(line)) {
+      return {
+        isPrompt: false,
+        kind: 'working',
+        promptLine: line,
+        matchedRuleId: 'hermes-working-progress-verbs',
+        matchedPattern: HERMES_PROGRESS.source,
+        confidence: 0.95,
+      };
+    }
+    if (HERMES_INTERRUPT.test(line)) {
+      return {
+        isPrompt: false,
+        kind: 'working',
+        promptLine: line,
+        matchedRuleId: 'hermes-working-footer',
+        matchedPattern: HERMES_INTERRUPT.source,
+        confidence: 0.98,
+      };
+    }
+    if (HERMES_IDLE_CHECK.test(line)) {
+      return {
+        isPrompt: true,
+        kind: 'idle_prompt',
+        promptLine: line,
+        matchedRuleId: 'hermes-idle-completion-checkmark',
+        matchedPattern: HERMES_IDLE_CHECK.source,
+        confidence: 0.98,
+      };
+    }
+  }
+
+  return undefined;
+}
+
 /**
  * Detects interactive prompts, choice menus, questions, idle prompts, or errors in terminal tail lines.
  */
@@ -101,6 +167,14 @@ export function detectPromptInTail(
     for (const rule of categoryRules) {
       const reg = typeof rule.pattern === 'string' ? new RegExp(rule.pattern, 'i') : rule.pattern;
       if (reg.test(combinedTail) || reg.test(lastLine)) {
+        // A choice menu that has already scrolled up must not hide a later turn.
+        // The persistent stopwatch under an open menu is not that later turn.
+        if (rule.id === 'hermes-needs-input-menu') {
+          const supersededMenu = statusAfterHermesMenu(effectiveTailLines);
+          if (supersededMenu) {
+            return supersededMenu;
+          }
+        }
         // Find best representative prompt line
         let promptLine = lastLine.trim();
         for (let i = effectiveTailLines.length - 1; i >= 0; i--) {
