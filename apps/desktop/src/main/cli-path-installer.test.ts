@@ -152,6 +152,22 @@ describe('CLI PATH installer', () => {
     expect(await readFile(launcherPath, 'utf8')).toBe('existing launcher');
   });
 
+  it('replaces a launcher symlink without writing to its target', async () => {
+    tempHome = await mkdtemp(join(tmpdir(), 'spawnea-home-'));
+    const launcherPath = getAppImageLauncherPath(tempHome);
+    const otherTarget = join(tempHome, 'other-tool');
+    const appImage = join(tempHome, 'Spawnea.AppImage');
+    await mkdir(join(tempHome, '.local', 'share', 'spawnea'), { recursive: true });
+    await writeFile(otherTarget, 'keep this file', { mode: 0o755 });
+    await writeFile(appImage, '#!/bin/sh\n', { mode: 0o755 });
+    await symlink(otherTarget, launcherPath);
+
+    const status = await installCliInPath({ homeDirectory: tempHome, appImagePath: appImage });
+    expect(status.isValid).toBe(true);
+    expect(await readFile(otherTarget, 'utf8')).toBe('keep this file');
+    expect((await readFile(launcherPath, 'utf8'))).toContain('APPIMAGE_BIN=');
+  });
+
   it('cleanly returns unsupported on Windows platform', async () => {
     tempHome = await mkdtemp(join(tmpdir(), 'spawnea-home-'));
     const dummyExe = join(tempHome, 'test-bin-spawnea');

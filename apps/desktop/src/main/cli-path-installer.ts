@@ -286,8 +286,15 @@ export async function installCliInPath(options: CliPathInstallerOptions = {}): P
       'exec "$APPIMAGE_BIN" --no-sandbox --spawnea-cli "$@"',
       '',
     ].join('\n');
-    await writeFile(launcherPath, launcherScript, { mode: 0o755 });
-    await chmod(launcherPath, 0o755);
+    const tempLauncherPath = join(dirname(launcherPath), `.spawnea-launcher-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    try {
+      await writeFile(tempLauncherPath, launcherScript, { mode: 0o755, flag: 'wx' });
+      await chmod(tempLauncherPath, 0o755);
+      await rename(tempLauncherPath, launcherPath);
+    } catch (error) {
+      await unlink(tempLauncherPath).catch(() => {});
+      throw error;
+    }
   }
 
   const targetPath = resolveSpawneaCliExecutable(options);
