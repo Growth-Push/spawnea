@@ -174,7 +174,11 @@ export function AgentSetupModal({
 
   const handleCopyPrompt = async () => {
     try {
-      await navigator.clipboard.writeText(skillPromptText);
+      if (window.spawneaApi?.writeClipboardText) {
+        await window.spawneaApi.writeClipboardText(skillPromptText);
+      } else {
+        await navigator.clipboard.writeText(skillPromptText);
+      }
       setCopyPromptStatus('copied');
       setTimeout(() => setCopyPromptStatus('idle'), 2000);
     } catch {
@@ -185,7 +189,11 @@ export function AgentSetupModal({
 
   const handleCopyCompletion = async () => {
     try {
-      await navigator.clipboard.writeText(completionSnippet);
+      if (window.spawneaApi?.writeClipboardText) {
+        await window.spawneaApi.writeClipboardText(completionSnippet);
+      } else {
+        await navigator.clipboard.writeText(completionSnippet);
+      }
       setCopyCompletionStatus('copied');
       setTimeout(() => setCopyCompletionStatus('idle'), 2000);
     } catch {
@@ -292,6 +300,8 @@ export function AgentSetupModal({
                     <Check className="w-4 h-4 text-emerald-300" />
                     <span>Copied!</span>
                   </>
+                ) : copyPromptStatus === 'failed' ? (
+                  <span>Copy failed. Try again.</span>
                 ) : (
                   <>
                     <Copy className="w-4 h-4" />
@@ -342,7 +352,7 @@ export function AgentSetupModal({
                     )}
                   </div>
                 )}
-                {cliPathStatus?.installed && cliPathStatus?.isInPath === false && (
+                {cliPathStatus?.isInPath === false && (
                   <div
                     data-testid="cli-not-in-path-warning"
                     className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex flex-col gap-1 mb-3"
@@ -448,6 +458,8 @@ export function AgentSetupModal({
                     <Check className="w-3.5 h-3.5 text-emerald-400" />
                     <span>Copied {activeShellTab.toUpperCase()} Snippet!</span>
                   </>
+                ) : copyCompletionStatus === 'failed' ? (
+                  <span>Copy failed. Try again.</span>
                 ) : (
                   <>
                     <Copy className="w-3.5 h-3.5" />

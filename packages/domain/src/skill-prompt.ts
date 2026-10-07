@@ -27,6 +27,9 @@ export interface AgentSkillPromptCatalogContext {
  */
 export function getAgentSkillPrompt(catalog?: AgentSkillPromptCatalogContext): string {
   const profile = catalog?.profile;
+  if (profile !== undefined && (profile.length > 32 || !/^[a-zA-Z0-9](?:[a-zA-Z0-9_-]*[a-zA-Z0-9])?$/u.test(profile))) {
+    throw new Error('Invalid profile name');
+  }
   const profileFlag = profile ? ` --profile ${profile}` : '';
   const profileRule = profile
     ? `\n- **Active profile context**: This Spawnea instance is operating under profile \`${profile}\`. When running outside a Spawnea-managed session terminal (where \`$SPAWNEA_PROFILE\` is automatically set), include \`--profile ${profile}\` on CLI commands or set \`export SPAWNEA_PROFILE="${profile}"\`.`

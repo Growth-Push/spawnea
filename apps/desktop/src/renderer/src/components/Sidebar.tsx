@@ -605,7 +605,7 @@ export function Sidebar({
   };
 
   const shouldShowStatusBadge = (s: Session): boolean => {
-    const ag = agentsById.get(s.agentId) || getAgent(s.agentId);
+    const ag = agentsById.get(s.agentId);
     return checkShouldShowStatusBadge(s, ag);
   };
 
@@ -778,7 +778,7 @@ export function Sidebar({
             {child.childAlias || 'child'}
           </span>
           {(() => {
-            const childAgent = agentsById.get(child.agentId) || getAgent(child.agentId);
+            const childAgent = agentsById.get(child.agentId);
             return (
               <AgentIcon
                 harness={childAgent?.harness}
@@ -1229,7 +1229,7 @@ export function Sidebar({
                   {child.childAlias || 'child'}
                 </span>
                 {(() => {
-                  const childAgent = agentsById.get(child.agentId) || getAgent(child.agentId);
+                  const childAgent = agentsById.get(child.agentId);
                   return (
                     <AgentIcon
                       harness={childAgent?.harness}
@@ -1532,7 +1532,7 @@ export function Sidebar({
                         {child.childAlias || 'child'}
                       </span>
                       {(() => {
-                        const childAgent = agentsById.get(child.agentId) || getAgent(child.agentId);
+                        const childAgent = agentsById.get(child.agentId);
                         return (
                           <AgentIcon
                             harness={childAgent?.harness}

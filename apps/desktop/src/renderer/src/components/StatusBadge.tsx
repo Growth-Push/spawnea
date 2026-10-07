@@ -200,7 +200,7 @@ export function isPureShellSession(
 
   const harnessLower = agent.harness?.toLowerCase() ?? '';
   const commandLower = agent.command
-    ? (agent.command.split('/').pop()?.toLowerCase() ?? '')
+    ? (agent.command.trim().split(/\s+/u)[0]?.split('/').pop()?.toLowerCase() ?? '')
     : '';
 
   return (

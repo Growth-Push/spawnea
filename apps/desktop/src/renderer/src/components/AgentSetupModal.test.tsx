@@ -126,6 +126,32 @@ describe('AgentSetupModal', () => {
     });
   });
 
+  it('uses the desktop clipboard bridge and shows a copy failure', async () => {
+    const writeClipboardText = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Unavailable'));
+    (window as any).spawneaApi.writeClipboardText = writeClipboardText;
+    render(<AgentSetupModal isOpen={true} catalog={mockCatalog} onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getByTestId('copy-prompt-instruction-button'));
+    await waitFor(() => expect(writeClipboardText).toHaveBeenCalledWith(expect.stringContaining('Spawnea Agent Orchestration')));
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('copy-completion-command-button'));
+    await waitFor(() => expect(screen.getByTestId('copy-completion-command-button').textContent).toContain('Copy failed'));
+    expect(writeClipboardText).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows the PATH notice before installing when the bin directory is absent from PATH', async () => {
+    (window as any).spawneaApi.getCliPathStatus = vi.fn().mockResolvedValue({
+      installed: false,
+      targetPath: '/path/to/resources/spawnea',
+      symlinkPath: '/workspace/mock-user/.local/bin/spawnea',
+      isValid: false,
+      isInPath: false,
+    });
+    render(<AgentSetupModal isOpen={true} catalog={mockCatalog} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('cli-not-in-path-warning')).toBeDefined());
+  });
+
   it('installs CLI to user PATH when clicking install button', async () => {
     render(
       <AgentSetupModal

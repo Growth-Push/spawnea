@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { ContextBar } from './ContextBar';
+import { isPureShellSession } from './StatusBadge';
 import type { Session, Server, Project, Agent } from '@spawnea/domain';
 
 describe('ContextBar session hierarchy actions', () => {
@@ -105,6 +106,13 @@ describe('ContextBar session hierarchy actions', () => {
     );
 
     expect(screen.getByTestId('status-badge-working')).toBeDefined();
+  });
+
+  it('recognizes a shell executable when its command includes arguments', () => {
+    expect(isPureShellSession(
+      { agentId: 'agent-custom' },
+      { id: 'agent-custom', harness: 'custom', name: 'Local task', command: '/bin/bash -l' }
+    )).toBe(true);
   });
 
   it('suppresses status badge for pure shell sessions when sitting at prompt (idle/done)', () => {

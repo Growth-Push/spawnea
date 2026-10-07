@@ -528,6 +528,7 @@ _spawnea_completions() {
   fi
 
   local commands="list status catalog session child prompt skill completion"
+  local global_options="--profile --runtime-file"
 
   case $cword in
     1)
@@ -539,78 +540,78 @@ _spawnea_completions() {
   case "\${words[1]}" in
     session)
       if [[ $cword -eq 2 ]]; then
-        COMPREPLY=($(compgen -W "create close" -- "$cur"))
+        COMPREPLY=($(compgen -W "$global_options create close" -- "$cur"))
         return
       fi
       if [[ "\${words[2]}" == "create" ]]; then
-        COMPREPLY=($(compgen -W "--project --task --agent --server --branch --no-worktree --request-id --timeout --json" -- "$cur"))
+        COMPREPLY=($(compgen -W "$global_options --project --task --agent --server --branch --no-worktree --request-id --timeout --json" -- "$cur"))
         return
       elif [[ "\${words[2]}" == "close" ]]; then
-        COMPREPLY=($(compgen -W "--force --json" -- "$cur"))
+        COMPREPLY=($(compgen -W "$global_options --force --json" -- "$cur"))
         return
       fi
       ;;
     child)
       if [[ $cword -eq 2 ]]; then
-        COMPREPLY=($(compgen -W "create" -- "$cur"))
+        COMPREPLY=($(compgen -W "$global_options create" -- "$cur"))
         return
       fi
       if [[ "\${words[2]}" == "create" ]]; then
-        COMPREPLY=($(compgen -W "--parent --task --agent --workspace --name --request-id --timeout --json" -- "$cur"))
+        COMPREPLY=($(compgen -W "$global_options --parent --task --agent --workspace --name --request-id --timeout --json" -- "$cur"))
         return
       fi
       ;;
     prompt)
       if [[ $cword -eq 2 ]]; then
-        COMPREPLY=($(compgen -W "send wait send-and-wait" -- "$cur"))
+        COMPREPLY=($(compgen -W "$global_options send wait send-and-wait" -- "$cur"))
         return
       fi
       case "\${words[2]}" in
         send)
-          COMPREPLY=($(compgen -W "--session --json" -- "$cur"))
+          COMPREPLY=($(compgen -W "$global_options --session --json" -- "$cur"))
           return
           ;;
         wait)
-          COMPREPLY=($(compgen -W "--turn --timeout --json" -- "$cur"))
+          COMPREPLY=($(compgen -W "$global_options --turn --timeout --json" -- "$cur"))
           return
           ;;
         send-and-wait)
-          COMPREPLY=($(compgen -W "--session --timeout --json" -- "$cur"))
+          COMPREPLY=($(compgen -W "$global_options --session --timeout --json" -- "$cur"))
           return
           ;;
       esac
       ;;
     skill)
       if [[ $cword -eq 2 ]]; then
-        COMPREPLY=($(compgen -W "prompt" -- "$cur"))
+        COMPREPLY=($(compgen -W "$global_options prompt" -- "$cur"))
         return
       fi
       if [[ "\${words[2]}" == "prompt" ]]; then
-        COMPREPLY=($(compgen -W "--json" -- "$cur"))
+        COMPREPLY=($(compgen -W "$global_options --json" -- "$cur"))
         return
       fi
       ;;
     completion)
       if [[ $cword -eq 2 ]]; then
-        COMPREPLY=($(compgen -W "bash zsh" -- "$cur"))
+        COMPREPLY=($(compgen -W "$global_options bash zsh" -- "$cur"))
         return
       fi
       ;;
     catalog)
-      COMPREPLY=($(compgen -W "--json" -- "$cur"))
+      COMPREPLY=($(compgen -W "$global_options --json" -- "$cur"))
       return
       ;;
     list)
-      COMPREPLY=($(compgen -W "--json --profile" -- "$cur"))
+      COMPREPLY=($(compgen -W "$global_options --json" -- "$cur"))
       return
       ;;
     status)
-      COMPREPLY=($(compgen -W "--json" -- "$cur"))
+      COMPREPLY=($(compgen -W "$global_options --json" -- "$cur"))
       return
       ;;
   esac
 
-  COMPREPLY=($(compgen -W "--help --version --json" -- "$cur"))
+  COMPREPLY=($(compgen -W "$global_options --help --version --json" -- "$cur"))
 }
 
 complete -F _spawnea_completions spawnea`);
@@ -759,13 +760,13 @@ fi`);
 }
 
 export interface ShowSkillPromptOptions extends OutputOptions {
-  catalog?: CatalogData;
+  catalog?: CatalogData & { profile?: string };
   profile?: string;
 }
 
 export function showSkillPrompt(options: ShowSkillPromptOptions = {}): void {
   const catalogContext = options.catalog
-    ? { ...options.catalog, profile: options.profile ?? (options.catalog as any).profile }
+    ? { ...options.catalog, profile: options.profile ?? options.catalog.profile }
     : (options.profile ? { profile: options.profile } : undefined);
   const prompt = getAgentSkillPrompt(catalogContext);
   if (options.json) {

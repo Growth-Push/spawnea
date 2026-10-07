@@ -105,7 +105,8 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
           signals.paneCurrentCommand === 'bash' ||
           signals.paneCurrentCommand === 'zsh' ||
           signals.paneCurrentCommand === 'sh' ||
-          signals.paneCurrentCommand === 'fish';
+          signals.paneCurrentCommand === 'fish' ||
+          signals.paneCurrentCommand === 'tmux';
         return {
           status: 'idle',
           confidence: promptResult.confidence ?? 0.9,

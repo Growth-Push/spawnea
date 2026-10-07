@@ -147,5 +147,9 @@ describe('Domain Schemas', () => {
       expect(prompt).toContain('### Active Profile\n- `custom-profile`');
       expect(prompt).toContain('- `local:spawnea` (Spawnea) [host: local] - /code/spawnea');
     });
+
+    it('rejects profile names that would turn copied commands into shell syntax', () => {
+      expect(() => getAgentSkillPrompt({ profile: 'bad$(echo hi)' })).toThrow('Invalid profile name');
+    });
   });
 });

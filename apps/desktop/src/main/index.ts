@@ -481,6 +481,7 @@ function registerIpcHandlers(
     return getCliPathStatus({
       appPath: app.getAppPath(),
       resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
       appImagePath: process.env.APPIMAGE,
       pathEnv: getOriginalProcessPath() ?? process.env.ORIGINAL_PATH,
     });
@@ -492,6 +493,7 @@ function registerIpcHandlers(
     return installCliInPath({
       appPath: app.getAppPath(),
       resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
       appImagePath: process.env.APPIMAGE,
       pathEnv: getOriginalProcessPath() ?? process.env.ORIGINAL_PATH,
     });

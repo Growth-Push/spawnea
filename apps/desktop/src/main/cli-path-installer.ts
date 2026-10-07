@@ -19,6 +19,7 @@ export interface CliPathInstallerOptions {
   appPath?: string;
   resourcesPath?: string;
   appImagePath?: string;
+  isPackaged?: boolean;
   platform?: NodeJS.Platform;
   pathEnv?: string;
 }
@@ -50,6 +51,10 @@ export function resolveSpawneaCliExecutable(options: CliPathInstallerOptions = {
   if (resourcesPath && !resourcesPath.includes('/.mount_')) {
     const candidate = join(resourcesPath, 'spawnea');
     if (existsSync(candidate)) return candidate;
+  }
+
+  if (options.isPackaged) {
+    return join(resourcesPath ?? options.appPath ?? '.', 'spawnea');
   }
 
   // 3. Development: root bin/spawnea.mjs or compiled entry layout (e.g. apps/desktop/out/main)
@@ -173,7 +178,8 @@ export async function getCliPathStatus(options: CliPathInstallerOptions = {}): P
 
       if (appImage) {
         const content = await readFile(resolvedTarget, 'utf8');
-        if (!content.includes(appImage)) {
+        const assignment = `APPIMAGE_BIN='${appImage.replace(/'/g, "'\\''")}'`;
+        if (!content.split(/\r?\n/u).includes(assignment)) {
           return {
             installed: true,
             targetPath,

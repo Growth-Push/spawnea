@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,8 +12,19 @@ import {
 
 describe('CLI PATH installer', () => {
   let tempHome: string | undefined;
+  const originalAppImage = process.env.APPIMAGE;
+  const originalPath = process.env.ORIGINAL_PATH;
+
+  beforeEach(() => {
+    delete process.env.APPIMAGE;
+    delete process.env.ORIGINAL_PATH;
+  });
 
   afterEach(async () => {
+    if (originalAppImage === undefined) delete process.env.APPIMAGE;
+    else process.env.APPIMAGE = originalAppImage;
+    if (originalPath === undefined) delete process.env.ORIGINAL_PATH;
+    else process.env.ORIGINAL_PATH = originalPath;
     if (tempHome) {
       await rm(tempHome, { recursive: true, force: true });
       tempHome = undefined;
@@ -219,6 +230,35 @@ describe('CLI PATH installer', () => {
     expect(reopenStatus.installed).toBe(true);
     expect(reopenStatus.isValid).toBe(true);
     expect(reopenStatus.targetPath).toBe(expectedLauncherPath);
+  });
+
+  it('validates the exact AppImage launcher assignment, including quoted paths', async () => {
+    tempHome = await mkdtemp(join(tmpdir(), 'spawnea-home-'));
+    const appImage = join(tempHome, "Spawnea's.AppImage");
+    await writeFile(appImage, '#!/bin/sh\n', { mode: 0o755 });
+
+    const installed = await installCliInPath({ homeDirectory: tempHome, appImagePath: appImage });
+    expect(installed.isValid).toBe(true);
+
+    await writeFile(getAppImageLauncherPath(tempHome), `#!/bin/sh\nAPPIMAGE_BIN='${appImage}.old'\n`, { mode: 0o755 });
+    const stale = await getCliPathStatus({ homeDirectory: tempHome, appImagePath: appImage });
+    expect(stale.isValid).toBe(false);
+    expect(stale.error).toContain('outdated binary');
+  });
+
+  it('does not resolve a development CLI from parent directories in packaged builds', async () => {
+    tempHome = await mkdtemp(join(tmpdir(), 'spawnea-repo-'));
+    const appPath = join(tempHome, 'apps', 'desktop', 'out', 'main');
+    const resourcesPath = join(tempHome, 'resources');
+    await mkdir(appPath, { recursive: true });
+    await mkdir(resourcesPath);
+    await mkdir(join(tempHome, 'bin'));
+    await writeFile(join(tempHome, 'bin', 'spawnea.mjs'), '#!/bin/sh\n', { mode: 0o755 });
+
+    expect(resolveSpawneaCliExecutable({ appPath, resourcesPath, isPackaged: true }))
+      .toBe(join(resourcesPath, 'spawnea'));
+    await expect(installCliInPath({ homeDirectory: tempHome, appPath, resourcesPath, isPackaged: true }))
+      .rejects.toThrow('CLI executable not found');
   });
 
   it('resolves the CLI from direct compiled-entry launches (apps/desktop/out/main)', async () => {

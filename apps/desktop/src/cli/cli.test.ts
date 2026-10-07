@@ -693,6 +693,10 @@ describe('Spawnea Control CLI', () => {
       // Test completion bash & zsh
       await runCli(['completion', 'bash']);
       expect(log).toHaveBeenCalledWith(expect.stringContaining('_spawnea_completions'));
+      const bashCompletion = String(vi.mocked(log).mock.calls.at(-1)?.[0] ?? '');
+      expect(bashCompletion).toContain('local global_options="--profile --runtime-file"');
+      expect(bashCompletion.split('\n').filter((line) => line.includes('compgen -W "') && !line.includes('"$commands"'))
+        .every((line) => line.includes('$global_options'))).toBe(true);
       await runCli(['completion', 'zsh']);
       expect(log).toHaveBeenCalledWith(expect.stringContaining('#compdef spawnea'));
       expect(log).toHaveBeenCalledWith(expect.stringContaining('if type compdef >/dev/null 2>&1; then'));
