@@ -1,5 +1,5 @@
 import React from 'react';
-import type { SessionStatus } from '@spawnea/domain';
+import { SHELL_COMMANDS, type SessionStatus } from '@spawnea/domain';
 import {
   Radio,
   AlertCircle,
@@ -167,32 +167,17 @@ export function StatusBadge({
   );
 }
 
-const SHELL_COMMANDS = new Set([
-  'sh',
-  'bash',
-  'zsh',
-  'fish',
-  'dash',
-  'csh',
-  'tcsh',
-  'nu',
-  'nushell',
-  'xonsh',
-  'shell',
-  'terminal',
-]);
-
 export function isPureShellSession(
   session: { agentId?: string; status?: SessionStatus },
   agent?: { harness?: string; name?: string; command?: string; id?: string } | null
 ): boolean {
   const agentId = session.agentId || agent?.id;
-  const isTerminalId =
-    !agentId ||
+  const isTerminalId = Boolean(
     agentId === 'agent-terminal' ||
     agentId === 'shell' ||
-    agentId.endsWith(':shell') ||
-    agentId.endsWith(':terminal');
+    agentId?.endsWith(':shell') ||
+    agentId?.endsWith(':terminal')
+  );
 
   if (!agent) {
     return isTerminalId;

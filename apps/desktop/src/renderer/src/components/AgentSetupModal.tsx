@@ -142,6 +142,22 @@ export function AgentSetupModal({
         e.preventDefault();
         e.stopPropagation();
         onCloseRef.current();
+        return;
+      }
+      if (e.key === 'Tab' && modalRef.current) {
+        const elements = modalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (elements.length === 0) return;
+        const first = elements[0];
+        const last = elements[elements.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
 

@@ -115,6 +115,12 @@ describe('ContextBar session hierarchy actions', () => {
     )).toBe(true);
   });
 
+  it('does not assume an unidentified session is a shell', () => {
+    expect(isPureShellSession({ status: 'idle' })).toBe(false);
+    expect(isPureShellSession({ status: 'idle' }, { command: 'codex' })).toBe(false);
+    expect(isPureShellSession({ status: 'idle' }, { command: 'dash' })).toBe(true);
+  });
+
   it('suppresses status badge for pure shell sessions when sitting at prompt (idle/done)', () => {
     const shellAgent: Agent = {
       id: 'agent-shell',

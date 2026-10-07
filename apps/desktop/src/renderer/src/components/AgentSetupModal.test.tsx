@@ -87,6 +87,19 @@ describe('AgentSetupModal', () => {
     }
   });
 
+  it('keeps keyboard focus inside the open dialog', () => {
+    render(<AgentSetupModal isOpen catalog={mockCatalog} onClose={vi.fn()} />);
+    const dialog = screen.getByRole('dialog');
+    const buttons = dialog.querySelectorAll<HTMLButtonElement>('button:not([disabled])');
+    const first = buttons[0];
+    const last = buttons[buttons.length - 1];
+    last.focus();
+    fireEvent.keyDown(window, { key: 'Tab' });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
   it('renders modal with instruction card, catalog summary, and PATH install section', async () => {
     render(
       <AgentSetupModal

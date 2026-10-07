@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -71,7 +71,7 @@ describe('CLI PATH installer', () => {
     const dummyExe2 = join(tempHome, 'new', 'bin', 'spawnea.mjs');
     await mkdir(join(tempHome, 'old', 'bin'), { recursive: true });
     await mkdir(join(tempHome, 'new', 'bin'), { recursive: true });
-    await writeFile(dummyExe1, '#!/bin/sh\n', { mode: 0o755 });
+    await writeFile(dummyExe1, '#!/usr/bin/env node\n// spawnea-cli.js\n', { mode: 0o755 });
     await writeFile(dummyExe2, '#!/bin/sh\n', { mode: 0o755 });
 
     await installCliInPath({ homeDirectory: tempHome, customExecutablePath: dummyExe1 });
@@ -118,6 +118,38 @@ describe('CLI PATH installer', () => {
       .rejects.toThrow(/Cannot overwrite existing symlink to another target/);
     const status = await getCliPathStatus({ homeDirectory: tempHome, customExecutablePath: otherExecutable });
     expect(status.isValid).toBe(true);
+  });
+
+  it('rejects an unrelated executable with a Spawnea-shaped path', async () => {
+    tempHome = await mkdtemp(join(tmpdir(), 'spawnea-home-'));
+    const binDir = join(tempHome, '.local/bin');
+    const oldTarget = join(tempHome, 'other', 'bin', 'spawnea.mjs');
+    const newTarget = join(tempHome, 'new-spawnea');
+    await mkdir(binDir, { recursive: true });
+    await mkdir(join(tempHome, 'other', 'bin'), { recursive: true });
+    await writeFile(oldTarget, '#!/bin/sh\necho unrelated\n', { mode: 0o755 });
+    await writeFile(newTarget, '#!/bin/sh\n', { mode: 0o755 });
+    await symlink(oldTarget, join(binDir, 'spawnea'));
+    await expect(installCliInPath({ homeDirectory: tempHome, customExecutablePath: newTarget }))
+      .rejects.toThrow(/Cannot overwrite existing symlink to another target/);
+  });
+
+  it('leaves the AppImage launcher untouched when the CLI symlink is not owned', async () => {
+    tempHome = await mkdtemp(join(tmpdir(), 'spawnea-home-'));
+    const binDir = join(tempHome, '.local/bin');
+    const launcherPath = getAppImageLauncherPath(tempHome);
+    const appImage = join(tempHome, 'Spawnea.AppImage');
+    const otherTarget = join(tempHome, 'other-tool');
+    await mkdir(binDir, { recursive: true });
+    await mkdir(join(tempHome, '.local', 'share', 'spawnea'), { recursive: true });
+    await writeFile(launcherPath, 'existing launcher', { mode: 0o755 });
+    await writeFile(appImage, '#!/bin/sh\n', { mode: 0o755 });
+    await writeFile(otherTarget, '#!/bin/sh\n', { mode: 0o755 });
+    await symlink(otherTarget, join(binDir, 'spawnea'));
+
+    await expect(installCliInPath({ homeDirectory: tempHome, appImagePath: appImage }))
+      .rejects.toThrow(/Cannot overwrite existing symlink to another target/);
+    expect(await readFile(launcherPath, 'utf8')).toBe('existing launcher');
   });
 
   it('cleanly returns unsupported on Windows platform', async () => {

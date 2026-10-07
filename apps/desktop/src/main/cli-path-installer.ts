@@ -107,6 +107,30 @@ export function isDirectoryInPath(dir: string, pathEnv?: string, platform?: Node
   });
 }
 
+async function assertOwnedCliSymlink(symlinkPath: string, targetPath: string, homeDirectory?: string): Promise<void> {
+  try {
+    const existingStat = await lstat(symlinkPath);
+    if (!existingStat.isSymbolicLink()) {
+      throw new Error(`Cannot overwrite existing non-symlink file at: ${symlinkPath}`);
+    }
+    const existingTarget = resolve(dirname(symlinkPath), await readlink(symlinkPath));
+    if (existingTarget === targetPath || existingTarget === getAppImageLauncherPath(homeDirectory)) return;
+
+    const knownPath = existingTarget.endsWith('/bin/spawnea.mjs') ||
+      existingTarget.endsWith('/resources/spawnea') ||
+      existingTarget.endsWith('/build/spawnea');
+    const candidateStat = knownPath ? await stat(existingTarget).catch(() => null) : null;
+    const contents = candidateStat?.isFile() && candidateStat.size <= 100_000
+      ? await readFile(existingTarget, 'utf8').catch(() => '')
+      : '';
+    if (!contents.includes('spawnea-cli.js') && !contents.includes('--spawnea-cli')) {
+      throw new Error(`Cannot overwrite existing symlink to another target at: ${symlinkPath}`);
+    }
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+}
+
 export async function getCliPathStatus(options: CliPathInstallerOptions = {}): Promise<CliPathStatus> {
   const currentPlatform = options.platform ?? (typeof process !== 'undefined' ? process.platform : 'linux');
   const binDir = getUserLocalBinDir(options.homeDirectory);
@@ -247,6 +271,7 @@ export async function installCliInPath(options: CliPathInstallerOptions = {}): P
     if (!existsSync(appImage)) {
       throw new Error(`Spawnea AppImage executable not found at: ${appImage}`);
     }
+    await assertOwnedCliSymlink(symlinkPath, getAppImageLauncherPath(options.homeDirectory), options.homeDirectory);
     const launcherPath = getAppImageLauncherPath(options.homeDirectory);
     await mkdir(dirname(launcherPath), { recursive: true, mode: 0o755 });
     const safeAppImage = appImage.replace(/'/g, "'\\''");
@@ -290,26 +315,7 @@ export async function installCliInPath(options: CliPathInstallerOptions = {}): P
 
   await mkdir(binDir, { recursive: true, mode: 0o755 });
 
-  // Preserve files and symlinks that were not installed by Spawnea.
-  try {
-    const existingStat = await lstat(symlinkPath);
-    if (!existingStat.isSymbolicLink()) {
-      throw new Error(`Cannot overwrite existing non-symlink file at: ${symlinkPath}`);
-    }
-    const existingTarget = resolve(dirname(symlinkPath), await readlink(symlinkPath));
-    const isSpawneaTarget = existingTarget === targetPath ||
-      existingTarget === getAppImageLauncherPath(options.homeDirectory) ||
-      (existingTarget.endsWith('/bin/spawnea.mjs')) ||
-      (existingTarget.endsWith('/resources/spawnea')) ||
-      (existingTarget.endsWith('/build/spawnea'));
-    if (!isSpawneaTarget) {
-      throw new Error(`Cannot overwrite existing symlink to another target at: ${symlinkPath}`);
-    }
-  } catch (error: any) {
-    if (error?.code !== 'ENOENT') {
-      throw error;
-    }
-  }
+  await assertOwnedCliSymlink(symlinkPath, targetPath, options.homeDirectory);
 
   // Atomic symlink creation via temporary symlink + rename
   const tempSymlinkPath = join(binDir, `.spawnea-symlink-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);

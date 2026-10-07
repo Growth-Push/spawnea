@@ -2,16 +2,16 @@ import type {
   SessionSignals,
   SessionStatusResult,
 } from '@spawnea/domain';
+import { SHELL_COMMANDS } from '@spawnea/domain';
 import type {
   HarnessStatusAdapter,
   HarnessStatusAdapterOptions,
 } from './types.js';
 import { detectPromptInTail } from '../prompt-detector.js';
 
-const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'tmux']);
-
 function isShellCommand(command: string | undefined): boolean {
-  return SHELL_COMMANDS.has(command?.toLowerCase() ?? '');
+  const normalized = command?.toLowerCase() ?? '';
+  return normalized === 'tmux' || SHELL_COMMANDS.has(normalized);
 }
 
 export class GenericStatusAdapter implements HarnessStatusAdapter {
