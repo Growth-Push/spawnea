@@ -498,7 +498,7 @@ export function WorkspaceTabs({
       shortcut: 'Alt+4',
     },
     { id: 'details', label: 'Session Info', icon: Info, shortcut: 'Alt+5' },
-    { id: 'agent-context', label: 'Agent Context', icon: Network, shortcut: 'Alt+6' },
+    { id: 'agent-context', label: 'Orchestration Log', icon: Network, shortcut: 'Alt+6' },
   ];
 
   if (!session) {

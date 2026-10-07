@@ -162,6 +162,14 @@ describe('Spawnea Control CLI', () => {
       expect(prompt).toContain('.agents/skills/spawnea-orchestration/SKILL.md');
     });
 
+    it('incorporates profile option into prompt commands and catalog', () => {
+      const prompt = getAgentSkillPrompt({ profile: 'test-profile' });
+      expect(prompt).toContain('spawnea list --profile test-profile');
+      expect(prompt).toContain('--profile test-profile');
+      expect(prompt).toContain('export SPAWNEA_PROFILE="test-profile"');
+      expect(prompt).toContain('### Active Profile\n- `test-profile`');
+    });
+
     it('outputs skill prompt to console', () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
       showSkillPrompt({ json: false });
@@ -624,9 +632,12 @@ describe('Spawnea Control CLI', () => {
     });
 
     it('runs CLI end-to-end with runCli', async () => {
-      const directory = await mkdtemp(join(tmpdir(), 'spawnea-cli-e2e-'));
-      directories.push(directory);
-      const runtimeFile = join(directory, 'control-runtime.json');
+      const savedSessionId = process.env.SPAWNEA_SESSION_ID;
+      delete process.env.SPAWNEA_SESSION_ID;
+      try {
+        const directory = await mkdtemp(join(tmpdir(), 'spawnea-cli-e2e-'));
+        directories.push(directory);
+        const runtimeFile = join(directory, 'control-runtime.json');
 
       const gateway = new ControlMcpGateway({
         control: {
@@ -671,6 +682,23 @@ describe('Spawnea Control CLI', () => {
       await runCli(['status', 'sess-e2e-1', '--runtime-file', runtimeFile]);
       expect(log).toHaveBeenCalledWith(expect.stringContaining('Session:      sess-e2e-1'));
 
+      // Test catalog
+      await runCli(['catalog', '--runtime-file', runtimeFile]);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('PROJECTS:'));
+
+      // Test catalog --json
+      await runCli(['catalog', '--json', '--runtime-file', runtimeFile]);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('"apiVersion": "v1"'));
+
+      // Test completion bash & zsh
+      await runCli(['completion', 'bash']);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('_spawnea_completions'));
+      await runCli(['completion', 'zsh']);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('#compdef spawnea'));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('if type compdef >/dev/null 2>&1; then'));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('compdef _spawnea spawnea'));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('case $words[1] in'));
+
       // Test invalid workspace rejection
       await expect(
         runCli(['child', 'create', '--parent', 'sess-e2e-1', '--task', 'Subtask', '--workspace', 'invalid-type', '--runtime-file', runtimeFile])
@@ -694,6 +722,13 @@ describe('Spawnea Control CLI', () => {
       } finally {
         if (origEnv !== undefined) {
           process.env.SPAWNEA_SESSION_ID = origEnv;
+        } else {
+          delete process.env.SPAWNEA_SESSION_ID;
+        }
+      }
+      } finally {
+        if (savedSessionId !== undefined) {
+          process.env.SPAWNEA_SESSION_ID = savedSessionId;
         } else {
           delete process.env.SPAWNEA_SESSION_ID;
         }

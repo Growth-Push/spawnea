@@ -135,7 +135,7 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
               <pre className="whitespace-pre-wrap break-all rounded bg-[#0d1117] p-3 text-[11px] text-zinc-300">{selected.error ?? JSON.stringify(selected.response, null, 2)}</pre>
             </div>
           </div>
-        ) : <div className="text-xs text-zinc-500">Select an MCP call to inspect its bounded details.</div>}
+        ) : <div className="text-xs text-zinc-500">Select an operation to inspect details.</div>}
       </section>
     </div>
   );

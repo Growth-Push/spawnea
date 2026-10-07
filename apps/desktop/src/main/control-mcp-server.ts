@@ -414,6 +414,40 @@ export function createCliSpawneaMcpServer(
   );
 
   server.registerTool(
+    'spawnea_catalog',
+    {
+      title: 'Get environment catalog',
+      description: 'Get configured projects, harnesses, and hosts in Spawnea.',
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    safeTool(async () => {
+      const state = await control.getState();
+      return {
+        apiVersion: state.apiVersion,
+        projects: (state.projects ?? []).map((p) => ({
+          id: p.id,
+          name: p.name,
+          hostId: p.hostId,
+          rootPath: p.rootPath,
+          baseBranch: p.baseBranch,
+        })),
+        harnesses: (state.availableHarnesses ?? state.harnesses ?? []).map((h) => ({
+          id: h.id,
+          name: h.name,
+          kind: h.kind,
+          command: h.command,
+        })),
+        hosts: (state.hosts ?? []).map((h) => ({
+          id: h.id,
+          name: h.name,
+          enabled: h.enabled,
+        })),
+      };
+    })
+  );
+
+  server.registerTool(
     'spawnea_status',
     {
       title: 'Get session status',

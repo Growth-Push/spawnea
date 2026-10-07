@@ -100,12 +100,20 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
       }
 
       if (promptResult.kind === 'idle_prompt' || promptResult.kind === 'shell_prompt') {
+        const isShellPrompt =
+          promptResult.kind === 'shell_prompt' ||
+          signals.paneCurrentCommand === 'bash' ||
+          signals.paneCurrentCommand === 'zsh' ||
+          signals.paneCurrentCommand === 'sh' ||
+          signals.paneCurrentCommand === 'fish';
         return {
           status: 'idle',
           confidence: promptResult.confidence ?? 0.9,
           source: 'terminal_prompt',
           detectedPrompt: promptResult.promptLine,
-          reason: `Agent prompt ready/idle: ${promptResult.promptLine}`,
+          reason: isShellPrompt
+            ? `Shell prompt ready: ${promptResult.promptLine}`
+            : `Agent prompt ready/idle: ${promptResult.promptLine}`,
           updatedAt: new Date(),
         };
       }

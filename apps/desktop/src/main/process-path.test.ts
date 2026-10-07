@@ -31,4 +31,14 @@ describe('desktop process PATH', () => {
 
     expect(normalizedPath?.split(delimiter).filter((entry) => entry === '/opt/homebrew/bin')).toHaveLength(1);
   });
+
+  it('captures the un-augmented original PATH in env.ORIGINAL_PATH', () => {
+    const initialPath = `/usr/bin${delimiter}/bin`;
+    const env: NodeJS.ProcessEnv = { PATH: initialPath };
+
+    initializeProcessPath(env, 'linux');
+
+    expect(env.ORIGINAL_PATH).toBe(initialPath);
+    expect(env.PATH).toContain('.local/bin');
+  });
 });

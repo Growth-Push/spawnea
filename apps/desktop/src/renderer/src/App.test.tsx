@@ -145,6 +145,19 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
   return {
     quitForReleaseSmoke: vi.fn().mockResolvedValue(true),
     writeClipboardText: vi.fn().mockResolvedValue(undefined),
+    getCliPathStatus: vi.fn().mockResolvedValue({
+      installed: false,
+      targetPath: '/mock/path/spawnea',
+      symlinkPath: '/workspace/mock-user/.local/bin/spawnea',
+      isValid: false,
+    }),
+    installCliInPath: vi.fn().mockResolvedValue({
+      installed: true,
+      targetPath: '/mock/path/spawnea',
+      symlinkPath: '/workspace/mock-user/.local/bin/spawnea',
+      isValid: true,
+    }),
+    getActiveProfile: vi.fn().mockResolvedValue(null),
     listSessions: vi.fn().mockResolvedValue(mockSessions),
     reconcileSessions: vi.fn().mockResolvedValue(mockSessions),
     listServers: vi.fn().mockResolvedValue(mockServers),

@@ -88,11 +88,39 @@ spawnea session close child-1
 spawnea session close child-1 --force
 ```
 
-### `spawnea skill prompt [--json]`
-Generates a self-contained markdown instruction prompt explaining Spawnea CLI commands and workflows. Can be copied and pasted directly to any AI agent.
+### `spawnea catalog [--json]`
+Inspects configured projects, available agent harnesses, and configured hosts in Spawnea. Allows terminal agents to discover project IDs, root directory paths, base branches, and available harnesses dynamically.
 
 ```bash
+# Human-readable summary tables:
+spawnea catalog
+
+# Raw JSON format:
+spawnea catalog --json
+```
+
+### `spawnea completion [bash|zsh]`
+Generates shell tab auto-completion scripts for Bash or Zsh. To enable tab completion in your interactive shell sessions, add the evaluation snippet to your shell configuration profile (`~/.bashrc` or `~/.zshrc`):
+
+```bash
+# Bash (add to ~/.bashrc):
+eval "$(spawnea completion bash)"
+
+# Zsh (add to ~/.zshrc):
+eval "$(spawnea completion zsh)"
+```
+
+### `spawnea skill prompt [--json]`
+Generates a self-contained, universal markdown instruction prompt explaining Spawnea CLI commands, child delegation workflows, and operating rules. In the Desktop App setup modal, the prompt is enriched with the live environment catalog (available projects, harnesses, and hosts); via the standalone CLI, it outputs the universal orchestration instructions offline without requiring an active daemon connection.
+
+Can be piped directly to an AI agent, saved as a reusable skill reference (e.g. at `.agents/skills/spawnea-orchestration/SKILL.md`), or inspected by terminal agents:
+
+```bash
+# Output markdown prompt to stdout:
 spawnea skill prompt
+
+# Machine-readable JSON output:
+spawnea skill prompt --json
 ```
 
 ## Global Options

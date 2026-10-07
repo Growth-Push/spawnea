@@ -8,6 +8,8 @@ import {
   waitTurn,
   sendAndWaitPrompt,
   closeSession,
+  showCatalog,
+  generateCompletion,
   showSkillPrompt,
 } from './commands.js';
 
@@ -20,6 +22,9 @@ USAGE:
 COMMANDS:
   list                          List active Spawnea sessions
   status <session-id>           Inspect session details and worktree status
+  catalog                       Inspect configured projects, harnesses, and hosts
+
+  completion [bash|zsh]         Generate shell auto-completion script
 
   session create                Create a new root session
     --project <id>              Project identifier (required)
@@ -160,9 +165,19 @@ export async function runCli(argv: string[]): Promise<void> {
   const profile = typeof parsed.flags.profile === 'string' ? parsed.flags.profile : undefined;
   const runtimeFile = typeof parsed.flags['runtime-file'] === 'string' ? parsed.flags['runtime-file'] : undefined;
 
+  // Handle offline shell completion command without requiring active app
+  if (parsed.command === 'completion') {
+    const shell = parsed.subcommand || parsed.positional[0] || 'bash';
+    if (shell !== 'bash' && shell !== 'zsh') {
+      throw new Error(`Unsupported shell: '${shell}'. Supported shells: bash, zsh.`);
+    }
+    generateCompletion(shell);
+    return;
+  }
+
   // Handle offline skill command without requiring active app
   if (parsed.command === 'skill' && (parsed.subcommand === 'prompt' || !parsed.subcommand)) {
-    showSkillPrompt({ json: isJson });
+    showSkillPrompt({ json: isJson, profile });
     return;
   }
 
@@ -175,6 +190,11 @@ export async function runCli(argv: string[]): Promise<void> {
     });
 
     switch (parsed.command) {
+      case 'catalog': {
+        await showCatalog(client, { json: isJson });
+        break;
+      }
+
       case 'list': {
         await listSessions(client, { json: isJson });
         break;

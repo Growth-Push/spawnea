@@ -286,6 +286,7 @@ describe('StateDetector', () => {
     const res = detector.detectStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
+    expect(res.reason).toContain('Shell prompt ready');
   });
 
   it('reports idle for background sessions (isPtyAttached: false) with live tmux session and healthy process', () => {
