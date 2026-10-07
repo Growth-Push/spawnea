@@ -59,6 +59,34 @@ describe('AgentSetupModal', () => {
     };
   });
 
+  it('opens, closes, and reopens without changing hook order', async () => {
+    const onClose = vi.fn();
+    const modal = (isOpen: boolean) => (
+      <AgentSetupModal
+        isOpen={isOpen}
+        catalog={mockCatalog}
+        profile="test-profile"
+        onClose={onClose}
+      />
+    );
+    const { rerender } = render(modal(false));
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      rerender(modal(true));
+      expect(screen.getByRole('dialog')).toBeDefined();
+      expect(screen.getByTestId('shell-completion-snippet').textContent)
+        .toContain('export SPAWNEA_PROFILE="test-profile"');
+      await waitFor(() => {
+        expect(window.spawneaApi.getCliPathStatus).toHaveBeenCalledTimes(cycle + 1);
+      });
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(cycle + 1);
+      rerender(modal(false));
+      expect(screen.queryByRole('dialog')).toBeNull();
+    }
+  });
+
   it('renders modal with instruction card, catalog summary, and PATH install section', async () => {
     render(
       <AgentSetupModal

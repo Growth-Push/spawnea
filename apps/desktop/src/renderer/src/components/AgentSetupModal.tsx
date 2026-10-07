@@ -163,6 +163,13 @@ export function AgentSetupModal({
     };
   }, [isOpen]);
 
+  const completionSnippet = useMemo(() => {
+    const profileExport = activeProfile ? `export SPAWNEA_PROFILE="${activeProfile}"\n` : '';
+    return activeShellTab === 'zsh'
+      ? `${profileExport}eval "$(spawnea completion zsh)"`
+      : `${profileExport}eval "$(spawnea completion bash)"`;
+  }, [activeShellTab, activeProfile]);
+
   if (!isOpen) return null;
 
   const handleCopyPrompt = async () => {
@@ -175,13 +182,6 @@ export function AgentSetupModal({
       setTimeout(() => setCopyPromptStatus('idle'), 2000);
     }
   };
-
-  const completionSnippet = useMemo(() => {
-    const profileExport = activeProfile ? `export SPAWNEA_PROFILE="${activeProfile}"\n` : '';
-    return activeShellTab === 'zsh'
-      ? `${profileExport}eval "$(spawnea completion zsh)"`
-      : `${profileExport}eval "$(spawnea completion bash)"`;
-  }, [activeShellTab, activeProfile]);
 
   const handleCopyCompletion = async () => {
     try {
