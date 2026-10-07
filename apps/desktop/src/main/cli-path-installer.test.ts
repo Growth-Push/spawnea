@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -67,8 +67,10 @@ describe('CLI PATH installer', () => {
 
   it('overwrites previous symlink when target updates', async () => {
     tempHome = await mkdtemp(join(tmpdir(), 'spawnea-home-'));
-    const dummyExe1 = join(tempHome, 'test-bin-1');
-    const dummyExe2 = join(tempHome, 'test-bin-2');
+    const dummyExe1 = join(tempHome, 'old', 'bin', 'spawnea.mjs');
+    const dummyExe2 = join(tempHome, 'new', 'bin', 'spawnea.mjs');
+    await mkdir(join(tempHome, 'old', 'bin'), { recursive: true });
+    await mkdir(join(tempHome, 'new', 'bin'), { recursive: true });
     await writeFile(dummyExe1, '#!/bin/sh\n', { mode: 0o755 });
     await writeFile(dummyExe2, '#!/bin/sh\n', { mode: 0o755 });
 
@@ -102,6 +104,22 @@ describe('CLI PATH installer', () => {
     ).rejects.toThrow(/Cannot overwrite existing non-symlink file/);
   });
 
+  it('preserves a symlink to another executable', async () => {
+    tempHome = await mkdtemp(join(tmpdir(), 'spawnea-home-'));
+    const binDir = join(tempHome, '.local/bin');
+    await mkdir(binDir, { recursive: true });
+    const otherExecutable = join(tempHome, 'other-tool');
+    const spawneaExecutable = join(tempHome, 'spawnea-executable');
+    await writeFile(otherExecutable, '#!/bin/sh\n', { mode: 0o755 });
+    await writeFile(spawneaExecutable, '#!/bin/sh\n', { mode: 0o755 });
+    await symlink(otherExecutable, join(binDir, 'spawnea'));
+
+    await expect(installCliInPath({ homeDirectory: tempHome, customExecutablePath: spawneaExecutable }))
+      .rejects.toThrow(/Cannot overwrite existing symlink to another target/);
+    const status = await getCliPathStatus({ homeDirectory: tempHome, customExecutablePath: otherExecutable });
+    expect(status.isValid).toBe(true);
+  });
+
   it('cleanly returns unsupported on Windows platform', async () => {
     tempHome = await mkdtemp(join(tmpdir(), 'spawnea-home-'));
     const dummyExe = join(tempHome, 'test-bin-spawnea');
@@ -115,6 +133,7 @@ describe('CLI PATH installer', () => {
     expect(status.installed).toBe(false);
     expect(status.isValid).toBe(false);
     expect(status.error).toContain('Windows');
+    expect(status.pathInstruction).toBeUndefined();
 
     await expect(
       installCliInPath({

@@ -8,6 +8,12 @@ import type {
 } from './types.js';
 import { detectPromptInTail } from '../prompt-detector.js';
 
+const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'tmux']);
+
+function isShellCommand(command: string | undefined): boolean {
+  return SHELL_COMMANDS.has(command?.toLowerCase() ?? '');
+}
+
 export class GenericStatusAdapter implements HarnessStatusAdapter {
   readonly harnessId = 'generic';
   readonly displayName = 'Generic / Shell Adapter';
@@ -102,11 +108,7 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
       if (promptResult.kind === 'idle_prompt' || promptResult.kind === 'shell_prompt') {
         const isShellPrompt =
           promptResult.kind === 'shell_prompt' ||
-          signals.paneCurrentCommand === 'bash' ||
-          signals.paneCurrentCommand === 'zsh' ||
-          signals.paneCurrentCommand === 'sh' ||
-          signals.paneCurrentCommand === 'fish' ||
-          signals.paneCurrentCommand === 'tmux';
+          isShellCommand(signals.paneCurrentCommand);
         return {
           status: 'idle',
           confidence: promptResult.confidence ?? 0.9,
@@ -148,7 +150,7 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
 
     // 7. Foreground command / process liveness
     const cmd = (signals.paneCurrentCommand || '').toLowerCase();
-    const isShell = cmd === 'bash' || cmd === 'zsh' || cmd === 'sh' || cmd === 'fish' || cmd === 'tmux';
+    const isShell = isShellCommand(signals.paneCurrentCommand);
 
     if (isShell) {
       return {

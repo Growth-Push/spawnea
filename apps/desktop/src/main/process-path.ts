@@ -9,7 +9,7 @@ const UNIX_EXECUTABLE_PATHS = [
   `${homedir()}/bin`,
 ];
 
-let originalProcessPath: string | undefined = typeof process !== 'undefined' ? process.env.ORIGINAL_PATH ?? process.env.PATH : undefined;
+let originalProcessPath: string | undefined = typeof process !== 'undefined' ? process.env.ORIGINAL_PATH : undefined;
 
 export function getOriginalProcessPath(): string | undefined {
   return originalProcessPath;

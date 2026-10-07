@@ -20,6 +20,18 @@ export interface AgentSkillPromptCatalogContext {
   }>;
 }
 
+function catalogText(value: string | undefined): string {
+  return (value ?? '').replace(/[\r\n]+/gu, ' ').replace(/\\/gu, '\\\\').replace(/`/gu, '\\`');
+}
+
+function catalogCode(value: string | undefined): string {
+  const singleLine = (value ?? '').replace(/[\r\n]+/gu, ' ');
+  const longestBackticks = Math.max(0, ...(singleLine.match(/`+/gu) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longestBackticks + 1);
+  const padding = singleLine.startsWith('`') || singleLine.endsWith('`') ? ' ' : '';
+  return `${fence}${padding}${singleLine}${padding}${fence}`;
+}
+
 /**
  * Generates the self-contained agent prompt for Spawnea orchestration.
  * This prompt can be copied by operators or output via `spawnea skill prompt`
@@ -52,11 +64,11 @@ export function getAgentSkillPrompt(catalog?: AgentSkillPromptCatalogContext): s
       if (projects.length > 0) {
         catalogSection += `### Configured Projects\n`;
         for (const p of projects) {
-          const name = p.name ? ` (${p.name})` : '';
-          const host = p.hostId ? ` [host: ${p.hostId}]` : '';
-          const branch = p.baseBranch ? ` [branch: ${p.baseBranch}]` : '';
-          const path = p.rootPath ? ` - ${p.rootPath}` : '';
-          catalogSection += `- \`${p.id}\`${name}${host}${branch}${path}\n`;
+          const name = p.name ? ` (${catalogText(p.name)})` : '';
+          const host = p.hostId ? ` [host: ${catalogText(p.hostId)}]` : '';
+          const branch = p.baseBranch ? ` [branch: ${catalogText(p.baseBranch)}]` : '';
+          const path = p.rootPath ? ` - ${catalogText(p.rootPath)}` : '';
+          catalogSection += `- ${catalogCode(p.id)}${name}${host}${branch}${path}\n`;
         }
         catalogSection += '\n';
       }
@@ -64,9 +76,9 @@ export function getAgentSkillPrompt(catalog?: AgentSkillPromptCatalogContext): s
       if (harnesses.length > 0) {
         catalogSection += `### Available Harnesses\n`;
         for (const h of harnesses) {
-          const kind = h.kind ? ` [kind: ${h.kind}]` : '';
-          const cmd = h.command ? ` (${h.command})` : '';
-          catalogSection += `- \`${h.id}\`: ${h.name || h.id}${kind}${cmd}\n`;
+          const kind = h.kind ? ` [kind: ${catalogText(h.kind)}]` : '';
+          const cmd = h.command ? ` (${catalogText(h.command)})` : '';
+          catalogSection += `- ${catalogCode(h.id)}: ${catalogText(h.name || h.id)}${kind}${cmd}\n`;
         }
         catalogSection += '\n';
       }
@@ -75,7 +87,7 @@ export function getAgentSkillPrompt(catalog?: AgentSkillPromptCatalogContext): s
         catalogSection += `### Configured Hosts\n`;
         for (const h of hosts) {
           const status = h.enabled ? 'enabled' : 'disabled';
-          catalogSection += `- \`${h.id}\`: ${h.name || h.id} (${status})\n`;
+          catalogSection += `- ${catalogCode(h.id)}: ${catalogText(h.name || h.id)} (${status})\n`;
         }
         catalogSection += '\n';
       }

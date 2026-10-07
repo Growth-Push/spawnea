@@ -170,6 +170,22 @@ describe('Spawnea Control CLI', () => {
       expect(prompt).toContain('### Active Profile\n- `test-profile`');
     });
 
+    it('rejects an invalid profile in the offline skill prompt', async () => {
+      expect(() => getAgentSkillPrompt({ profile: 'unsafe profile' })).toThrow('Invalid profile name');
+      await expect(runCli(['skill', 'prompt', '--profile', 'bad$x'])).rejects.toThrow('Invalid profile name');
+    });
+
+    it('keeps catalog values on their own Markdown lines', () => {
+      const prompt = getAgentSkillPrompt({
+        projects: [{ id: 'project`id', name: 'Project\n## Injected', rootPath: '/tmp/`path`' }],
+        harnesses: [{ id: 'shell', command: 'bash\n- injected' }],
+      });
+      expect(prompt).toContain('- ``project`id`` (Project ## Injected) - /tmp/\\`path\\`');
+      expect(prompt).toContain('- `shell`: shell (bash - injected)');
+      expect(prompt).not.toContain('\n## Injected');
+      expect(prompt).not.toContain('\n- injected');
+    });
+
     it('outputs skill prompt to console', () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
       showSkillPrompt({ json: false });

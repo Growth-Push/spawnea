@@ -124,8 +124,6 @@ export async function getCliPathStatus(options: CliPathInstallerOptions = {}): P
       targetPath,
       symlinkPath,
       isValid: false,
-      isInPath,
-      pathInstruction,
       error: 'PATH symlink installation is not supported on Windows',
     };
   }
@@ -292,11 +290,20 @@ export async function installCliInPath(options: CliPathInstallerOptions = {}): P
 
   await mkdir(binDir, { recursive: true, mode: 0o755 });
 
-  // If destination already exists and is NOT a symlink, refuse to overwrite
+  // Preserve files and symlinks that were not installed by Spawnea.
   try {
     const existingStat = await lstat(symlinkPath);
     if (!existingStat.isSymbolicLink()) {
       throw new Error(`Cannot overwrite existing non-symlink file at: ${symlinkPath}`);
+    }
+    const existingTarget = resolve(dirname(symlinkPath), await readlink(symlinkPath));
+    const isSpawneaTarget = existingTarget === targetPath ||
+      existingTarget === getAppImageLauncherPath(options.homeDirectory) ||
+      (existingTarget.endsWith('/bin/spawnea.mjs')) ||
+      (existingTarget.endsWith('/resources/spawnea')) ||
+      (existingTarget.endsWith('/build/spawnea'));
+    if (!isSpawneaTarget) {
+      throw new Error(`Cannot overwrite existing symlink to another target at: ${symlinkPath}`);
     }
   } catch (error: any) {
     if (error?.code !== 'ENOENT') {

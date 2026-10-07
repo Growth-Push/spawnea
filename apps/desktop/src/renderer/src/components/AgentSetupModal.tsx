@@ -110,6 +110,13 @@ export function AgentSetupModal({
   const modalRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
+  const promptResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const completionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (promptResetTimer.current) clearTimeout(promptResetTimer.current);
+    if (completionResetTimer.current) clearTimeout(completionResetTimer.current);
+  }, []);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -180,10 +187,12 @@ export function AgentSetupModal({
         await navigator.clipboard.writeText(skillPromptText);
       }
       setCopyPromptStatus('copied');
-      setTimeout(() => setCopyPromptStatus('idle'), 2000);
+      if (promptResetTimer.current) clearTimeout(promptResetTimer.current);
+      promptResetTimer.current = setTimeout(() => setCopyPromptStatus('idle'), 2000);
     } catch {
       setCopyPromptStatus('failed');
-      setTimeout(() => setCopyPromptStatus('idle'), 2000);
+      if (promptResetTimer.current) clearTimeout(promptResetTimer.current);
+      promptResetTimer.current = setTimeout(() => setCopyPromptStatus('idle'), 2000);
     }
   };
 
@@ -195,10 +204,12 @@ export function AgentSetupModal({
         await navigator.clipboard.writeText(completionSnippet);
       }
       setCopyCompletionStatus('copied');
-      setTimeout(() => setCopyCompletionStatus('idle'), 2000);
+      if (completionResetTimer.current) clearTimeout(completionResetTimer.current);
+      completionResetTimer.current = setTimeout(() => setCopyCompletionStatus('idle'), 2000);
     } catch {
       setCopyCompletionStatus('failed');
-      setTimeout(() => setCopyCompletionStatus('idle'), 2000);
+      if (completionResetTimer.current) clearTimeout(completionResetTimer.current);
+      completionResetTimer.current = setTimeout(() => setCopyCompletionStatus('idle'), 2000);
     }
   };
 
