@@ -34,6 +34,7 @@ import { QuickSwitcherModal } from './components/QuickSwitcherModal';
 import { NewProjectModal } from './components/NewProjectModal';
 import { LocalDiscoveryModal } from './components/LocalDiscoveryModal';
 import { ControlFinalizationModal } from './components/ControlFinalizationModal';
+import { AgentSetupModal } from './components/AgentSetupModal';
 import { spawneaSessionTabKey } from './product-storage';
 import { Terminal, Plus } from 'lucide-react';
 
@@ -151,6 +152,8 @@ export function App(): React.JSX.Element {
   const [parentSessionToClose, setParentSessionToClose] = useState<Session | null>(null);
   const [pendingCloseAllParentId, setPendingCloseAllParentId] = useState<string | null>(null);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [isAgentSetupOpen, setIsAgentSetupOpen] = useState(false);
+  const handleCloseAgentSetup = useCallback(() => setIsAgentSetupOpen(false), []);
   const [isLoading, setIsLoading] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
   const [controlFinalizationRequests, setControlFinalizationRequests] = useState<ControlFinalizationRequest[]>([]);
@@ -1273,6 +1276,7 @@ export function App(): React.JSX.Element {
           setIsNewProjectModalOpen(true);
         }}
         onOpenLocalDiscovery={() => setIsLocalDiscoveryOpen(true)}
+        onOpenAgentSetup={() => setIsAgentSetupOpen(true)}
         onOpenSettings={() => { void handleOpenSettings(); }}
         onOpenAdoptModal={() => setIsAdoptModalOpen(true)}
         onRefresh={handleRefresh}
@@ -1561,6 +1565,14 @@ export function App(): React.JSX.Element {
         server={activeServer}
         agent={activeAgent}
         onClose={() => setIsFeedbackModalOpen(false)}
+      />
+
+      {/* Agent Setup / CLI Onboarding Modal (Task 27) */}
+      <AgentSetupModal
+        isOpen={isAgentSetupOpen}
+        uiZoom={uiZoom}
+        catalog={catalog}
+        onClose={handleCloseAgentSetup}
       />
     </div>
   );

@@ -1,7 +1,8 @@
 import React from 'react';
-import { describe, it, expect, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { ContextBar } from './ContextBar';
+import { isPureShellSession } from './StatusBadge';
 import type { Session, Server, Project, Agent } from '@spawnea/domain';
 
 describe('ContextBar session hierarchy actions', () => {
@@ -92,5 +93,169 @@ describe('ContextBar session hierarchy actions', () => {
     const badge = screen.getByTestId('contextbar-child-alias-badge');
     expect(badge).toBeDefined();
     expect(badge.textContent).toBe('child-1');
+  });
+
+  it('renders status badge for agent sessions with normal status', () => {
+    render(
+      <ContextBar
+        session={{ ...rootSession, status: 'working' }}
+        server={mockServer}
+        project={mockProject}
+        agent={mockAgent}
+      />
+    );
+
+    expect(screen.getByTestId('status-badge-working')).toBeDefined();
+  });
+
+  it('recognizes a shell executable when its command includes arguments', () => {
+    expect(isPureShellSession(
+      { agentId: 'agent-custom' },
+      { id: 'agent-custom', harness: 'custom', name: 'Local task', command: '/bin/bash -l' }
+    )).toBe(true);
+  });
+
+  it('does not assume an unidentified session is a shell', () => {
+    expect(isPureShellSession({ status: 'idle' })).toBe(false);
+    expect(isPureShellSession({ status: 'idle' }, { command: 'codex' })).toBe(false);
+    expect(isPureShellSession({ status: 'idle' }, { command: 'dash' })).toBe(true);
+  });
+
+  it('suppresses status badge for pure shell sessions when sitting at prompt (idle/done)', () => {
+    const shellAgent: Agent = {
+      id: 'agent-shell',
+      name: 'Bash',
+      command: 'bash',
+      harness: 'shell',
+      createdAt: new Date(),
+    };
+
+    const { rerender } = render(
+      <ContextBar
+        session={{ ...rootSession, status: 'idle', agentId: 'agent-shell' }}
+        server={mockServer}
+        project={mockProject}
+        agent={shellAgent}
+      />
+    );
+
+    expect(screen.queryByTestId('status-badge-idle')).toBeNull();
+
+    rerender(
+      <ContextBar
+        session={{ ...rootSession, status: 'done', agentId: 'agent-shell' }}
+        server={mockServer}
+        project={mockProject}
+        agent={shellAgent}
+      />
+    );
+
+    expect(screen.queryByTestId('status-badge-done')).toBeNull();
+  });
+
+  it('keeps feedback button accessible for pure shell sessions even when status badge is suppressed', () => {
+    const shellAgent: Agent = {
+      id: 'agent-shell',
+      name: 'Bash',
+      command: 'bash',
+      harness: 'shell',
+      createdAt: new Date(),
+    };
+
+    const onReportFeedback = vi.fn();
+
+    render(
+      <ContextBar
+        session={{ ...rootSession, status: 'idle', agentId: 'agent-shell' }}
+        server={mockServer}
+        project={mockProject}
+        agent={shellAgent}
+        onReportFeedback={onReportFeedback}
+      />
+    );
+
+    expect(screen.queryByTestId('status-badge-idle')).toBeNull();
+    const feedbackBtn = screen.getByTestId('session-feedback-button');
+    expect(feedbackBtn).toBeDefined();
+
+    fireEvent.click(feedbackBtn);
+    expect(onReportFeedback).toHaveBeenCalledWith(rootSession.id);
+  });
+
+  it('renders status badge for pure shell sessions when working, error, or disconnected', () => {
+    const shellAgent: Agent = {
+      id: 'agent-shell',
+      name: 'Bash',
+      command: 'bash',
+      harness: 'shell',
+      createdAt: new Date(),
+    };
+
+    const { rerender } = render(
+      <ContextBar
+        session={{ ...rootSession, status: 'working', agentId: 'agent-shell' }}
+        server={mockServer}
+        project={mockProject}
+        agent={shellAgent}
+      />
+    );
+
+    expect(screen.getByTestId('status-badge-working')).toBeDefined();
+
+    rerender(
+      <ContextBar
+        session={{ ...rootSession, status: 'error', agentId: 'agent-shell' }}
+        server={mockServer}
+        project={mockProject}
+        agent={shellAgent}
+      />
+    );
+
+    expect(screen.getByTestId('status-badge-error')).toBeDefined();
+
+    rerender(
+      <ContextBar
+        session={{ ...rootSession, status: 'disconnected', agentId: 'agent-shell' }}
+        server={mockServer}
+        project={mockProject}
+        agent={shellAgent}
+      />
+    );
+
+    expect(screen.getByTestId('status-badge-disconnected')).toBeDefined();
+  });
+
+  it('recognizes catalog shell sessions (e.g. local:shell with command zsh)', () => {
+    const catalogShellAgent: Agent = {
+      id: 'local:shell',
+      name: 'Interactive Shell (Local Machine)',
+      command: 'zsh',
+      harness: 'zsh',
+      createdAt: new Date(),
+    };
+
+    const { rerender } = render(
+      <ContextBar
+        session={{ ...rootSession, status: 'idle', agentId: 'local:shell' }}
+        server={mockServer}
+        project={mockProject}
+        agent={catalogShellAgent}
+      />
+    );
+
+    // Idle badge suppressed for catalog shell session
+    expect(screen.queryByTestId('status-badge-idle')).toBeNull();
+
+    rerender(
+      <ContextBar
+        session={{ ...rootSession, status: 'working', agentId: 'local:shell' }}
+        server={mockServer}
+        project={mockProject}
+        agent={catalogShellAgent}
+      />
+    );
+
+    // Working badge visible for catalog shell session
+    expect(screen.getByTestId('status-badge-working')).toBeDefined();
   });
 });

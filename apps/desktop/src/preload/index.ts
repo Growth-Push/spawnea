@@ -49,6 +49,14 @@ const releaseSmokeApi = process.env.SPAWNEA_RELEASE_SMOKE === '1'
 export const api = {
   ...releaseSmokeApi,
 
+  // CLI PATH Management
+  getCliPathStatus: (): Promise<{ installed: boolean; targetPath: string; symlinkPath: string; isValid: boolean; isInPath?: boolean; pathInstruction?: string; error?: string }> =>
+    ipcRenderer.invoke('app:getCliPathStatus'),
+  installCliInPath: (): Promise<{ installed: boolean; targetPath: string; symlinkPath: string; isValid: boolean; isInPath?: boolean; pathInstruction?: string; error?: string }> =>
+    ipcRenderer.invoke('app:installCliInPath'),
+  getActiveProfile: (): Promise<string | null> =>
+    ipcRenderer.invoke('app:getActiveProfile'),
+
   // Operational Catalog
   getCatalog: (): Promise<CatalogState> => ipcRenderer.invoke('catalog:get'),
   reloadCatalog: (): Promise<CatalogReloadResult> => ipcRenderer.invoke('catalog:reload'),

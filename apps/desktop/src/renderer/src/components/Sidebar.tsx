@@ -8,7 +8,10 @@ import type {
   SessionStatusResult,
   HostHealthResult,
 } from '@spawnea/domain';
-import { StatusBadge } from './StatusBadge';
+import {
+  StatusBadge,
+  shouldShowStatusBadge as checkShouldShowStatusBadge,
+} from './StatusBadge';
 import { OsIcon } from './OsIcon';
 import { AgentIcon } from './AgentIcon';
 import { SessionSourceBadge } from './SessionSourceBadge';
@@ -41,6 +44,7 @@ import {
   Gauge,
   FileDiff,
   ChevronDown,
+  Sparkles,
 } from 'lucide-react';
 
 export type GroupingMode = 'all' | 'host' | 'project' | 'harness';
@@ -154,6 +158,7 @@ interface SidebarProps {
   onOpenNewProject?: () => void;
   onOpenLocalDiscovery?: () => void;
   onOpenSettings?: () => void;
+  onOpenAgentSetup?: () => void;
   onOpenAdoptModal?: () => void;
   onRefresh: () => void;
   onReloadCatalog?: () => void;
@@ -179,6 +184,7 @@ function SidebarActionsMenu({
   onOpenNewProject,
   onOpenLocalDiscovery,
   onOpenSettings,
+  onOpenAgentSetup,
   isReloadingCatalog,
   isLoading,
   collapsed = false,
@@ -189,6 +195,7 @@ function SidebarActionsMenu({
   onOpenNewProject?: () => void;
   onOpenLocalDiscovery?: () => void;
   onOpenSettings?: () => void;
+  onOpenAgentSetup?: () => void;
   isReloadingCatalog: boolean;
   isLoading: boolean;
   collapsed?: boolean;
@@ -296,6 +303,18 @@ function SidebarActionsMenu({
               Discover local setup…
             </button>
           )}
+          {onOpenAgentSetup && (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="sidebar-agent-setup-button"
+              onClick={() => action(onOpenAgentSetup)}
+              className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs text-purple-300 hover:bg-[#21262d] hover:text-white cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+              Configure Spawnea with your agent
+            </button>
+          )}
           {onOpenSettings && (
             <button
               type="button"
@@ -331,6 +350,7 @@ export function Sidebar({
   onOpenNewProject,
   onOpenLocalDiscovery,
   onOpenSettings,
+  onOpenAgentSetup,
   onOpenAdoptModal,
   onRefresh,
   onReloadCatalog,
@@ -455,6 +475,7 @@ export function Sidebar({
   const getServer = (serverId: string) => servers.find((srv) => srv.id === serverId);
   const getProject = (projectId: string) => projects.find((p) => p.id === projectId);
   const getAgent = (agentId: string) => agents.find((a) => a.id === agentId);
+  const agentsById = React.useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
 
   // Live counts for filter chips
   const countNeedsAttention = sessions.filter(
@@ -581,6 +602,11 @@ export function Sidebar({
       (project && (project.name.toLowerCase().includes(term) || project.rootPath.toLowerCase().includes(term))) ||
       (agent && (agent.name.toLowerCase().includes(term) || agent.command.toLowerCase().includes(term)))
     );
+  };
+
+  const shouldShowStatusBadge = (s: Session): boolean => {
+    const ag = agentsById.get(s.agentId);
+    return checkShouldShowStatusBadge(s, ag);
   };
 
   // Normalize search term once (trims leading/trailing whitespace and lowercases)
@@ -751,6 +777,17 @@ export function Sidebar({
           >
             {child.childAlias || 'child'}
           </span>
+          {(() => {
+            const childAgent = agentsById.get(child.agentId);
+            return (
+              <AgentIcon
+                harness={childAgent?.harness}
+                agentName={childAgent?.name || child.agentId}
+                command={childAgent?.command}
+                className="w-3.5 h-3.5 shrink-0"
+              />
+            );
+          })()}
           <span
             data-testid={`session-title-${child.id}`}
             className="text-xs truncate font-medium text-zinc-200"
@@ -759,13 +796,15 @@ export function Sidebar({
             {child.name}
           </span>
         </div>
-        <StatusBadge
-          status={child.status}
-          isFocused={isSelected}
-          isAcknowledged={isAcknowledged}
-          iconOnly
-          className="shrink-0 ml-1.5"
-        />
+        {shouldShowStatusBadge(child) && (
+          <StatusBadge
+            status={child.status}
+            isFocused={isSelected}
+            isAcknowledged={isAcknowledged}
+            iconOnly
+            className="shrink-0 ml-1.5"
+          />
+        )}
       </button>
     );
   };
@@ -831,15 +870,17 @@ export function Sidebar({
           </div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <StatusBadge
-            status={session.status}
-            isFocused={isSelected}
-            isAcknowledged={isAcknowledged}
-            promptSnippet={statusDetails?.detectedPrompt}
-            errorReason={statusDetails?.reason}
-            iconOnly={true}
-            className="shrink-0"
-          />
+          {shouldShowStatusBadge(session) && (
+            <StatusBadge
+              status={session.status}
+              isFocused={isSelected}
+              isAcknowledged={isAcknowledged}
+              promptSnippet={statusDetails?.detectedPrompt}
+              errorReason={statusDetails?.reason}
+              iconOnly={true}
+              className="shrink-0"
+            />
+          )}
           {shortcut && (
             <span
               data-testid={`session-shortcut-badge-${session.id}`}
@@ -1101,15 +1142,17 @@ export function Sidebar({
               )}
               <SessionSourceBadge session={session} compact />
             </span>
-            <StatusBadge
-              status={session.status}
-              isFocused={isSelected}
-              isAcknowledged={isAcknowledged}
-              promptSnippet={statusDetails?.detectedPrompt}
-              errorReason={statusDetails?.reason}
-              iconOnly
-              className="shrink-0"
-            />
+            {shouldShowStatusBadge(session) && (
+              <StatusBadge
+                status={session.status}
+                isFocused={isSelected}
+                isAcknowledged={isAcknowledged}
+                promptSnippet={statusDetails?.detectedPrompt}
+                errorReason={statusDetails?.reason}
+                iconOnly
+                className="shrink-0"
+              />
+            )}
           </span>
 
           <span className="block w-full min-w-0 max-w-full overflow-hidden">
@@ -1185,15 +1228,28 @@ export function Sidebar({
                 >
                   {child.childAlias || 'child'}
                 </span>
+                {(() => {
+                  const childAgent = agentsById.get(child.agentId);
+                  return (
+                    <AgentIcon
+                      harness={childAgent?.harness}
+                      agentName={childAgent?.name || child.agentId}
+                      command={childAgent?.command}
+                      className="w-3 h-3 shrink-0"
+                    />
+                  );
+                })()}
                 <span className="truncate text-[10px]">{child.name}</span>
               </span>
-              <StatusBadge
-                status={child.status}
-                isFocused={child.id === activeSessionId}
-                isAcknowledged={acknowledgedAlerts.has(getAlertId(child.id, child.status, statusDetailsMap[child.id]?.detectedPrompt || statusDetailsMap[child.id]?.reason))}
-                iconOnly
-                className="shrink-0 scale-75"
-              />
+              {shouldShowStatusBadge(child) && (
+                <StatusBadge
+                  status={child.status}
+                  isFocused={child.id === activeSessionId}
+                  isAcknowledged={acknowledgedAlerts.has(getAlertId(child.id, child.status, statusDetailsMap[child.id]?.detectedPrompt || statusDetailsMap[child.id]?.reason))}
+                  iconOnly
+                  className="shrink-0 scale-75"
+                />
+              )}
             </button>
           ))}
         </div>
@@ -1362,15 +1418,17 @@ export function Sidebar({
               </div>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              <StatusBadge
-                status={session.status}
-                isFocused={isSelected}
-                isAcknowledged={isAcknowledged}
-                promptSnippet={statusDetails?.detectedPrompt}
-                errorReason={statusDetails?.reason}
-                iconOnly={true}
-                className="shrink-0"
-              />
+              {shouldShowStatusBadge(session) && (
+                <StatusBadge
+                  status={session.status}
+                  isFocused={isSelected}
+                  isAcknowledged={isAcknowledged}
+                  promptSnippet={statusDetails?.detectedPrompt}
+                  errorReason={statusDetails?.reason}
+                  iconOnly={true}
+                  className="shrink-0"
+                />
+              )}
               {shortcut && (
                 <span
                   data-testid={`session-shortcut-badge-${session.id}`}
@@ -1473,15 +1531,28 @@ export function Sidebar({
                       <span className="text-[9px] font-mono font-medium px-1 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 shrink-0">
                         {child.childAlias || 'child'}
                       </span>
+                      {(() => {
+                        const childAgent = agentsById.get(child.agentId);
+                        return (
+                          <AgentIcon
+                            harness={childAgent?.harness}
+                            agentName={childAgent?.name || child.agentId}
+                            command={childAgent?.command}
+                            className="w-3.5 h-3.5 shrink-0"
+                          />
+                        );
+                      })()}
                       <span className="truncate text-xs">{child.name}</span>
                     </div>
-                    <StatusBadge
-                      status={child.status}
-                      isFocused={child.id === activeSessionId}
-                      isAcknowledged={acknowledgedAlerts.has(getAlertId(child.id, child.status, statusDetailsMap[child.id]?.detectedPrompt || statusDetailsMap[child.id]?.reason))}
-                      iconOnly
-                      className="shrink-0"
-                    />
+                    {shouldShowStatusBadge(child) && (
+                      <StatusBadge
+                        status={child.status}
+                        isFocused={child.id === activeSessionId}
+                        isAcknowledged={acknowledgedAlerts.has(getAlertId(child.id, child.status, statusDetailsMap[child.id]?.detectedPrompt || statusDetailsMap[child.id]?.reason))}
+                        iconOnly
+                        className="shrink-0"
+                      />
+                    )}
                   </button>
                 ))}
               </div>
@@ -1554,6 +1625,7 @@ export function Sidebar({
                   onOpenNewProject={onOpenNewProject}
                   onOpenLocalDiscovery={onOpenLocalDiscovery}
                   onOpenSettings={onOpenSettings}
+                  onOpenAgentSetup={onOpenAgentSetup}
                   isReloadingCatalog={isReloadingCatalog}
                   isLoading={isLoading}
                 />
@@ -1603,6 +1675,7 @@ export function Sidebar({
                 onOpenNewProject={onOpenNewProject}
                 onOpenLocalDiscovery={onOpenLocalDiscovery}
                 onOpenSettings={onOpenSettings}
+                onOpenAgentSetup={onOpenAgentSetup}
                 isReloadingCatalog={isReloadingCatalog}
                 isLoading={isLoading}
               />

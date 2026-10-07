@@ -30,7 +30,8 @@ import { LocalDiscoveryService } from './local-discovery-service.js';
 import { AgentControlService } from './agent-control-service.js';
 import { ControlMcpGateway } from './control-mcp-gateway.js';
 import { isControlMcpEnabled } from './control-config.js';
-import { initializeProcessPath } from './process-path.js';
+import { getOriginalProcessPath, initializeProcessPath } from './process-path.js';
+import { getCliPathStatus, installCliInPath } from './cli-path-installer.js';
 import { parseProfileFromArgs, initializeActiveCatalogPath, resolveSpawneaUserDataPath } from './product-paths.js';
 import { resolveDesktopRuntimePaths } from './runtime-paths.js';
 import {
@@ -470,6 +471,38 @@ function registerIpcHandlers(
       throw new Error('Clipboard text must be a string no larger than 1 MiB');
     }
     clipboard.writeText(text);
+  });
+
+  // CLI PATH Installer Handlers
+  ipcMain.handle('app:getCliPathStatus', async (event) => {
+    if (!mainWindowRef || mainWindowRef.isDestroyed() || event.sender !== mainWindowRef.webContents) {
+      throw new Error('Unauthorized app:getCliPathStatus sender');
+    }
+    return getCliPathStatus({
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
+      appImagePath: process.env.APPIMAGE,
+      pathEnv: getOriginalProcessPath() ?? process.env.ORIGINAL_PATH,
+    });
+  });
+  ipcMain.handle('app:installCliInPath', async (event) => {
+    if (!mainWindowRef || mainWindowRef.isDestroyed() || event.sender !== mainWindowRef.webContents) {
+      throw new Error('Unauthorized app:installCliInPath sender');
+    }
+    return installCliInPath({
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
+      appImagePath: process.env.APPIMAGE,
+      pathEnv: getOriginalProcessPath() ?? process.env.ORIGINAL_PATH,
+    });
+  });
+  ipcMain.handle('app:getActiveProfile', async (event) => {
+    if (!mainWindowRef || mainWindowRef.isDestroyed() || event.sender !== mainWindowRef.webContents) {
+      throw new Error('Unauthorized app:getActiveProfile sender');
+    }
+    return activeProfile ?? null;
   });
 
   // Session Lifecycle & Status Supervision

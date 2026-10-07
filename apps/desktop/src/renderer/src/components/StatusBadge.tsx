@@ -1,5 +1,5 @@
 import React from 'react';
-import type { SessionStatus } from '@spawnea/domain';
+import { SHELL_COMMANDS, type SessionStatus } from '@spawnea/domain';
 import {
   Radio,
   AlertCircle,
@@ -165,4 +165,45 @@ export function StatusBadge({
       <span>{label}</span>
     </span>
   );
+}
+
+export function isPureShellSession(
+  session: { agentId?: string; status?: SessionStatus },
+  agent?: { harness?: string; name?: string; command?: string; id?: string } | null
+): boolean {
+  const agentId = session.agentId || agent?.id;
+  const isTerminalId = Boolean(
+    agentId === 'agent-terminal' ||
+    agentId === 'shell' ||
+    agentId?.endsWith(':shell') ||
+    agentId?.endsWith(':terminal')
+  );
+
+  if (!agent) {
+    return isTerminalId;
+  }
+
+  const harnessLower = agent.harness?.toLowerCase() ?? '';
+  const commandLower = agent.command
+    ? (agent.command.trim().split(/\s+/u)[0]?.split('/').pop()?.toLowerCase() ?? '')
+    : '';
+
+  return (
+    isTerminalId ||
+    harnessLower === 'none' ||
+    harnessLower === 'terminal' ||
+    harnessLower === 'shell' ||
+    agent.name === 'Terminal' ||
+    SHELL_COMMANDS.has(harnessLower) ||
+    SHELL_COMMANDS.has(commandLower)
+  );
+}
+
+export function shouldShowStatusBadge(
+  session: { agentId?: string; status: SessionStatus },
+  agent?: { harness?: string; name?: string; command?: string; id?: string } | null
+): boolean {
+  const isShell = isPureShellSession(session, agent);
+  if (!isShell) return true;
+  return session.status !== 'idle' && session.status !== 'done';
 }

@@ -88,6 +88,7 @@ const renderSidebar = (
     gitChangeCountBySessionId?: Record<string, number>;
     isCollapsed?: boolean;
     onOpenCreateChildModal?: (parentSessionId?: string) => void;
+    onOpenAgentSetup?: () => void;
   } = {}
 ) => render(
   <Sidebar
@@ -101,6 +102,7 @@ const renderSidebar = (
     onSelectSession={options.onSelectSession ?? vi.fn()}
     onOpenCreateModal={vi.fn()}
     onOpenCreateChildModal={options.onOpenCreateChildModal}
+    onOpenAgentSetup={options.onOpenAgentSetup}
     onRefresh={vi.fn()}
     isCollapsed={options.isCollapsed}
   />
@@ -702,5 +704,199 @@ describe('Sidebar session hierarchy', () => {
     expect(group.contains(toggleBtn)).toBe(true);
     expect(card.contains(toggleBtn)).toBe(false);
     expect(titleEl.compareDocumentPosition(toggleBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('triggers onOpenAgentSetup from sidebar actions menu', () => {
+    const onOpenAgentSetup = vi.fn();
+    renderSidebar([rootParentSession], { onOpenAgentSetup });
+
+    const menuTrigger = screen.getByTestId('sidebar-actions-menu-button');
+    fireEvent.click(menuTrigger);
+
+    const configureBtn = screen.getByTestId('sidebar-agent-setup-button');
+    expect(configureBtn).toBeDefined();
+    expect(configureBtn.textContent).toContain('Configure Spawnea with your agent');
+
+    fireEvent.click(configureBtn);
+    expect(onOpenAgentSetup).toHaveBeenCalled();
+  });
+
+  it('suppresses status badge for pure shell sessions in sidebar unless error or disconnected', () => {
+    const shellAgent: Agent = {
+      id: 'agent-shell',
+      name: 'Bash',
+      command: 'bash',
+      harness: 'shell',
+      createdAt: new Date(),
+    };
+
+    const shellSession: Session = {
+      ...mockSessions[0],
+      id: 'sess-shell',
+      agentId: 'agent-shell',
+      status: 'idle',
+    };
+
+    const { rerender } = render(
+      <Sidebar
+        sessions={[shellSession]}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={[shellAgent]}
+        activeSessionId="sess-shell"
+        onSelectSession={vi.fn()}
+        onOpenCreateModal={vi.fn()}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId('status-badge-idle')).toBeNull();
+
+    rerender(
+      <Sidebar
+        sessions={[{ ...shellSession, status: 'working' }]}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={[shellAgent]}
+        activeSessionId="sess-shell"
+        onSelectSession={vi.fn()}
+        onOpenCreateModal={vi.fn()}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('status-badge-working')).toBeDefined();
+
+    rerender(
+      <Sidebar
+        sessions={[{ ...shellSession, status: 'error' }]}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={[shellAgent]}
+        activeSessionId="sess-shell"
+        onSelectSession={vi.fn()}
+        onOpenCreateModal={vi.fn()}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('status-badge-error')).toBeDefined();
+
+    rerender(
+      <Sidebar
+        sessions={[{ ...shellSession, status: 'disconnected' }]}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={[shellAgent]}
+        activeSessionId="sess-shell"
+        onSelectSession={vi.fn()}
+        onOpenCreateModal={vi.fn()}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('status-badge-disconnected')).toBeDefined();
+  });
+
+  it('recognizes catalog shell sessions with ID local:shell and command zsh', () => {
+    const catalogShellAgent: Agent = {
+      id: 'local:shell',
+      name: 'Interactive Shell (Local Machine)',
+      command: 'zsh',
+      harness: 'zsh',
+      createdAt: new Date(),
+    };
+
+    const session: Session = {
+      ...mockSessions[0],
+      id: 'sess-catalog-shell',
+      agentId: 'local:shell',
+      status: 'idle',
+    };
+
+    const { rerender } = render(
+      <Sidebar
+        sessions={[session]}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={[catalogShellAgent]}
+        activeSessionId="sess-catalog-shell"
+        onSelectSession={vi.fn()}
+        onOpenCreateModal={vi.fn()}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    // Idle badge suppressed for catalog shell
+    expect(screen.queryByTestId('status-badge-idle')).toBeNull();
+
+    rerender(
+      <Sidebar
+        sessions={[{ ...session, status: 'working' }]}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={[catalogShellAgent]}
+        activeSessionId="sess-catalog-shell"
+        onSelectSession={vi.fn()}
+        onOpenCreateModal={vi.fn()}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    // Working badge visible for catalog shell
+    expect(screen.getByTestId('status-badge-working')).toBeDefined();
+  });
+
+  it('renders child session harness icon next to child alias badge in child list and subgrid', () => {
+    const antigravityAgent: Agent = {
+      id: 'agent-agy',
+      name: 'Antigravity',
+      command: 'agy',
+      harness: 'antigravity',
+      createdAt: new Date(),
+    };
+
+    const parent: Session = {
+      ...mockSessions[0],
+      id: 'sess-parent-harness-icon',
+      name: 'Parent Session',
+    };
+
+    const child: Session = {
+      ...mockSessions[0],
+      id: 'sess-child-harness-icon',
+      parentSessionId: 'sess-parent-harness-icon',
+      childAlias: 'child-1',
+      name: 'Antigravity Child Session',
+      agentId: 'agent-agy',
+    };
+
+    render(
+      <Sidebar
+        sessions={[parent, child]}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={[mockAgents[0], antigravityAgent]}
+        activeSessionId="sess-parent-harness-icon"
+        onSelectSession={vi.fn()}
+        onOpenCreateModal={vi.fn()}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    // Expand children
+    const toggleBtn = screen.getByTestId('session-toggle-children-sess-parent-harness-icon');
+    fireEvent.click(toggleBtn);
+
+    const childItem = screen.getByTestId('session-item-sess-child-harness-icon');
+    expect(childItem).toBeDefined();
+
+    // The child item should have the Antigravity provider icon rendered
+    const childAlias = screen.getByTestId('session-child-alias-sess-child-harness-icon');
+    const agyIcon = childItem.querySelector('[data-testid="provider-icon-antigravity"]');
+    expect(agyIcon).toBeDefined();
+    expect(agyIcon).not.toBeNull();
+    expect(childItem.contains(childAlias)).toBe(true);
+    expect(childItem.contains(agyIcon!)).toBe(true);
   });
 });

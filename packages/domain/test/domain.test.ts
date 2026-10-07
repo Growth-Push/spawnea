@@ -7,6 +7,7 @@ import {
   SessionStatusSchema,
 } from '../src/schemas.js';
 import { isLoopbackHost } from '../src/hosts.js';
+import { getAgentSkillPrompt } from '../src/skill-prompt.js';
 
 describe('Domain Schemas', () => {
   it('validates a valid Server', () => {
@@ -122,5 +123,33 @@ describe('Domain Schemas', () => {
     const parsed = ArtifactSchema.parse(artifact);
     expect(parsed.direction).toBe('output');
     expect(parsed.sizeBytes).toBe(102400);
+  });
+
+  describe('getAgentSkillPrompt', () => {
+    it('generates agent orchestration prompt without profile by default', () => {
+      const prompt = getAgentSkillPrompt();
+      expect(prompt).toContain('spawnea list\n');
+      expect(prompt).not.toContain('--profile');
+      expect(prompt).not.toContain('Active profile context');
+    });
+
+    it('generates agent orchestration prompt with active profile flags and catalog entry', () => {
+      const prompt = getAgentSkillPrompt({
+        profile: 'custom-profile',
+        projects: [
+          { id: 'local:spawnea', name: 'Spawnea', hostId: 'local', rootPath: '/code/spawnea' },
+        ],
+      });
+      expect(prompt).toContain('spawnea list --profile custom-profile');
+      expect(prompt).toContain('spawnea status <session-id> --profile custom-profile');
+      expect(prompt).toContain('--profile custom-profile');
+      expect(prompt).toContain('export SPAWNEA_PROFILE="custom-profile"');
+      expect(prompt).toContain('### Active Profile\n- `custom-profile`');
+      expect(prompt).toContain('- `local:spawnea` (Spawnea) [host: local] - /code/spawnea');
+    });
+
+    it('rejects profile names that would turn copied commands into shell syntax', () => {
+      expect(() => getAgentSkillPrompt({ profile: 'bad$(echo hi)' })).toThrow('Invalid profile name');
+    });
   });
 });

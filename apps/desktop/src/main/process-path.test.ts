@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { delimiter } from 'node:path';
-import { initializeProcessPath } from './process-path.js';
+import { getOriginalProcessPath, initializeProcessPath, setOriginalProcessPath } from './process-path.js';
 
 describe('desktop process PATH', () => {
   it('preserves the inherited Unix PATH and adds common user executable locations', () => {
@@ -30,5 +30,20 @@ describe('desktop process PATH', () => {
     const normalizedPath = initializeProcessPath(env, 'darwin');
 
     expect(normalizedPath?.split(delimiter).filter((entry) => entry === '/opt/homebrew/bin')).toHaveLength(1);
+  });
+
+  it('captures the un-augmented original PATH in env.ORIGINAL_PATH', () => {
+    const previousPath = getOriginalProcessPath();
+    const initialPath = `/usr/bin${delimiter}/bin`;
+    const env: NodeJS.ProcessEnv = { PATH: initialPath };
+    try {
+      setOriginalProcessPath(undefined);
+      initializeProcessPath(env, 'linux');
+      expect(getOriginalProcessPath()).toBe(initialPath);
+      expect(env.ORIGINAL_PATH).toBe(initialPath);
+      expect(env.PATH).toContain('.local/bin');
+    } finally {
+      setOriginalProcessPath(previousPath);
+    }
   });
 });

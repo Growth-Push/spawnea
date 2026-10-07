@@ -2,11 +2,17 @@ import type {
   SessionSignals,
   SessionStatusResult,
 } from '@spawnea/domain';
+import { SHELL_COMMANDS } from '@spawnea/domain';
 import type {
   HarnessStatusAdapter,
   HarnessStatusAdapterOptions,
 } from './types.js';
 import { detectPromptInTail } from '../prompt-detector.js';
+
+function isShellCommand(command: string | undefined): boolean {
+  const normalized = command?.toLowerCase() ?? '';
+  return normalized === 'tmux' || SHELL_COMMANDS.has(normalized);
+}
 
 export class GenericStatusAdapter implements HarnessStatusAdapter {
   readonly harnessId = 'generic';
@@ -100,12 +106,17 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
       }
 
       if (promptResult.kind === 'idle_prompt' || promptResult.kind === 'shell_prompt') {
+        const isShellPrompt =
+          promptResult.kind === 'shell_prompt' ||
+          isShellCommand(signals.paneCurrentCommand);
         return {
           status: 'idle',
           confidence: promptResult.confidence ?? 0.9,
           source: 'terminal_prompt',
           detectedPrompt: promptResult.promptLine,
-          reason: `Agent prompt ready/idle: ${promptResult.promptLine}`,
+          reason: isShellPrompt
+            ? `Shell prompt ready: ${promptResult.promptLine}`
+            : `Agent prompt ready/idle: ${promptResult.promptLine}`,
           updatedAt: new Date(),
         };
       }
@@ -139,7 +150,7 @@ export class GenericStatusAdapter implements HarnessStatusAdapter {
 
     // 7. Foreground command / process liveness
     const cmd = (signals.paneCurrentCommand || '').toLowerCase();
-    const isShell = cmd === 'bash' || cmd === 'zsh' || cmd === 'sh' || cmd === 'fish' || cmd === 'tmux';
+    const isShell = isShellCommand(signals.paneCurrentCommand);
 
     if (isShell) {
       return {

@@ -405,8 +405,370 @@ export async function closeSession(
   console.log(`Closed session ${sessionId}.`);
 }
 
-export function showSkillPrompt(options: OutputOptions = {}): void {
-  const prompt = getAgentSkillPrompt();
+export interface CatalogData {
+  projects: Array<{
+    id: string;
+    name: string;
+    hostId: string;
+    rootPath: string;
+    baseBranch?: string;
+  }>;
+  harnesses: Array<{
+    id: string;
+    name: string;
+    kind: string;
+    command: string;
+  }>;
+  hosts: Array<{
+    id: string;
+    name: string;
+    enabled: boolean;
+  }>;
+}
+
+export async function showCatalog(
+  client: ControlCliClient,
+  options: OutputOptions = {},
+): Promise<void> {
+  const result = await client.callTool<CatalogData & { apiVersion?: string }>('spawnea_catalog');
+  const projects = result.projects || [];
+  const harnesses = result.harnesses || [];
+  const hosts = result.hosts || [];
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      apiVersion: result.apiVersion ?? 'v1',
+      projects,
+      harnesses,
+      hosts,
+    }, null, 2));
+    return;
+  }
+
+  console.log('PROJECTS:');
+  console.log('-----------------------------------------------------------------------------------------------------');
+  console.log(
+    'ID'.padEnd(20) +
+    'NAME'.padEnd(24) +
+    'HOST'.padEnd(12) +
+    'BRANCH'.padEnd(16) +
+    'ROOT PATH'
+  );
+  console.log('-----------------------------------------------------------------------------------------------------');
+  if (projects.length === 0) {
+    console.log('(none)');
+  } else {
+    for (const p of projects) {
+      console.log(
+        p.id.padEnd(20) +
+        (p.name || '-').padEnd(24) +
+        (p.hostId || 'local').padEnd(12) +
+        (p.baseBranch || '-').padEnd(16) +
+        (p.rootPath || '-')
+      );
+    }
+  }
+
+  console.log('\nHARNESSES:');
+  console.log('-----------------------------------------------------------------------------------------------------');
+  console.log(
+    'ID'.padEnd(24) +
+    'NAME'.padEnd(24) +
+    'KIND'.padEnd(16) +
+    'COMMAND'
+  );
+  console.log('-----------------------------------------------------------------------------------------------------');
+  if (harnesses.length === 0) {
+    console.log('(none)');
+  } else {
+    for (const h of harnesses) {
+      console.log(
+        h.id.padEnd(24) +
+        (h.name || '-').padEnd(24) +
+        (h.kind || '-').padEnd(16) +
+        (h.command || '-')
+      );
+    }
+  }
+
+  console.log('\nHOSTS:');
+  console.log('-----------------------------------------------------------------------------------------------------');
+  console.log(
+    'ID'.padEnd(20) +
+    'NAME'.padEnd(28) +
+    'ENABLED'
+  );
+  console.log('-----------------------------------------------------------------------------------------------------');
+  if (hosts.length === 0) {
+    console.log('(none)');
+  } else {
+    for (const h of hosts) {
+      console.log(
+        h.id.padEnd(20) +
+        (h.name || '-').padEnd(28) +
+        (h.enabled ? 'yes' : 'no')
+      );
+    }
+  }
+}
+
+export function generateCompletion(shell: 'bash' | 'zsh'): void {
+  if (shell === 'bash') {
+    console.log(`# bash completion for spawnea
+_spawnea_completions() {
+  local cur prev words cword
+  if declare -F _init_completion >/dev/null 2>&1; then
+    _init_completion || return
+  else
+    COMPREPLY=()
+    cur="\${COMP_WORDS[COMP_CWORD]}"
+    prev="\${COMP_WORDS[COMP_CWORD-1]}"
+    words=("\${COMP_WORDS[@]}")
+    cword=$COMP_CWORD
+  fi
+
+  local commands="list status catalog session child prompt skill completion"
+  local global_options="--profile --runtime-file"
+
+  case $cword in
+    1)
+      COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+      return
+      ;;
+  esac
+
+  case "\${words[1]}" in
+    session)
+      if [[ $cword -eq 2 ]]; then
+        COMPREPLY=($(compgen -W "$global_options create close" -- "$cur"))
+        return
+      fi
+      if [[ "\${words[2]}" == "create" ]]; then
+        COMPREPLY=($(compgen -W "$global_options --project --task --agent --server --branch --no-worktree --request-id --timeout --json" -- "$cur"))
+        return
+      elif [[ "\${words[2]}" == "close" ]]; then
+        COMPREPLY=($(compgen -W "$global_options --force --json" -- "$cur"))
+        return
+      fi
+      ;;
+    child)
+      if [[ $cword -eq 2 ]]; then
+        COMPREPLY=($(compgen -W "$global_options create" -- "$cur"))
+        return
+      fi
+      if [[ "\${words[2]}" == "create" ]]; then
+        COMPREPLY=($(compgen -W "$global_options --parent --task --agent --workspace --name --request-id --timeout --json" -- "$cur"))
+        return
+      fi
+      ;;
+    prompt)
+      if [[ $cword -eq 2 ]]; then
+        COMPREPLY=($(compgen -W "$global_options send wait send-and-wait" -- "$cur"))
+        return
+      fi
+      case "\${words[2]}" in
+        send)
+          COMPREPLY=($(compgen -W "$global_options --session --json" -- "$cur"))
+          return
+          ;;
+        wait)
+          COMPREPLY=($(compgen -W "$global_options --turn --timeout --json" -- "$cur"))
+          return
+          ;;
+        send-and-wait)
+          COMPREPLY=($(compgen -W "$global_options --session --timeout --json" -- "$cur"))
+          return
+          ;;
+      esac
+      ;;
+    skill)
+      if [[ $cword -eq 2 ]]; then
+        COMPREPLY=($(compgen -W "$global_options prompt" -- "$cur"))
+        return
+      fi
+      if [[ "\${words[2]}" == "prompt" ]]; then
+        COMPREPLY=($(compgen -W "$global_options --json" -- "$cur"))
+        return
+      fi
+      ;;
+    completion)
+      if [[ $cword -eq 2 ]]; then
+        COMPREPLY=($(compgen -W "$global_options bash zsh" -- "$cur"))
+        return
+      fi
+      ;;
+    catalog)
+      COMPREPLY=($(compgen -W "$global_options --json" -- "$cur"))
+      return
+      ;;
+    list)
+      COMPREPLY=($(compgen -W "$global_options --json" -- "$cur"))
+      return
+      ;;
+    status)
+      COMPREPLY=($(compgen -W "$global_options --json" -- "$cur"))
+      return
+      ;;
+  esac
+
+  COMPREPLY=($(compgen -W "$global_options --help --version --json" -- "$cur"))
+}
+
+complete -F _spawnea_completions spawnea`);
+    return;
+  }
+
+  if (shell === 'zsh') {
+    console.log(`#compdef spawnea
+
+_spawnea() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'list:List active Spawnea sessions'
+    'status:Inspect session details and worktree status'
+    'catalog:Get configured projects, harnesses, and hosts'
+    'session:Manage Spawnea sessions'
+    'child:Create and manage child sub-agent sessions'
+    'prompt:Deliver prompts and wait for turns'
+    'skill:Output skill prompt instructions'
+    'completion:Generate shell auto-completion script'
+  )
+
+  _arguments -C \
+    '(-h --help)'{-h,--help}'[Show help]' \
+    '(-v --version)'{-v,--version}'[Print version]' \
+    '--json[Format output as JSON]' \
+    '--profile[Select Spawnea desktop profile]:profile:' \
+    '--runtime-file[Explicit path to control-runtime.json]:file:_files' \
+    '1: :->command' \
+    '*:: :->args'
+
+  case $state in
+    command)
+      _describe -t commands 'spawnea command' commands
+      ;;
+    args)
+      case $words[1] in
+        catalog)
+          _arguments '--json[Format output as JSON]'
+          ;;
+        list)
+          _arguments '--json[Format output as JSON]' '--profile[Profile]:profile:'
+          ;;
+        status)
+          _arguments '--json[Format output as JSON]' '1:session-id:'
+          ;;
+        session)
+          local -a subcommands
+          subcommands=('create:Create a new root session' 'close:Close an active session')
+          _arguments '1: :->subcmd' '*:: :->subargs'
+          case $state in
+            subcmd)
+              _describe -t subcommands 'session subcommand' subcommands
+              ;;
+            subargs)
+              case $words[1] in
+                create)
+                  _arguments \
+                    '--project[Project identifier]:project:' \
+                    '--task[Task description]:task:' \
+                    '--agent[Agent harness]:agent:' \
+                    '--server[Target server]:server:' \
+                    '--branch[Base git branch]:branch:' \
+                    '--no-worktree[Do not use isolated worktree]' \
+                    '--request-id[Client request ID]:id:' \
+                    '--timeout[Operation timeout in seconds]:sec:' \
+                    '--json[Format output as JSON]'
+                  ;;
+                close)
+                  _arguments \
+                    '--force[Force close]' \
+                    '--json[Format output as JSON]' \
+                    '1:session-id:'
+                  ;;
+              esac
+              ;;
+          esac
+          ;;
+        child)
+          local -a child_subcmds
+          child_subcmds=('create:Create a child sub-agent session')
+          _arguments '1: :->subcmd' '*:: :->subargs'
+          case $state in
+            subcmd)
+              _describe -t child_subcmds 'child subcommand' child_subcmds
+              ;;
+            subargs)
+              case $words[1] in
+                create)
+                  _arguments \
+                    '--parent[Parent session ID]:parent:' \
+                    '--task[Task description]:task:' \
+                    '--agent[Harness]:agent:' \
+                    '--workspace=[Workspace mode]:mode:(same-project new-worktree)' \
+                    '--name[Display title for child]:name:' \
+                    '--request-id[Client request ID]:id:' \
+                    '--timeout[Operation timeout in seconds]:sec:' \
+                    '--json[Format output as JSON]'
+                  ;;
+              esac
+              ;;
+          esac
+          ;;
+        prompt)
+          local -a prompt_subcmds
+          prompt_subcmds=('send:Deliver prompt to a session terminal' 'wait:Wait for turn output to finish' 'send-and-wait:Submit prompt and wait for final response')
+          _arguments '1: :->subcmd' '*:: :->subargs'
+          case $state in
+            subcmd)
+              _describe -t prompt_subcmds 'prompt subcommand' prompt_subcmds
+              ;;
+            subargs)
+              case $words[1] in
+                send)
+                  _arguments '--session[Target session ID]:session:' '--json[Format output as JSON]' '1:prompt:'
+                  ;;
+                wait)
+                  _arguments '--turn[Turn ID]:turn:' '--timeout[Timeout in seconds]:sec:' '--json[Format output as JSON]'
+                  ;;
+                send-and-wait)
+                  _arguments '--session[Target session ID]:session:' '--timeout[Timeout in seconds]:sec:' '--json[Format output as JSON]' '1:prompt:'
+                  ;;
+              esac
+              ;;
+          esac
+          ;;
+        skill)
+          _arguments '1:subcommand:(prompt)' '--json[Format output as JSON]'
+          ;;
+        completion)
+          _arguments '1:shell:(bash zsh)'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+if type compdef >/dev/null 2>&1; then
+  compdef _spawnea spawnea
+fi`);
+    return;
+  }
+}
+
+export interface ShowSkillPromptOptions extends OutputOptions {
+  catalog?: CatalogData & { profile?: string };
+  profile?: string;
+}
+
+export function showSkillPrompt(options: ShowSkillPromptOptions = {}): void {
+  const catalogContext = options.catalog
+    ? { ...options.catalog, profile: options.profile ?? options.catalog.profile }
+    : (options.profile ? { profile: options.profile } : undefined);
+  const prompt = getAgentSkillPrompt(catalogContext);
   if (options.json) {
     console.log(JSON.stringify({ title: 'Spawnea Agent Orchestration', prompt }, null, 2));
     return;

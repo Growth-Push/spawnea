@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { Session, Server, Project, Agent, HostSystemInfo } from '@spawnea/domain';
-import { StatusBadge } from './StatusBadge';
+import { StatusBadge, isPureShellSession, shouldShowStatusBadge } from './StatusBadge';
 import { OsIcon } from './OsIcon';
 import {
   ChevronRight,
@@ -102,7 +102,8 @@ export function ContextBar({
   const serverDisplay = server ? `${server.name} (${server.host})` : session.serverId;
   const projectDisplay = project ? project.name : session.projectId;
   const agentDisplay = agent ? agent.name : session.agentId;
-  const hasAgentHarness = agent && agent.harness !== 'none' && agent.harness !== 'terminal' && agent.name !== 'Terminal' && session.agentId !== 'agent-terminal';
+  const hasAgentHarness = Boolean(agent && !isPureShellSession(session, agent));
+  const showStatusBadge = shouldShowStatusBadge(session, agent);
   const hasDistinctTask = session.task.trim() !== session.name.trim();
 
   const beginTitleEdit = (): void => {
@@ -349,7 +350,7 @@ export function ContextBar({
         )}
 
         <div className="flex items-center gap-1.5">
-          <StatusBadge status={session.status} />
+          {showStatusBadge && <StatusBadge status={session.status} />}
           {onReportFeedback && (
             <button
               type="button"

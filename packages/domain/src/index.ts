@@ -300,3 +300,4 @@ export interface GitDiffResult {
 }
 
 export * from './skill-prompt.js';
+export * from './shell-commands.js';
