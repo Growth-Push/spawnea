@@ -701,9 +701,6 @@ export function CreateSessionModal({
           setProjectSearchQuery('');
           return;
         }
-        if (modalRef.current?.querySelector('[role="listbox"]')) {
-          return;
-        }
         e.preventDefault();
         e.stopPropagation();
         onClose();

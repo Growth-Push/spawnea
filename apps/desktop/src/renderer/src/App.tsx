@@ -1091,6 +1091,16 @@ export function App(): React.JSX.Element {
 
       // 2. New Session: Ctrl+N / Cmd+N
       if (isCtrl && !e.shiftKey && !e.altKey && (e.key === 'n' || e.key === 'N')) {
+        if (
+          isCreateModalOpen ||
+          isNewProjectModalOpen ||
+          isLocalDiscoveryOpen ||
+          isAdoptModalOpen ||
+          isFeedbackModalOpen ||
+          isAgentSetupOpen
+        ) {
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         setIsQuickSwitcherOpen(false);

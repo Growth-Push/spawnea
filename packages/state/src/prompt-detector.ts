@@ -217,12 +217,15 @@ export function detectPromptInTail(
 
   // An agent can report a failed background command and then continue the
   // task. Prefer that later live activity over the historical failure text.
+  const toRegex = (pattern: string | RegExp) =>
+    typeof pattern === 'string' ? new RegExp(pattern, 'i') : pattern;
+
   const errorRulesWithRegex = applicableRules
     .filter((rule) => rule.category === 'error')
-    .map((rule) => ({ rule, regex: new RegExp(rule.pattern, 'i') }));
+    .map((rule) => ({ rule, regex: toRegex(rule.pattern) }));
   const workingRulesWithRegex = applicableRules
     .filter((rule) => rule.category === 'working')
-    .map((rule) => ({ rule, regex: new RegExp(rule.pattern, 'i') }));
+    .map((rule) => ({ rule, regex: toRegex(rule.pattern) }));
 
   let latestErrorIndex = -1;
   let latestWorkingIndex = -1;
@@ -244,7 +247,7 @@ export function detectPromptInTail(
       kind: 'working',
       promptLine: effectiveTailLines[latestWorkingIndex].trim(),
       matchedRuleId: latestWorkingRule.id,
-      matchedPattern: new RegExp(latestWorkingRule.pattern, 'i').source,
+      matchedPattern: toRegex(latestWorkingRule.pattern).source,
       confidence: latestWorkingRule.confidence ?? 0.85,
     };
   }
