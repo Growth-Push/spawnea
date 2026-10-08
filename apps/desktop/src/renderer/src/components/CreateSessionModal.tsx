@@ -268,8 +268,9 @@ export function CreateSessionModal({
     }
 
     if (prevEffectiveServerIdRef.current !== null && prevEffectiveServerIdRef.current !== effectiveServerId) {
-      // Host changed: select first project and first agent/harness for this host
-      if (!createdProject || lastConsumedCreatedProjectRef.current === `${createdProject.serverId}:${createdProject.projectId}`) {
+      // Host changed: select first project and first agent/harness for this host, unless a project was just created for this host
+      const isCreatedForThisHost = Boolean(createdProject && createdProject.serverId === effectiveServerId);
+      if (!isCreatedForThisHost) {
         setProjectId(availableProjects[0]?.id || '');
       }
       setProjectSearchQuery('');
@@ -863,7 +864,7 @@ export function CreateSessionModal({
               </label>
 
               {/* Host connection indicator & Test button */}
-              {serverId && (
+              {effectiveServerId && (
                 <div className="flex items-center gap-1.5 text-[10px]">
                   {hostTestStatus === 'testing' && (
                     <span className="flex items-center gap-1 text-yellow-400 font-mono">
@@ -884,7 +885,7 @@ export function CreateSessionModal({
                       <button
                         type="button"
                         data-testid="test-host-button"
-                        onClick={() => testHostConnection(serverId)}
+                        onClick={() => testHostConnection(effectiveServerId)}
                         className="flex items-center gap-0.5 text-zinc-400 hover:text-emerald-300 font-mono transition-colors cursor-pointer px-1.5 py-0.5 bg-[#21262d] rounded border border-[#30363d]"
                         title="Click to test connection again on demand"
                       >
@@ -897,7 +898,7 @@ export function CreateSessionModal({
                     <button
                       type="button"
                       data-testid="retry-host-test"
-                      onClick={() => testHostConnection(serverId)}
+                      onClick={() => testHostConnection(effectiveServerId)}
                       className="flex items-center gap-1 text-rose-400 hover:text-rose-300 font-mono cursor-pointer px-1.5 py-0.5 bg-rose-950/40 rounded border border-rose-500/30"
                       title={hostTestResult?.error || 'Connection failed'}
                     >
@@ -909,7 +910,7 @@ export function CreateSessionModal({
                     <button
                       type="button"
                       data-testid="test-host-button"
-                      onClick={() => testHostConnection(serverId)}
+                      onClick={() => testHostConnection(effectiveServerId)}
                       className="flex items-center gap-1 text-zinc-400 hover:text-emerald-400 font-mono cursor-pointer px-1.5 py-0.5 bg-[#21262d] rounded border border-[#30363d]"
                     >
                       <RefreshCw className="w-2.5 h-2.5" />

@@ -151,104 +151,127 @@ export function detectPromptInTail(
     return ruleHarness === targetHarness;
   });
 
-  // An agent can report a failed background command and then continue the
-  // task. Prefer that later live activity over the historical failure text.
-  const errorRules = applicableRules.filter((rule) => rule.category === 'error');
-  const workingRules = applicableRules.filter((rule) => rule.category === 'working');
-  let latestErrorIndex = -1;
-  let latestWorkingIndex = -1;
-  for (let i = 0; i < effectiveTailLines.length; i++) {
-    const line = effectiveTailLines[i];
-    if (errorRules.some((rule) => new RegExp(rule.pattern, 'i').test(line))) {
-      latestErrorIndex = i;
+  function findPromptLine(rule: PatternRule, category: RuleCategory, reg: RegExp): string {
+    let promptLine = lastLine.trim();
+    for (let i = effectiveTailLines.length - 1; i >= 0; i--) {
+      const line = effectiveTailLines[i].trim();
+      if (rule.id === 'codex-questionnaire') {
+        if (line.startsWith('Question')) {
+          return line;
+        }
+        continue;
+      }
+      if (
+        reg.test(line) ||
+        (category === 'choice' && (
+          line.startsWith('Question') ||
+          (line.startsWith('>') && !line.startsWith('>_')) ||
+          line.startsWith('›') ||
+          line.startsWith('❯') ||
+          line.startsWith('1.')
+        )) ||
+        (category === 'question' && (
+          line.startsWith('?') ||
+          line.endsWith('?') ||
+          (rule.id === 'hermes-question-header' && (line.includes('❓') || line.includes('❔')))
+        )) ||
+        (category === 'confirmation' && (
+          line.startsWith('Requesting') ||
+          line.startsWith('Do you') ||
+          line.startsWith('Accept') ||
+          line.startsWith('Allow') ||
+          line.includes('?') ||
+          /\[[yY]\/[nN]\]|\([yY]\/[nN]\)/i.test(line)
+        ))
+      ) {
+        return line;
+      }
     }
-    if (workingRules.some((rule) => new RegExp(rule.pattern, 'i').test(line))) {
-      latestWorkingIndex = i;
-    }
-  }
-  if (latestErrorIndex >= 0 && latestWorkingIndex > latestErrorIndex) {
-    const rule = workingRules.find((candidate) =>
-      new RegExp(candidate.pattern, 'i').test(effectiveTailLines[latestWorkingIndex])
-    );
-    if (rule) {
-      return {
-        isPrompt: false,
-        kind: 'working',
-        promptLine: effectiveTailLines[latestWorkingIndex].trim(),
-        matchedRuleId: rule.id,
-        matchedPattern: new RegExp(rule.pattern, 'i').source,
-        confidence: rule.confidence ?? 0.85,
-      };
-    }
+    return promptLine;
   }
 
-  // Evaluate in priority order: confirmation -> choice -> question -> working -> error -> idle_prompt -> shell_prompt
-  const categoriesInPriority: RuleCategory[] = [
-    'confirmation',
-    'choice',
-    'question',
-    'working',
-    'error',
-    'idle_prompt',
-    'shell_prompt',
-  ];
-
-  for (const category of categoriesInPriority) {
+  // Evaluate interactive prompts first: confirmation -> choice -> question
+  const interactiveCategories: RuleCategory[] = ['confirmation', 'choice', 'question'];
+  for (const category of interactiveCategories) {
     const categoryRules = applicableRules.filter((r) => r.category === category);
     for (const rule of categoryRules) {
       const reg = typeof rule.pattern === 'string' ? new RegExp(rule.pattern, 'i') : rule.pattern;
       if (reg.test(combinedTail) || reg.test(lastLine)) {
-        // A choice menu that has already scrolled up must not hide a later turn.
-        // The persistent stopwatch under an open menu is not that later turn.
         if (rule.id === 'hermes-needs-input-menu') {
           const supersededMenu = statusAfterHermesMenu(effectiveTailLines);
           if (supersededMenu) {
             return supersededMenu;
           }
         }
-        // Find best representative prompt line
-        let promptLine = lastLine.trim();
-        for (let i = effectiveTailLines.length - 1; i >= 0; i--) {
-          const line = effectiveTailLines[i].trim();
-          if (rule.id === 'codex-questionnaire') {
-            if (line.startsWith('Question')) {
-              promptLine = line;
-              break;
-            }
-            continue;
-          }
-          if (
-            reg.test(line) ||
-            (category === 'choice' && (
-              line.startsWith('Question') ||
-              (line.startsWith('>') && !line.startsWith('>_')) ||
-              line.startsWith('›') ||
-              line.startsWith('❯') ||
-              line.startsWith('1.')
-            )) ||
-            (category === 'question' && (
-              line.startsWith('?') ||
-              line.endsWith('?') ||
-              (rule.id === 'hermes-question-header' && (line.includes('❓') || line.includes('❔')))
-            )) ||
-            (category === 'confirmation' && (
-              line.startsWith('Requesting') ||
-              line.startsWith('Do you') ||
-              line.startsWith('Accept') ||
-              line.startsWith('Allow') ||
-              line.includes('?') ||
-              /\[[yY]\/[nN]\]|\([yY]\/[nN]\)/i.test(line)
-            ))
-          ) {
-            promptLine = line;
-            break;
+        return {
+          isPrompt: true,
+          kind: category,
+          promptLine: findPromptLine(rule, category, reg),
+          matchedRuleId: rule.id,
+          matchedPattern: reg.source,
+          confidence: rule.confidence ?? 0.85,
+        };
+      }
+    }
+  }
+
+  // An agent can report a failed background command and then continue the
+  // task. Prefer that later live activity over the historical failure text.
+  const errorRulesWithRegex = applicableRules
+    .filter((rule) => rule.category === 'error')
+    .map((rule) => ({ rule, regex: new RegExp(rule.pattern, 'i') }));
+  const workingRulesWithRegex = applicableRules
+    .filter((rule) => rule.category === 'working')
+    .map((rule) => ({ rule, regex: new RegExp(rule.pattern, 'i') }));
+
+  let latestErrorIndex = -1;
+  let latestWorkingIndex = -1;
+  let latestWorkingRule: PatternRule | null = null;
+  for (let i = 0; i < effectiveTailLines.length; i++) {
+    const line = effectiveTailLines[i];
+    if (errorRulesWithRegex.some(({ regex }) => regex.test(line))) {
+      latestErrorIndex = i;
+    }
+    const matchedWorking = workingRulesWithRegex.find(({ regex }) => regex.test(line));
+    if (matchedWorking) {
+      latestWorkingIndex = i;
+      latestWorkingRule = matchedWorking.rule;
+    }
+  }
+  if (latestErrorIndex >= 0 && latestWorkingIndex > latestErrorIndex && latestWorkingRule) {
+    return {
+      isPrompt: false,
+      kind: 'working',
+      promptLine: effectiveTailLines[latestWorkingIndex].trim(),
+      matchedRuleId: latestWorkingRule.id,
+      matchedPattern: new RegExp(latestWorkingRule.pattern, 'i').source,
+      confidence: latestWorkingRule.confidence ?? 0.85,
+    };
+  }
+
+  // Evaluate remaining non-interactive categories: working -> error -> idle_prompt -> shell_prompt
+  const remainingCategories: RuleCategory[] = [
+    'working',
+    'error',
+    'idle_prompt',
+    'shell_prompt',
+  ];
+
+  for (const category of remainingCategories) {
+    const categoryRules = applicableRules.filter((r) => r.category === category);
+    for (const rule of categoryRules) {
+      const reg = typeof rule.pattern === 'string' ? new RegExp(rule.pattern, 'i') : rule.pattern;
+      if (reg.test(combinedTail) || reg.test(lastLine)) {
+        if (rule.id === 'hermes-needs-input-menu') {
+          const supersededMenu = statusAfterHermesMenu(effectiveTailLines);
+          if (supersededMenu) {
+            return supersededMenu;
           }
         }
-
         return {
           isPrompt: category !== 'error' && category !== 'working',
           kind: category,
-          promptLine,
+          promptLine: findPromptLine(rule, category, reg),
           matchedRuleId: rule.id,
           matchedPattern: reg.source,
           confidence: rule.confidence ?? 0.85,

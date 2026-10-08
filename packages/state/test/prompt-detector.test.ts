@@ -24,6 +24,21 @@ describe('prompt-detector', () => {
     expect(result.promptLine).toContain('Wibbling');
   });
 
+  it('prefers later confirmation prompt over preceding error and working lines', () => {
+    const tail = [
+      '● Background command "Set up screenshot capture" failed with exit code 144',
+      'Called chrome-devtools 2 times, ran 1 shell command',
+      '✽ Wibbling… (3m 52s · ↓ 8.8k tokens)',
+      'Do you want to proceed? [y/N]',
+    ];
+
+    const result = detectPromptInTail(tail, { harness: 'zsh', tailLinesCount: 20 });
+
+    expect(result.isPrompt).toBe(true);
+    expect(result.kind).toBe('confirmation');
+    expect(result.promptLine).toContain('Do you want to proceed? [y/N]');
+  });
+
   it('detects confirmation prompts ([y/N], (y/n), proceed?)', () => {
     const tail1 = [
       'Applying database migrations...',

@@ -1093,6 +1093,7 @@ export function App(): React.JSX.Element {
       if (isCtrl && !e.shiftKey && !e.altKey && (e.key === 'n' || e.key === 'N')) {
         e.preventDefault();
         e.stopPropagation();
+        setIsQuickSwitcherOpen(false);
         setIsCreateModalOpen(true);
         return;
       }
