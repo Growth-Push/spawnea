@@ -621,6 +621,18 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('claude-idle-prompt');
   });
 
+  it('lets a later idle prompt supersede an earlier failed command when agent is waiting for input', () => {
+    const tail = [
+      '● Background command "test" failed with exit code 1',
+      'The test command failed. Would you like me to fix the test?',
+      '> Try "yes, please fix it"',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'claude' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-prompt');
+  });
+
   it('returns none for ordinary output', () => {
     const tail = [
       'Building project @spawnea/desktop...',

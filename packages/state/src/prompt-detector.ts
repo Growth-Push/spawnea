@@ -276,7 +276,8 @@ export function detectPromptInTail(
     (latestShellPromptIndex >= 0 && latestShellPromptIndex > latestWorkingIndex);
 
   const isErrorSuperseded =
-    latestShellPromptIndex >= 0 && latestShellPromptIndex > latestErrorIndex;
+    (latestShellPromptIndex >= 0 && latestShellPromptIndex > latestErrorIndex) ||
+    (latestIdlePromptIndex >= 0 && latestIdlePromptIndex > latestErrorIndex);
 
   if (
     !isWorkingSuperseded &&
