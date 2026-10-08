@@ -275,6 +275,13 @@ export function CreateSessionModal({
 
   // Keep project selection valid
   useEffect(() => {
+    // If a newly created project is in the process of switching hosts, don't preemptively select the first project
+    if (createdProject) {
+      const createdKey = `${createdProject.serverId}:${createdProject.projectId}`;
+      if (lastConsumedCreatedProjectRef.current !== createdKey) {
+        return;
+      }
+    }
     if (availableProjects.length > 0) {
       if (!projectId || !availableProjects.some((p) => p.id === projectId)) {
         setProjectId(availableProjects[0].id);
@@ -282,7 +289,7 @@ export function CreateSessionModal({
     } else {
       setProjectId('');
     }
-  }, [availableProjects, projectId]);
+  }, [availableProjects, projectId, createdProject]);
 
   // Keep agent selection valid
   useEffect(() => {
