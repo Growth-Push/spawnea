@@ -153,6 +153,7 @@ interface SidebarProps {
   gitChangeCountBySessionId?: Record<string, number>;
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
+  onVisibleSessionIdsChange?: (ids: string[]) => void;
   onOpenCreateModal: () => void;
   onOpenCreateChildModal?: (parentSessionId?: string) => void;
   onOpenNewProject?: () => void;
@@ -345,6 +346,7 @@ export function Sidebar({
   gitChangeCountBySessionId = {},
   activeSessionId,
   onSelectSession,
+  onVisibleSessionIdsChange,
   onOpenCreateModal,
   onOpenCreateChildModal,
   onOpenNewProject,
@@ -731,6 +733,26 @@ export function Sidebar({
     sessionLayoutPreference,
     visibleSessions.length
   );
+
+  // Keep keyboard cycling aligned with the child rows currently shown in the sidebar.
+  const hasChildFilter = Boolean(normalizedSearchTerm || statusFilter !== 'all');
+  const keyboardSessionIds = visibleSessions.flatMap((parent) => {
+    const children = childrenByParentId.get(parent.id) || [];
+    const matchingChildren = hasChildFilter
+      ? children.filter((child) =>
+          sessionMatchesStatus(child) &&
+          (!normalizedSearchTerm || sessionMatchesSearch(child, normalizedSearchTerm))
+        )
+      : children;
+    const showChildren = isCollapsed || isDenseLayout || expandedParents.has(parent.id) ||
+      (hasChildFilter && matchingChildren.length > 0);
+    return [parent.id, ...(showChildren ? matchingChildren.map((child) => child.id) : [])];
+  });
+  const keyboardSessionIdsKey = JSON.stringify(keyboardSessionIds);
+
+  useEffect(() => {
+    onVisibleSessionIdsChange?.(JSON.parse(keyboardSessionIdsKey) as string[]);
+  }, [keyboardSessionIdsKey, onVisibleSessionIdsChange]);
   const [denseHoveredSessionId, setDenseHoveredSessionId] = useState<string | null>(null);
   const [denseFocusedSessionId, setDenseFocusedSessionId] = useState<string | null>(null);
 
@@ -1307,6 +1329,7 @@ export function Sidebar({
       : children;
     const visibleChildren = hasFilter ? matchingChildren : children;
     const isSelected = session.id === activeSessionId;
+    const hasSelectedChild = children.some((c) => c.id === activeSessionId);
     const shortcut = shortcutLabels.get(session.id);
     const server = getServer(session.serverId);
     const hostInfo = hostInfoMap?.[session.serverId];
@@ -1338,18 +1361,24 @@ export function Sidebar({
               ? session.isExternal
                 ? 'bg-[#1f242c] border-2 border-cyan-500 text-cyan-400 shadow-md ring-2 ring-cyan-500/20'
                 : 'bg-[#1f242c] border-2 border-emerald-500 text-emerald-400 shadow-md ring-2 ring-emerald-500/20'
+              : hasSelectedChild
+              ? 'bg-[#1f242c] border-2 border-purple-500 text-purple-300 shadow-md ring-2 ring-purple-500/20'
               : session.isExternal
               ? 'bg-[#12161c] border border-cyan-900/60 text-cyan-400 hover:bg-[#21262d] hover:text-cyan-200 hover:border-cyan-500'
               : 'bg-[#12161c] border border-[#30363d] text-zinc-400 hover:bg-[#21262d] hover:text-zinc-200 hover:border-zinc-500'
           }`}
-          title={`${displayTitle} (${session.status})${shortcut ? ` — ${shortcut}` : ''}`}
+          title={`${displayTitle} (${session.status})${shortcut ? ` — ${shortcut}` : ''}${hasSelectedChild ? ' (child active)' : ''}`}
         >
           {/* Child Count Badge (for parents with children) */}
           {children.length > 0 && (
             <span
               data-testid={`session-compact-child-count-${session.id}`}
-              className="absolute -top-1 -left-1 px-1 min-w-[14px] h-[14px] rounded-full bg-purple-600 text-white font-mono text-[9px] font-bold flex items-center justify-center border border-[#161b22] z-10"
-              title={`${children.length} child session${children.length === 1 ? '' : 's'}`}
+              className={`absolute -top-1 -left-1 px-1 min-w-[14px] h-[14px] rounded-full text-white font-mono text-[9px] font-bold flex items-center justify-center border border-[#161b22] z-10 ${
+                hasSelectedChild
+                  ? 'bg-purple-500 ring-2 ring-purple-400/40'
+                  : 'bg-purple-600'
+              }`}
+              title={`${children.length} child session${children.length === 1 ? '' : 's'}${hasSelectedChild ? ' (child active)' : ''}`}
             >
               {children.length}
             </span>
@@ -1594,7 +1623,7 @@ export function Sidebar({
                 <button
                   type="button"
                   data-testid="sidebar-new-session-button"
-                  title="Create new session"
+                  title="Create new session (Ctrl+N)"
                   onClick={onOpenCreateModal}
                   className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md text-xs font-medium transition-colors shadow-sm cursor-pointer"
                 >
@@ -1645,7 +1674,7 @@ export function Sidebar({
               <button
                 type="button"
                 data-testid="sidebar-new-session-button"
-                title="Create new session"
+                title="Create new session (Ctrl+N)"
                 onClick={onOpenCreateModal}
                 className="w-8 h-8 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center shadow-sm cursor-pointer transition-colors"
               >

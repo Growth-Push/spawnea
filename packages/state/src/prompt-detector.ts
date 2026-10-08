@@ -151,73 +151,183 @@ export function detectPromptInTail(
     return ruleHarness === targetHarness;
   });
 
-  // Evaluate in priority order: confirmation -> choice -> question -> working -> error -> idle_prompt -> shell_prompt
-  const categoriesInPriority: RuleCategory[] = [
-    'confirmation',
-    'choice',
-    'question',
-    'working',
-    'error',
-    'idle_prompt',
-    'shell_prompt',
-  ];
+  function findPromptLine(rule: PatternRule, category: RuleCategory, reg: RegExp): string {
+    let promptLine = lastLine.trim();
+    for (let i = effectiveTailLines.length - 1; i >= 0; i--) {
+      const line = effectiveTailLines[i].trim();
+      if (rule.id === 'codex-questionnaire') {
+        if (line.startsWith('Question')) {
+          return line;
+        }
+        continue;
+      }
+      if (
+        reg.test(line) ||
+        (category === 'choice' && (
+          line.startsWith('Question') ||
+          (line.startsWith('>') && !line.startsWith('>_')) ||
+          line.startsWith('›') ||
+          line.startsWith('❯') ||
+          line.startsWith('1.')
+        )) ||
+        (category === 'question' && (
+          line.startsWith('?') ||
+          line.endsWith('?') ||
+          (rule.id === 'hermes-question-header' && (line.includes('❓') || line.includes('❔')))
+        )) ||
+        (category === 'confirmation' && (
+          line.startsWith('Requesting') ||
+          line.startsWith('Do you') ||
+          line.startsWith('Accept') ||
+          line.startsWith('Allow') ||
+          line.includes('?') ||
+          /\[[yY]\/[nN]\]|\([yY]\/[nN]\)/i.test(line)
+        ))
+      ) {
+        return line;
+      }
+    }
+    return promptLine;
+  }
 
-  for (const category of categoriesInPriority) {
+  // Evaluate interactive prompts first: confirmation -> choice -> question
+  const interactiveCategories: RuleCategory[] = ['confirmation', 'choice', 'question'];
+  for (const category of interactiveCategories) {
     const categoryRules = applicableRules.filter((r) => r.category === category);
     for (const rule of categoryRules) {
       const reg = typeof rule.pattern === 'string' ? new RegExp(rule.pattern, 'i') : rule.pattern;
       if (reg.test(combinedTail) || reg.test(lastLine)) {
-        // A choice menu that has already scrolled up must not hide a later turn.
-        // The persistent stopwatch under an open menu is not that later turn.
         if (rule.id === 'hermes-needs-input-menu') {
           const supersededMenu = statusAfterHermesMenu(effectiveTailLines);
           if (supersededMenu) {
             return supersededMenu;
           }
         }
-        // Find best representative prompt line
-        let promptLine = lastLine.trim();
-        for (let i = effectiveTailLines.length - 1; i >= 0; i--) {
-          const line = effectiveTailLines[i].trim();
-          if (rule.id === 'codex-questionnaire') {
-            if (line.startsWith('Question')) {
-              promptLine = line;
-              break;
-            }
-            continue;
-          }
-          if (
-            reg.test(line) ||
-            (category === 'choice' && (
-              line.startsWith('Question') ||
-              (line.startsWith('>') && !line.startsWith('>_')) ||
-              line.startsWith('›') ||
-              line.startsWith('❯') ||
-              line.startsWith('1.')
-            )) ||
-            (category === 'question' && (
-              line.startsWith('?') ||
-              line.endsWith('?') ||
-              (rule.id === 'hermes-question-header' && (line.includes('❓') || line.includes('❔')))
-            )) ||
-            (category === 'confirmation' && (
-              line.startsWith('Requesting') ||
-              line.startsWith('Do you') ||
-              line.startsWith('Accept') ||
-              line.startsWith('Allow') ||
-              line.includes('?') ||
-              /\[[yY]\/[nN]\]|\([yY]\/[nN]\)/i.test(line)
-            ))
-          ) {
-            promptLine = line;
-            break;
+        return {
+          isPrompt: true,
+          kind: category,
+          promptLine: findPromptLine(rule, category, reg),
+          matchedRuleId: rule.id,
+          matchedPattern: reg.source,
+          confidence: rule.confidence ?? 0.85,
+        };
+      }
+    }
+  }
+
+  // An agent can report a failed background command and then continue the
+  // task. Prefer that later live activity over the historical failure text.
+  const toRegex = (pattern: string | RegExp) =>
+    typeof pattern === 'string' ? new RegExp(pattern, 'i') : pattern;
+
+  const errorRulesWithRegex = applicableRules
+    .filter((rule) => rule.category === 'error')
+    .map((rule) => ({ rule, regex: toRegex(rule.pattern) }));
+  const workingRulesWithRegex = applicableRules
+    .filter((rule) => rule.category === 'working')
+    .map((rule) => ({ rule, regex: toRegex(rule.pattern) }));
+  const shellPromptRulesWithRegex = applicableRules
+    .filter((rule) => rule.category === 'shell_prompt')
+    .map((rule) => ({ rule, regex: toRegex(rule.pattern) }));
+  const idlePromptRulesWithRegex = applicableRules
+    .filter((rule) => rule.category === 'idle_prompt')
+    .map((rule) => ({ rule, regex: toRegex(rule.pattern) }));
+
+  let latestErrorIndex = -1;
+  let latestWorkingIndex = -1;
+  let latestWorkingRule: PatternRule | null = null;
+  let latestShellPromptIndex = -1;
+  let latestIdlePromptIndex = -1;
+  for (let i = 0; i < effectiveTailLines.length; i++) {
+    const line = effectiveTailLines[i];
+    if (errorRulesWithRegex.some(({ regex }) => regex.test(line))) {
+      latestErrorIndex = i;
+    }
+    const matchedWorking = workingRulesWithRegex.find(({ regex }) => regex.test(line));
+    if (matchedWorking) {
+      latestWorkingIndex = i;
+      latestWorkingRule = matchedWorking.rule;
+    }
+    if (shellPromptRulesWithRegex.some(({ regex }) => regex.test(line))) {
+      latestShellPromptIndex = i;
+    }
+    if (idlePromptRulesWithRegex.some(({ regex }) => regex.test(line))) {
+      latestIdlePromptIndex = i;
+    }
+  }
+
+  const activeWorkingFooterPattern =
+    /\b(?:esc\s+to\s+(?:interrupt|cancel)|msg=interrupt|Ctrl\+C\s+cancel|auto\s+mode\s+on)\b/i;
+
+  const isSpinnerSupersededByIdle = (rule: PatternRule) => {
+    if (rule.id !== 'generic-agent-spinner-status') return false;
+    if (latestIdlePromptIndex < 0 || latestWorkingIndex < 0) return false;
+    if (latestIdlePromptIndex <= latestWorkingIndex) return false;
+    for (let i = latestIdlePromptIndex; i < effectiveTailLines.length; i++) {
+      if (activeWorkingFooterPattern.test(effectiveTailLines[i])) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const isWorkingSuperseded =
+    (latestErrorIndex >= 0 && latestErrorIndex > latestWorkingIndex) ||
+    (latestShellPromptIndex >= 0 && latestShellPromptIndex > latestWorkingIndex);
+
+  const isErrorSuperseded =
+    (latestShellPromptIndex >= 0 && latestShellPromptIndex > latestErrorIndex) ||
+    (latestIdlePromptIndex >= 0 && latestIdlePromptIndex > latestErrorIndex);
+
+  if (
+    !isWorkingSuperseded &&
+    latestErrorIndex >= 0 &&
+    latestWorkingIndex > latestErrorIndex &&
+    latestWorkingRule &&
+    !isSpinnerSupersededByIdle(latestWorkingRule)
+  ) {
+    return {
+      isPrompt: false,
+      kind: 'working',
+      promptLine: effectiveTailLines[latestWorkingIndex].trim(),
+      matchedRuleId: latestWorkingRule.id,
+      matchedPattern: toRegex(latestWorkingRule.pattern).source,
+      confidence: latestWorkingRule.confidence ?? 0.85,
+    };
+  }
+
+  // Evaluate remaining non-interactive categories: working -> error -> idle_prompt -> shell_prompt
+  const remainingCategories: RuleCategory[] = [
+    'working',
+    'error',
+    'idle_prompt',
+    'shell_prompt',
+  ];
+
+  for (const category of remainingCategories) {
+    if (category === 'working' && isWorkingSuperseded) {
+      continue;
+    }
+    if (category === 'error' && isErrorSuperseded) {
+      continue;
+    }
+    const categoryRules = applicableRules.filter((r) => r.category === category);
+    for (const rule of categoryRules) {
+      if (category === 'working' && isSpinnerSupersededByIdle(rule)) {
+        continue;
+      }
+      const reg = typeof rule.pattern === 'string' ? new RegExp(rule.pattern, 'i') : rule.pattern;
+      if (reg.test(combinedTail) || reg.test(lastLine)) {
+        if (rule.id === 'hermes-needs-input-menu') {
+          const supersededMenu = statusAfterHermesMenu(effectiveTailLines);
+          if (supersededMenu) {
+            return supersededMenu;
           }
         }
-
         return {
           isPrompt: category !== 'error' && category !== 'working',
           kind: category,
-          promptLine,
+          promptLine: findPromptLine(rule, category, reg),
           matchedRuleId: rule.id,
           matchedPattern: reg.source,
           confidence: rule.confidence ?? 0.85,

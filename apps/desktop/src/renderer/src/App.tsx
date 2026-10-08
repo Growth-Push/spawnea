@@ -60,7 +60,7 @@ function readStoredUiZoom(): number {
 }
 
 /**
- * Orders sessions hierarchically for keyboard cycling (Ctrl-Tab / Ctrl-Shift-Tab):
+ * Orders sessions hierarchically:
  * Root (father) session first, immediately followed by its children in order (child-1, child-2, ..., child-N).
  */
 export function getHierarchicalSessionOrder(sessions: Session[]): Session[] {
@@ -112,6 +112,7 @@ export function getHierarchicalSessionOrder(sessions: Session[]): Session[] {
 
 export function App(): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [visibleSessionIds, setVisibleSessionIds] = useState<string[]>([]);
   const [servers, setServers] = useState<Server[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -1064,10 +1065,12 @@ export function App(): React.JSX.Element {
       // Global UI zoom: Ctrl/Cmd+plus, Ctrl/Cmd+minus, and Ctrl/Cmd+0 reset.
       // Handle this before terminal and session shortcuts so zoom keys never
       // reach the PTY or get interpreted as session navigation.
+      // Note: When CreateSessionModal is open, do not intercept Ctrl+0 so that
+      // the tenth project option shortcut (Ctrl+0) remains usable.
       if (isCtrl && !e.altKey && (
         e.key === '+' || (e.key === '=' && e.shiftKey) ||
         e.key === '-' || (e.key === '_' && e.shiftKey) ||
-        e.key === '0'
+        (e.key === '0' && !isCreateModalOpen)
       )) {
         e.preventDefault();
         e.stopPropagation();
@@ -1088,7 +1091,38 @@ export function App(): React.JSX.Element {
         return;
       }
 
-      // 2. Tab Navigation: Alt+1..6
+      // 2. New Session: Ctrl+N / Cmd+N
+      if (isCtrl && !e.shiftKey && !e.altKey && (e.key === 'n' || e.key === 'N')) {
+        const target = e.target as HTMLElement | null;
+        const fromTerminal = Boolean(target?.closest?.('.xterm'));
+        if (e.ctrlKey && !e.metaKey && fromTerminal) {
+          return; // let readline/vim/agent TUIs receive Ctrl+N in terminal
+        }
+        if (
+          isCreateModalOpen ||
+          isQuickSwitcherOpen ||
+          isNewProjectModalOpen ||
+          isLocalDiscoveryOpen ||
+          isAdoptModalOpen ||
+          isFeedbackModalOpen ||
+          isAgentSetupOpen ||
+          sessionToStop !== null ||
+          sessionToUnadopt !== null ||
+          sessionToFinish !== null ||
+          sessionToCreateChildFor !== null ||
+          parentSessionToClose !== null ||
+          controlFinalizationRequests.length > 0
+        ) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        setIsQuickSwitcherOpen(false);
+        setIsCreateModalOpen(true);
+        return;
+      }
+
+      // 3. Tab Navigation: Alt+1..6
       if (e.altKey && !isCtrl && !e.shiftKey) {
         const tabKeyMap: Record<string, WorkspaceTabType> = {
           '1': 'terminal',
@@ -1116,22 +1150,32 @@ export function App(): React.JSX.Element {
         return;
       }
 
+      // If a modal like Create Session or Quick Switcher is open, do not intercept session switching shortcuts
+      if (isCreateModalOpen || isQuickSwitcherOpen) {
+        return;
+      }
+
       // Top (father/root) sessions for direct number navigation (Ctrl-1..0)
       const rootSessions = sessions
         .filter((s) => !s.parentSessionId)
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
 
-      // Hierarchical ordered list for Ctrl-Tab / Ctrl-Shift-Tab cycling: father first, then children in order
-      const cyclingSessions = getHierarchicalSessionOrder(sessions);
-
-      if (cyclingSessions.length === 0) return;
+      // Cycle through the entries the sidebar currently exposes.
+      const cyclingSessions = visibleSessionIds
+        .map((id) => sessions.find((session) => session.id === id))
+        .filter((session): session is Session => Boolean(session));
 
       // 4. Handle Ctrl+Tab / Ctrl+Shift+Tab
       if (e.key === 'Tab') {
+        if (cyclingSessions.length === 0) return;
         e.preventDefault();
         e.stopPropagation();
 
-        const currentIndex = cyclingSessions.findIndex((s) => s.id === activeSessionId);
+        const activeSession = sessions.find((session) => session.id === activeSessionId);
+        const currentId = cyclingSessions.some((session) => session.id === activeSessionId)
+          ? activeSessionId
+          : activeSession?.parentSessionId;
+        const currentIndex = cyclingSessions.findIndex((session) => session.id === currentId);
         if (e.shiftKey) {
           // Previous session
           const prevIndex = currentIndex <= 0 ? cyclingSessions.length - 1 : currentIndex - 1;
@@ -1170,7 +1214,25 @@ export function App(): React.JSX.Element {
 
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [sessions, activeSessionId, handleTabChange]);
+  }, [
+    sessions,
+    visibleSessionIds,
+    activeSessionId,
+    handleTabChange,
+    isCreateModalOpen,
+    isQuickSwitcherOpen,
+    isNewProjectModalOpen,
+    isLocalDiscoveryOpen,
+    isAdoptModalOpen,
+    isFeedbackModalOpen,
+    isAgentSetupOpen,
+    sessionToStop,
+    sessionToUnadopt,
+    sessionToFinish,
+    sessionToCreateChildFor,
+    parentSessionToClose,
+    controlFinalizationRequests,
+  ]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
   const activeServer = activeSession ? servers.find((s) => s.id === activeSession.serverId) : undefined;
@@ -1260,6 +1322,7 @@ export function App(): React.JSX.Element {
         gitChangeCountBySessionId={gitChangeCountBySessionId}
         activeSessionId={activeSessionId}
         onSelectSession={setActiveSessionId}
+        onVisibleSessionIdsChange={setVisibleSessionIds}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
         onOpenCreateChildModal={(parentId) => {
           const target = (parentId ? sessions.find((s) => s.id === parentId) : null) ||

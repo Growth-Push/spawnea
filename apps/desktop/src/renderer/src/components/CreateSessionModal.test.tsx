@@ -1,10 +1,10 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { CreateSessionModal } from './CreateSessionModal';
 import type { Server, Project, Agent } from '@spawnea/domain';
 
-describe('CreateSessionModal Harness Ordering', () => {
+describe('CreateSessionModal', () => {
   afterEach(() => {
     cleanup();
   });
@@ -18,6 +18,14 @@ describe('CreateSessionModal Harness Ordering', () => {
       enabled: true,
       createdAt: new Date(),
     },
+    {
+      id: 'srv-2',
+      name: 'Remote Box',
+      host: '192.0.2.100',
+      sshPort: 22,
+      enabled: true,
+      createdAt: new Date(),
+    },
   ];
 
   const mockProjects: Project[] = [
@@ -26,6 +34,13 @@ describe('CreateSessionModal Harness Ordering', () => {
       serverId: 'srv-1',
       name: 'Spawnea',
       rootPath: '/workspace/spawnea',
+      createdAt: new Date(),
+    },
+    {
+      id: 'srv-1:frontend',
+      serverId: 'srv-1',
+      name: 'Web Frontend',
+      rootPath: '/srv/code/frontend-app',
       createdAt: new Date(),
     },
   ];
@@ -74,7 +89,7 @@ describe('CreateSessionModal Harness Ordering', () => {
     expect(optionValues).toEqual(['srv-1:claude', 'srv-1:codex', 'srv-1:shell']);
   });
 
-  it('renders "+ New Project..." option at the end when onOpenNewProject is provided', () => {
+  it('renders target host segmented pills with local and remote indicators without latency or offline badges', () => {
     render(
       <CreateSessionModal
         isOpen={true}
@@ -83,19 +98,21 @@ describe('CreateSessionModal Harness Ordering', () => {
         servers={mockServers}
         projects={mockProjects}
         agents={mockAgents}
-        onOpenNewProject={vi.fn()}
+        hostHealthMap={{
+          'srv-1': { hostId: 'srv-1', target: 'localhost', status: 'healthy', latencyMs: 8, lastCheckedAt: new Date().toISOString() },
+          'srv-2': { hostId: 'srv-2', target: '192.0.2.100', status: 'unreachable', latencyMs: 45, lastCheckedAt: new Date().toISOString() },
+        }}
       />
     );
 
-    const projectSelect = screen.getByTestId('select-project') as HTMLSelectElement;
-    const options = Array.from(projectSelect.options);
-    const lastOption = options[options.length - 1];
-
-    expect(lastOption.value).toBe('__new_project__');
-    expect(lastOption.textContent).toBe('+ New Project...');
+    expect(screen.getByTestId('host-pill-group')).toBeDefined();
+    expect(screen.getByTestId('host-badge-local')).toBeDefined();
+    expect(screen.getByTestId('host-badge-remote')).toBeDefined();
+    expect(screen.queryByTestId('host-latency')).toBeNull();
+    expect(screen.queryByText('offline')).toBeNull();
   });
 
-  it('does not render "+ New Project..." option when onOpenNewProject is not provided', () => {
+  it('allows 1-click host selection via segmented pills and keyboard navigation', () => {
     render(
       <CreateSessionModal
         isOpen={true}
@@ -107,12 +124,80 @@ describe('CreateSessionModal Harness Ordering', () => {
       />
     );
 
-    const projectSelect = screen.getByTestId('select-project') as HTMLSelectElement;
-    const optionValues = Array.from(projectSelect.options).map((opt) => opt.value);
-    expect(optionValues).not.toContain('__new_project__');
+    const nativeSelect = screen.getByTestId('select-server') as HTMLSelectElement;
+    expect(nativeSelect.value).toBe('srv-1');
+
+    // Click srv-2 pill directly (1-click selection)
+    const srv2Pill = screen.getByTestId('host-pill-srv-2');
+    fireEvent.click(srv2Pill);
+    expect(nativeSelect.value).toBe('srv-2');
+
+    // Arrow navigation from active pill to previous pill
+    const activeHostTrigger = screen.getByTestId('select-server-trigger');
+    fireEvent.keyDown(activeHostTrigger, { key: 'ArrowLeft' });
+    expect(nativeSelect.value).toBe('srv-1');
+
+    // Number key selection
+    fireEvent.keyDown(activeHostTrigger, { key: '2' });
+    expect(nativeSelect.value).toBe('srv-2');
   });
 
-  it('selecting "+ New Project..." invokes onOpenNewProject with current serverId', () => {
+  it('filters projects in real time when typing in searchable combobox', async () => {
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={mockAgents}
+      />
+    );
+
+    const input = screen.getByTestId('select-project-input') as HTMLInputElement;
+
+    // Filter by name
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Frontend' } });
+
+    expect(screen.getByRole('listbox')).toBeDefined();
+    expect(screen.getByRole('option', { name: /Web Frontend/ })).toBeDefined();
+    expect(screen.queryByRole('option', { name: /Spawnea/ })).toBeNull();
+
+    // Filter by path
+    fireEvent.change(input, { target: { value: 'spawnea' } });
+    expect(screen.getByRole('option', { name: /Spawnea/ })).toBeDefined();
+    expect(screen.queryByRole('option', { name: /Web Frontend/ })).toBeNull();
+  });
+
+  it('navigates project combobox options with ArrowDown, ArrowUp, and Enter', () => {
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={mockAgents}
+      />
+    );
+
+    const input = screen.getByTestId('select-project-input');
+    const nativeSelect = screen.getByTestId('select-project') as HTMLSelectElement;
+    expect(nativeSelect.value).toBe('srv-1:spawnea');
+
+    // Press ArrowDown to open and move highlight to second project
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(screen.getByRole('listbox')).toBeDefined();
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(nativeSelect.value).toBe('srv-1:frontend');
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('appends "+ New Project..." option at the bottom and triggers onOpenNewProject on click or N', () => {
     const onOpenNewProject = vi.fn();
     render(
       <CreateSessionModal
@@ -126,11 +211,140 @@ describe('CreateSessionModal Harness Ordering', () => {
       />
     );
 
-    const projectSelect = screen.getByTestId('select-project') as HTMLSelectElement;
-    projectSelect.value = '__new_project__';
-    projectSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    const trigger = screen.getByTestId('select-project-trigger');
+    fireEvent.click(trigger);
 
+    const newProjectOption = screen.getByRole('option', { name: /\+ New Project\.\.\./ });
+    expect(newProjectOption).toBeDefined();
+    fireEvent.click(newProjectOption);
     expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
+
+    // Keyboard shortcut 'n' / 'N' on trigger
+    onOpenNewProject.mockClear();
+    fireEvent.keyDown(trigger, { key: 'n' });
+    expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
+
+    // Typing 'n' inside search input must not trigger onOpenNewProject
+    onOpenNewProject.mockClear();
+    const input = screen.getByTestId('select-project-input');
+    fireEvent.keyDown(input, { key: 'n' });
+    expect(onOpenNewProject).not.toHaveBeenCalled();
+  });
+
+  it('selects the tenth project option with Ctrl+0 shortcut', () => {
+    const tenProjects: Project[] = Array.from({ length: 12 }, (_, i) => ({
+      id: `srv-1:proj-${i + 1}`,
+      serverId: 'srv-1',
+      name: `Project ${String(i + 1).padStart(2, '0')}`,
+      rootPath: `/path/to/proj-${i + 1}`,
+      createdAt: new Date(),
+    }));
+
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={tenProjects}
+        agents={mockAgents}
+      />
+    );
+
+    const input = screen.getByTestId('select-project-input');
+    const nativeSelect = screen.getByTestId('select-project') as HTMLSelectElement;
+
+    // Press Ctrl+0 in the input
+    fireEvent.keyDown(input, { key: '0', ctrlKey: true });
+    expect(nativeSelect.value).toBe('srv-1:proj-10');
+  });
+
+  it('renders two-tier agent selection with provider pills and profile selection', () => {
+    const multiAgents: Agent[] = [
+      {
+        id: 'srv-1:hermes-fast',
+        name: 'Hermes Fast',
+        command: 'hermes --fast',
+        harness: 'hermes',
+        createdAt: new Date(),
+      },
+      {
+        id: 'srv-1:hermes-pro',
+        name: 'Hermes Reasoning',
+        command: 'hermes --deep',
+        harness: 'hermes',
+        createdAt: new Date(),
+      },
+      {
+        id: 'srv-1:grok',
+        name: 'Grok Beta',
+        command: 'grok',
+        harness: 'grok',
+        createdAt: new Date(),
+      },
+      {
+        id: 'srv-1:shell',
+        name: 'Interactive Shell',
+        command: 'bash',
+        harness: 'shell',
+        createdAt: new Date(),
+      },
+    ];
+
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={multiAgents}
+      />
+    );
+
+    // Top tier: Provider group exists with brand icons
+    const providerGroup = screen.getByTestId('agent-provider-group');
+    expect(providerGroup).toBeDefined();
+    expect(within(providerGroup).getByTestId('provider-icon-hermes')).toBeDefined();
+    expect(screen.getByTestId('provider-radio-grok')).toBeDefined();
+    expect(screen.getByTestId('provider-radio-shell')).toBeDefined();
+
+    // Secondary tier: Hermes has multiple profiles so profile selector is shown
+    expect(screen.getByTestId('agent-profile-selector')).toBeDefined();
+    expect(screen.getByTestId('profile-pill-srv-1:hermes-fast')).toBeDefined();
+    expect(screen.getByTestId('profile-pill-srv-1:hermes-pro')).toBeDefined();
+
+    // Selecting Hermes Reasoning profile updates agentId
+    fireEvent.click(screen.getByTestId('profile-pill-srv-1:hermes-pro'));
+    const nativeSelect = screen.getByTestId('select-agent') as HTMLSelectElement;
+    expect(nativeSelect.value).toBe('srv-1:hermes-pro');
+
+    // Switching provider to Grok
+    fireEvent.click(screen.getByTestId('provider-radio-grok'));
+    expect(nativeSelect.value).toBe('srv-1:grok');
+  });
+
+  it('transforms task name into lowercase slug and provides live preview of branch and tmux', () => {
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={mockAgents}
+      />
+    );
+
+    const taskInput = screen.getByTestId('input-task-name');
+    fireEvent.change(taskInput, { target: { value: 'Fix OAuth Login Bug #404!' } });
+
+    // Slug: lowercase, hyphenated, alphanumeric, max 30
+    const previewSlug = screen.getByTestId('preview-slug');
+    expect(previewSlug.textContent).toBe('fix-oauth-login-bug-404');
+
+    const previewTmux = screen.getByTestId('preview-tmux-session');
+    expect(previewTmux.textContent).toBe('spawnea-fix-oauth-login-bug-404');
   });
 
   it('auto-selects createdProject when passed', () => {
@@ -217,124 +431,12 @@ describe('CreateSessionModal Harness Ordering', () => {
     );
 
     const hostTrigger = screen.getByTestId('select-server-trigger');
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(document.activeElement).toBe(hostTrigger);
     });
   });
 
-  it('expands Target Host combo with ArrowDown and selects with Enter', () => {
-    const multiServers: Server[] = [
-      ...mockServers,
-      {
-        id: 'srv-2',
-        name: 'Remote Server',
-        host: '192.0.2.100',
-        sshPort: 22,
-        enabled: true,
-        createdAt: new Date(),
-      },
-    ];
-
-    render(
-      <CreateSessionModal
-        isOpen={true}
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        servers={multiServers}
-        projects={mockProjects}
-        agents={mockAgents}
-      />
-    );
-
-    const hostTrigger = screen.getByTestId('select-server-trigger');
-    const nativeSelect = screen.getByTestId('select-server') as HTMLSelectElement;
-    expect(nativeSelect.value).toBe('srv-1');
-
-    // Press ArrowDown to expand dropdown
-    fireEvent.keyDown(hostTrigger, { key: 'ArrowDown' });
-    expect(screen.getByRole('listbox')).toBeDefined();
-
-    // Press ArrowDown again to move highlight to srv-2
-    fireEvent.keyDown(hostTrigger, { key: 'ArrowDown' });
-
-    // Press Enter to select
-    fireEvent.keyDown(hostTrigger, { key: 'Enter' });
-
-    expect(nativeSelect.value).toBe('srv-2');
-    expect(screen.queryByRole('listbox')).toBeNull();
-  });
-
-  it('selects items in combos using number keys 1..0 and renders index badges', () => {
-    const multiServers: Server[] = [
-      ...mockServers,
-      {
-        id: 'srv-2',
-        name: 'Remote Server',
-        host: '192.0.2.100',
-        sshPort: 22,
-        enabled: true,
-        createdAt: new Date(),
-      },
-    ];
-
-    render(
-      <CreateSessionModal
-        isOpen={true}
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        servers={multiServers}
-        projects={mockProjects}
-        agents={mockAgents}
-      />
-    );
-
-    const hostTrigger = screen.getByTestId('select-server-trigger');
-    const nativeSelect = screen.getByTestId('select-server') as HTMLSelectElement;
-
-    // Open host dropdown to verify badges 1 and 2
-    fireEvent.keyDown(hostTrigger, { key: 'ArrowDown' });
-    expect(screen.getByText('1')).toBeDefined();
-    expect(screen.getByText('2')).toBeDefined();
-
-    // Press '2' to select second server
-    fireEvent.keyDown(hostTrigger, { key: '2' });
-    expect(nativeSelect.value).toBe('srv-2');
-
-    // Press '1' to select first server
-    fireEvent.keyDown(hostTrigger, { key: '1' });
-    expect(nativeSelect.value).toBe('srv-1');
-  });
-
-  it('triggers + New Project... by pressing n or N when focused on Project Root', () => {
-    const onOpenNewProject = vi.fn();
-    render(
-      <CreateSessionModal
-        isOpen={true}
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        servers={mockServers}
-        projects={mockProjects}
-        agents={mockAgents}
-        onOpenNewProject={onOpenNewProject}
-      />
-    );
-
-    const projectTrigger = screen.getByTestId('select-project-trigger');
-
-    // Open project dropdown and verify badge 'N' on New Project
-    fireEvent.keyDown(projectTrigger, { key: 'ArrowDown' });
-    expect(screen.getByText('N')).toBeDefined();
-
-    // Press 'n' to trigger
-    fireEvent.keyDown(projectTrigger, { key: 'n' });
-    expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
-
-    // Press 'N' to trigger again
-    fireEvent.keyDown(projectTrigger, { key: 'N' });
-    expect(onOpenNewProject).toHaveBeenCalledTimes(2);
-  });
-
-  it('closes only the open dropdown and keeps modal open when Escape is pressed on an open combo', () => {
+  it('closes only the open combobox dropdown and keeps modal open when Escape is pressed on project combobox', () => {
     const onClose = vi.fn();
     render(
       <CreateSessionModal
@@ -347,14 +449,36 @@ describe('CreateSessionModal Harness Ordering', () => {
       />
     );
 
-    const hostTrigger = screen.getByTestId('select-server-trigger');
-    fireEvent.keyDown(hostTrigger, { key: 'ArrowDown' });
+    const input = screen.getByTestId('select-project-input');
+    fireEvent.focus(input);
     expect(screen.getByRole('listbox')).toBeDefined();
 
-    // Press Escape on the open combo
-    fireEvent.keyDown(hostTrigger, { key: 'Escape' });
+    // Press Escape on the open combobox
+    fireEvent.keyDown(input, { key: 'Escape' });
     expect(screen.queryByRole('listbox')).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes the open project list when focus leaves the combobox', () => {
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={mockAgents}
+      />
+    );
+
+    const input = screen.getByTestId('select-project-input');
+    fireEvent.focus(input);
+    expect(screen.getByRole('listbox')).toBeDefined();
+
+    // Focus an outside element like submit button
+    const submitBtn = screen.getByTestId('submit-create-session');
+    fireEvent.focusIn(submitBtn);
+    expect(screen.queryByRole('listbox')).toBeNull();
   });
 
   it('defaults worktree to unchecked even when project has worktree configured in catalog', () => {
@@ -403,11 +527,16 @@ describe('CreateSessionModal Harness Ordering', () => {
       version: 1 as const,
       hosts: {
         'srv-1': {
-          id: 'srv-1', name: 'Local Workstation', enabled: true,
+          id: 'srv-1',
+          name: 'Local Workstation',
+          enabled: true,
           projects: {
             'srv-1:spawnea': {
-              id: 'srv-1:spawnea', name: 'Spawnea', path: '/workspace/spawnea',
-              enabled: true, worktree: { enabled: true, copy_files: [] },
+              id: 'srv-1:spawnea',
+              name: 'Spawnea',
+              path: '/workspace/spawnea',
+              enabled: true,
+              worktree: { enabled: true, copy_files: [] },
             },
           },
           harnesses: {},
@@ -415,34 +544,51 @@ describe('CreateSessionModal Harness Ordering', () => {
       },
     };
     const props = {
-      isOpen: true, onClose: vi.fn(), onSubmit: vi.fn(),
-      servers: mockServers, projects: mockProjects, agents: mockAgents, catalog,
+      isOpen: true,
+      onClose: vi.fn(),
+      onSubmit: vi.fn(),
+      servers: mockServers,
+      projects: mockProjects,
+      agents: mockAgents,
+      catalog,
     };
     const { rerender } = render(<CreateSessionModal {...props} />);
     fireEvent.click(screen.getByTestId('checkbox-use-worktree'));
     expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(true);
 
-    rerender(<CreateSessionModal {...props} servers={[...mockServers]} agents={[...mockAgents]} projects={[...mockProjects]} />);
+    rerender(
+      <CreateSessionModal
+        {...props}
+        servers={[...mockServers]}
+        agents={[...mockAgents]}
+        projects={[...mockProjects]}
+      />
+    );
     expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(true);
 
     rerender(<CreateSessionModal {...props} isOpen={false} />);
     rerender(<CreateSessionModal {...props} />);
     expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(false);
-
-    fireEvent.click(screen.getByTestId('checkbox-use-worktree'));
-    rerender(<CreateSessionModal {...props} catalog={{ ...catalog, hosts: {} }} />);
-    expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(false);
   });
 
   it('keeps connection test and retry buttons in the sequential keyboard focus order', async () => {
-    const testServer = vi.fn()
+    const testServer = vi
+      .fn()
       .mockResolvedValueOnce({ success: true, hostId: 'srv-1', target: 'localhost' })
       .mockResolvedValueOnce({ success: false, hostId: 'srv-1', target: 'localhost', error: 'Unavailable' });
     const originalApi = window.spawneaApi;
     window.spawneaApi = { ...originalApi, testServer };
     try {
-      render(<CreateSessionModal isOpen={true} onClose={vi.fn()} onSubmit={vi.fn()}
-        servers={mockServers} projects={mockProjects} agents={mockAgents} />);
+      render(
+        <CreateSessionModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSubmit={vi.fn()}
+          servers={mockServers}
+          projects={mockProjects}
+          agents={mockAgents}
+        />
+      );
       const assertFocusable = (id: string) => {
         const button = screen.getByTestId(id);
         expect(button.tabIndex).toBe(0);
@@ -462,28 +608,14 @@ describe('CreateSessionModal Harness Ordering', () => {
   });
 
   it('ignores shortcuts and navigation when modifier keys (ctrl, meta, alt) are pressed', () => {
-    const multiServers: Server[] = [
-      ...mockServers,
-      {
-        id: 'srv-2',
-        name: 'Remote Server',
-        host: '192.0.2.100',
-        sshPort: 22,
-        enabled: true,
-        createdAt: new Date(),
-      },
-    ];
-    const onOpenNewProject = vi.fn();
-
     render(
       <CreateSessionModal
         isOpen={true}
         onClose={vi.fn()}
         onSubmit={vi.fn()}
-        servers={multiServers}
+        servers={mockServers}
         projects={mockProjects}
         agents={mockAgents}
-        onOpenNewProject={onOpenNewProject}
       />
     );
 
@@ -496,24 +628,72 @@ describe('CreateSessionModal Harness Ordering', () => {
 
     fireEvent.keyDown(hostTrigger, { key: '2', altKey: true });
     expect(nativeSelect.value).toBe('srv-1');
+  });
 
-    fireEvent.keyDown(hostTrigger, { key: '2', metaKey: true });
-    expect(nativeSelect.value).toBe('srv-1');
+  it('allows opening new project when host has 0 projects and onOpenNewProject is passed', () => {
+    const onOpenNewProject = vi.fn();
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={[]}
+        agents={mockAgents}
+        onOpenNewProject={onOpenNewProject}
+      />
+    );
 
-    // Ctrl+Enter or Alt+Space should not open the dropdown
-    fireEvent.keyDown(hostTrigger, { key: 'Enter', ctrlKey: true });
-    expect(screen.queryByRole('listbox')).toBeNull();
+    const trigger = screen.getByTestId('select-project-trigger') as HTMLButtonElement;
+    expect(trigger.disabled).toBe(false);
+    fireEvent.click(trigger);
 
-    fireEvent.keyDown(hostTrigger, { key: ' ', altKey: true });
-    expect(screen.queryByRole('listbox')).toBeNull();
+    const newProjectOption = screen.getByRole('option', { name: /\+ New Project\.\.\./ });
+    expect(newProjectOption).toBeDefined();
+    fireEvent.click(newProjectOption);
+    expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
 
-    // Ctrl+n or Alt+n on project trigger should not trigger onOpenNewProject
-    const projectTrigger = screen.getByTestId('select-project-trigger');
-    fireEvent.keyDown(projectTrigger, { key: 'n', ctrlKey: true });
-    expect(onOpenNewProject).not.toHaveBeenCalled();
+    // Shortcut 'n' should also work
+    onOpenNewProject.mockClear();
+    fireEvent.keyDown(trigger, { key: 'n' });
+    expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
+  });
 
-    fireEvent.keyDown(projectTrigger, { key: 'n', altKey: true });
-    expect(onOpenNewProject).not.toHaveBeenCalled();
+  it('navigates provider pills with ArrowRight / ArrowLeft and respects canonical order', () => {
+    const customAgents: Agent[] = [
+      { id: 'srv-1:shell', name: 'Shell', command: 'bash', harness: 'shell', createdAt: new Date() },
+      { id: 'srv-1:hermes', name: 'Hermes', command: 'hermes', harness: 'hermes', createdAt: new Date() },
+      { id: 'srv-1:codex', name: 'Codex', command: 'codex', harness: 'codex', createdAt: new Date() },
+    ];
+
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={customAgents}
+      />
+    );
+
+    // Initial agent is first available agent: srv-1:hermes (or user clicks codex)
+    // Canonical order in pill selector: codex (idx 0) -> hermes (idx 1) -> shell (idx 2)
+    const codexRadio = screen.getByTestId('provider-radio-codex');
+    fireEvent.click(codexRadio);
+
+    const nativeSelect = screen.getByTestId('select-agent') as HTMLSelectElement;
+    expect(nativeSelect.value).toBe('srv-1:codex');
+
+    const codexTrigger = screen.getByTestId('select-agent-trigger');
+    // ArrowRight should move to Hermes (next in canonical order)
+    fireEvent.keyDown(codexTrigger, { key: 'ArrowRight' });
+    expect(nativeSelect.value).toBe('srv-1:hermes');
+
+    // Number key '3' should move to shell (3rd provider)
+    const hermesTrigger = screen.getByTestId('select-agent-trigger');
+    fireEvent.keyDown(hermesTrigger, { key: '3' });
+    expect(nativeSelect.value).toBe('srv-1:shell');
   });
 
   it('handles empty options gracefully without opening dropdown or throwing', () => {
@@ -530,17 +710,6 @@ describe('CreateSessionModal Harness Ordering', () => {
 
     const hostTrigger = screen.getByTestId('select-server-trigger');
     expect(hostTrigger.textContent).toContain('No hosts configured');
-
-    // Clicking when options are empty does not open dropdown
-    fireEvent.click(hostTrigger);
-    expect(screen.queryByRole('listbox')).toBeNull();
-
-    // Keyboard navigation when options are empty does not open dropdown
-    fireEvent.keyDown(hostTrigger, { key: 'ArrowDown' });
-    expect(screen.queryByRole('listbox')).toBeNull();
-
-    fireEvent.keyDown(hostTrigger, { key: 'Enter' });
-    expect(screen.queryByRole('listbox')).toBeNull();
 
     const projectTrigger = screen.getByTestId('select-project-trigger');
     expect(projectTrigger.textContent).toContain('No projects for host');

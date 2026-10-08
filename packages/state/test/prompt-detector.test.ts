@@ -8,6 +8,37 @@ describe('prompt-detector', () => {
     expect(cleaned).toBe('✔ Success: Do you want to proceed? [y/N]');
   });
 
+  it('treats later agent activity as current after a failed background command', () => {
+    const tail = [
+      '● Background command "Set up screenshot capture" failed with exit code 144',
+      'Called chrome-devtools 2 times, ran 1 shell command',
+      '✽ Wibbling… (3m 52s · ↓ 8.8k tokens)',
+      '❯',
+      '⏵⏵ auto mode on · esc to interrupt',
+    ];
+
+    const result = detectPromptInTail(tail, { harness: 'zsh', tailLinesCount: 20 });
+
+    expect(result.kind).toBe('working');
+    expect(result.matchedRuleId).toBe('generic-agent-spinner-status');
+    expect(result.promptLine).toContain('Wibbling');
+  });
+
+  it('prefers later confirmation prompt over preceding error and working lines', () => {
+    const tail = [
+      '● Background command "Set up screenshot capture" failed with exit code 144',
+      'Called chrome-devtools 2 times, ran 1 shell command',
+      '✽ Wibbling… (3m 52s · ↓ 8.8k tokens)',
+      'Do you want to proceed? [y/N]',
+    ];
+
+    const result = detectPromptInTail(tail, { harness: 'zsh', tailLinesCount: 20 });
+
+    expect(result.isPrompt).toBe(true);
+    expect(result.kind).toBe('confirmation');
+    expect(result.promptLine).toContain('Do you want to proceed? [y/N]');
+  });
+
   it('detects confirmation prompts ([y/N], (y/n), proceed?)', () => {
     const tail1 = [
       'Applying database migrations...',
@@ -551,6 +582,55 @@ describe('prompt-detector', () => {
     const res = detectPromptInTail(tail, { harness: 'hermes' });
     expect(res.kind).toBe('working');
     expect(res.matchedRuleId).toBe('hermes-working-footer');
+  });
+
+  it('does not classify historical spinner as working if a shell prompt follows', () => {
+    const tail = [
+      '✻ Generating test files…',
+      'Done generating test files.',
+      'user@host:~/code$ ',
+    ];
+    const res = detectPromptInTail(tail);
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('shell_prompt');
+    expect(res.matchedRuleId).toBe('generic-shell-prompt-ps1');
+  });
+
+  it('lets a later shell prompt supersede an earlier failed command and spinner', () => {
+    const tail = [
+      '● Background command "Set up screenshot capture" failed with exit code 144',
+      '✻ Generating test files…',
+      'Done generating test files.',
+      'user@host:~/code$ ',
+    ];
+    const res = detectPromptInTail(tail);
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('shell_prompt');
+    expect(res.matchedRuleId).toBe('generic-shell-prompt-ps1');
+  });
+
+  it('lets a later idle prompt supersede a historical spinner when agent has completed', () => {
+    const tail = [
+      '✻ Generating test files…',
+      'Done generating test files.',
+      '> Try "npm test"',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'claude' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-prompt');
+  });
+
+  it('lets a later idle prompt supersede an earlier failed command when agent is waiting for input', () => {
+    const tail = [
+      '● Background command "test" failed with exit code 1',
+      'The test command failed. Would you like me to fix the test?',
+      '> Try "yes, please fix it"',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'claude' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-prompt');
   });
 
   it('returns none for ordinary output', () => {
