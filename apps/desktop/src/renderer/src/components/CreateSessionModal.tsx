@@ -40,8 +40,7 @@ export function getAgentProvider(agent: Agent): ProviderType | 'shell' {
   if (
     agent.harness === 'shell' ||
     agent.id.endsWith(':shell') ||
-    agent.id === 'agent-shell' ||
-    agent.name.toLowerCase().includes('shell')
+    agent.id === 'agent-shell'
   ) {
     return 'shell';
   }
@@ -370,10 +369,18 @@ export function CreateSessionModal({
     }
   }, [projectId, agentId, isCustomTask, availableProjects, availableAgents, projects, agents]);
 
-  // Project base branch
+  // Project base branch: update only when selected project changes
+  const prevProjectIdRef = useRef<string>(projectId);
   useEffect(() => {
-    const selectedProj = projects.find((project) => project.id === projectId);
-    setBaseBranch(selectedProj?.baseBranch || '');
+    if (prevProjectIdRef.current !== projectId) {
+      prevProjectIdRef.current = projectId;
+      const selectedProj = projects.find((project) => project.id === projectId);
+      if (selectedProj?.baseBranch) {
+        setBaseBranch(selectedProj.baseBranch);
+      } else {
+        setBaseBranch('');
+      }
+    }
   }, [projectId, projects]);
 
   // If the selected project does not support worktree, turn it off
@@ -472,6 +479,8 @@ export function CreateSessionModal({
         e.preventDefault();
         e.stopPropagation();
         handleServerChange(servers[numIdx].id);
+        const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
+        buttons?.[numIdx]?.focus();
         return;
       }
 
@@ -479,6 +488,8 @@ export function CreateSessionModal({
         e.preventDefault();
         const nextIdx = (currentIdx + 1) % servers.length;
         handleServerChange(servers[nextIdx].id);
+        const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
+        buttons?.[nextIdx]?.focus();
         return;
       }
 
@@ -486,6 +497,8 @@ export function CreateSessionModal({
         e.preventDefault();
         const prevIdx = (currentIdx - 1 + servers.length) % servers.length;
         handleServerChange(servers[prevIdx].id);
+        const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
+        buttons?.[prevIdx]?.focus();
         return;
       }
 
@@ -501,9 +514,12 @@ export function CreateSessionModal({
     (e: React.KeyboardEvent<HTMLElement>) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
+      const isInput = (e.target as HTMLElement)?.tagName?.toLowerCase() === 'input';
+
       // 'n' or 'N' shortcut to trigger + New Project...
+      // Only trigger if focus is on the dropdown trigger/button or when explicitly pressing uppercase 'N' or when selecting '+ New Project...' option
       if (e.key.toLowerCase() === 'n' && onOpenNewProject) {
-        if (!projectSearchQuery || projectComboboxOptions[highlightedProjectIdx]?.value === NEW_PROJECT_OPTION_VALUE) {
+        if (!isInput || e.key === 'N' || projectComboboxOptions[highlightedProjectIdx]?.value === NEW_PROJECT_OPTION_VALUE) {
           e.preventDefault();
           e.stopPropagation();
           setIsProjectOpen(false);
@@ -513,9 +529,9 @@ export function CreateSessionModal({
         }
       }
 
-      // 1..0 number shortcuts
+      // 1..0 number shortcuts: only when not typing inside the text input
       const numIdx = NUMBER_SHORTCUTS.indexOf(e.key);
-      if (numIdx !== -1 && numIdx < projectComboboxOptions.length && !projectSearchQuery) {
+      if (numIdx !== -1 && numIdx < projectComboboxOptions.length && !isInput) {
         e.preventDefault();
         e.stopPropagation();
         handleProjectSelect(projectComboboxOptions[numIdx].value);
@@ -586,6 +602,8 @@ export function CreateSessionModal({
         e.preventDefault();
         e.stopPropagation();
         handleSelectProvider(orderedProviders[numIdx]);
+        const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
+        buttons?.[numIdx]?.focus();
         return;
       }
 
@@ -974,6 +992,8 @@ export function CreateSessionModal({
                   if (availableProjects.length > 0 || onOpenNewProject) {
                     setIsProjectOpen(true);
                     setProjectSearchQuery('');
+                    const curIdx = projectComboboxOptions.findIndex((opt) => opt.value === projectId);
+                    setHighlightedProjectIdx(curIdx >= 0 ? curIdx : 0);
                   }
                 }}
                 onChange={(e) => {
@@ -996,7 +1016,14 @@ export function CreateSessionModal({
                 onKeyDown={handleProjectKeyDown}
                 onClick={() => {
                   if (availableProjects.length === 0 && !onOpenNewProject) return;
-                  setIsProjectOpen((prev) => !prev);
+                  setIsProjectOpen((prev) => {
+                    const next = !prev;
+                    if (next) {
+                      const curIdx = projectComboboxOptions.findIndex((opt) => opt.value === projectId);
+                      setHighlightedProjectIdx(curIdx >= 0 ? curIdx : 0);
+                    }
+                    return next;
+                  });
                   if (!isProjectOpen) {
                     projectInputRef.current?.focus();
                   }

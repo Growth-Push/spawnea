@@ -219,10 +219,16 @@ describe('CreateSessionModal', () => {
     fireEvent.click(newProjectOption);
     expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
 
-    // Keyboard shortcut 'n' / 'N'
+    // Keyboard shortcut 'n' / 'N' on trigger
     onOpenNewProject.mockClear();
     fireEvent.keyDown(trigger, { key: 'n' });
     expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
+
+    // Typing 'n' inside search input must not trigger onOpenNewProject
+    onOpenNewProject.mockClear();
+    const input = screen.getByTestId('select-project-input');
+    fireEvent.keyDown(input, { key: 'n' });
+    expect(onOpenNewProject).not.toHaveBeenCalled();
   });
 
   it('renders two-tier agent selection with provider pills and profile selection', () => {
