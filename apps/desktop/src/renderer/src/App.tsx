@@ -1125,6 +1125,11 @@ export function App(): React.JSX.Element {
         return;
       }
 
+      // If a modal like Create Session or Quick Switcher is open, do not intercept session switching shortcuts
+      if (isCreateModalOpen || isQuickSwitcherOpen) {
+        return;
+      }
+
       // Top (father/root) sessions for direct number navigation (Ctrl-1..0)
       const rootSessions = sessions
         .filter((s) => !s.parentSessionId)
@@ -1184,7 +1189,7 @@ export function App(): React.JSX.Element {
 
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [sessions, visibleSessionIds, activeSessionId, handleTabChange]);
+  }, [sessions, visibleSessionIds, activeSessionId, handleTabChange, isCreateModalOpen, isQuickSwitcherOpen]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
   const activeServer = activeSession ? servers.find((s) => s.id === activeSession.serverId) : undefined;

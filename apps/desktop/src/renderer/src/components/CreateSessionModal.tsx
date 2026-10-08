@@ -148,29 +148,7 @@ export function CreateSessionModal({
 
   const lastConsumedCreatedProjectRef = useRef<string | null>(null);
 
-  // Escape key to dismiss modal or close open combobox
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isSubmitting && !hasChildModalOpen) {
-        if (isProjectOpen) {
-          e.preventDefault();
-          e.stopPropagation();
-          setIsProjectOpen(false);
-          setProjectSearchQuery('');
-          return;
-        }
-        if (modalRef.current?.querySelector('[role="listbox"]')) {
-          return;
-        }
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [isOpen, isSubmitting, hasChildModalOpen, isProjectOpen, onClose]);
+
 
   // Click outside project combobox dropdown
   useEffect(() => {
@@ -210,9 +188,17 @@ export function CreateSessionModal({
     const currentProj = projects.find((p) => p.id === projectId);
     setBaseBranch(currentProj?.baseBranch || '');
 
-    serverTriggerRef.current?.focus();
-    const timer = setTimeout(() => serverTriggerRef.current?.focus(), 0);
-    return () => clearTimeout(timer);
+    // Focus selected server trigger pill on open
+    const focusPill = () => {
+      serverTriggerRef.current?.focus();
+    };
+    focusPill();
+    const rafId = requestAnimationFrame(focusPill);
+    const timer = setTimeout(focusPill, 50);
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(timer);
+    };
   }, [isOpen]);
 
 
@@ -540,13 +526,16 @@ export function CreateSessionModal({
         return;
       }
 
-      // 1..0 number shortcuts: only when not typing inside the text input
+      // 1..0 number shortcuts:
+      // Active on trigger button or listbox, or on input when dropdown is closed
       const numIdx = NUMBER_SHORTCUTS.indexOf(e.key);
-      if (numIdx !== -1 && numIdx < projectComboboxOptions.length && !isInput) {
-        e.preventDefault();
-        e.stopPropagation();
-        handleProjectSelect(projectComboboxOptions[numIdx].value);
-        return;
+      if (numIdx !== -1 && numIdx < projectComboboxOptions.length) {
+        if (!isInput || (!isProjectOpen && !projectSearchQuery)) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleProjectSelect(projectComboboxOptions[numIdx].value);
+          return;
+        }
       }
 
       if (e.key === 'ArrowDown') {
@@ -593,7 +582,7 @@ export function CreateSessionModal({
     },
     [
       onOpenNewProject,
-      serverId,
+      effectiveServerId,
       projectSearchQuery,
       projectComboboxOptions,
       highlightedProjectIdx,
@@ -638,6 +627,76 @@ export function CreateSessionModal({
     },
     [orderedProviders, handleSelectProvider]
   );
+
+  const handleProfileKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>, currentIdx: number) => {
+      if (currentProviderAgents.length === 0) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const numIdx = NUMBER_SHORTCUTS.indexOf(e.key);
+      if (numIdx !== -1 && numIdx < currentProviderAgents.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        setAgentId(currentProviderAgents[numIdx].id);
+        const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
+        buttons?.[numIdx]?.focus();
+        return;
+      }
+
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const nextIdx = (currentIdx + 1) % currentProviderAgents.length;
+        setAgentId(currentProviderAgents[nextIdx].id);
+        const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
+        buttons?.[nextIdx]?.focus();
+        return;
+      }
+
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prevIdx = (currentIdx - 1 + currentProviderAgents.length) % currentProviderAgents.length;
+        setAgentId(currentProviderAgents[prevIdx].id);
+        const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
+        buttons?.[prevIdx]?.focus();
+        return;
+      }
+    },
+    [currentProviderAgents]
+  );
+
+  // Global modal shortcut handler (Escape to close open combobox or dismiss modal)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleModalKeyDown = (e: KeyboardEvent) => {
+      // Escape key to dismiss modal or close open combobox
+      if (e.key === 'Escape' && !isSubmitting && !hasChildModalOpen) {
+        if (isProjectOpen) {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsProjectOpen(false);
+          setProjectSearchQuery('');
+          return;
+        }
+        if (modalRef.current?.querySelector('[role="listbox"]')) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleModalKeyDown);
+    return () => window.removeEventListener('keydown', handleModalKeyDown);
+  }, [
+    isOpen,
+    isSubmitting,
+    hasChildModalOpen,
+    isProjectOpen,
+    onClose,
+  ]);
 
   const handleTaskChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -1198,17 +1257,20 @@ export function CreateSessionModal({
                 className="flex flex-wrap items-center gap-2 pt-1 pl-1"
               >
                 <span className="text-[11px] font-medium text-zinc-400 mr-1">Profile:</span>
-                {currentProviderAgents.map((ag) => {
+                {currentProviderAgents.map((ag, pIdx) => {
                   const isProfileSelected = ag.id === agentId;
+                  const pShortcut = currentProviderAgents.length > 1 && pIdx < 10 ? NUMBER_SHORTCUTS[pIdx] : null;
                   return (
                     <button
                       key={ag.id}
                       type="button"
                       role="radio"
                       aria-checked={isProfileSelected}
+                      tabIndex={isProfileSelected ? 0 : -1}
                       disabled={isSubmitting}
                       data-testid={`profile-pill-${ag.id}`}
                       onClick={() => setAgentId(ag.id)}
+                      onKeyDown={(e) => handleProfileKeyDown(e, pIdx)}
                       className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                         isProfileSelected
                           ? 'bg-emerald-500/20 border-emerald-500 text-emerald-200'
@@ -1224,6 +1286,11 @@ export function CreateSessionModal({
                       <span>{ag.name}</span>
                       {ag.command && ag.command !== ag.name && (
                         <span className="text-[10px] text-zinc-500 font-mono">({ag.command})</span>
+                      )}
+                      {pShortcut && (
+                        <kbd className="text-[10px] font-mono text-zinc-500 bg-[#161b22] border border-[#30363d] px-1 rounded shrink-0">
+                          {pShortcut}
+                        </kbd>
                       )}
                     </button>
                   );
