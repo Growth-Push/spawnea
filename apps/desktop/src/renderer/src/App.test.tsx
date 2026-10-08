@@ -1969,6 +1969,46 @@ describe('App Desktop Shell', () => {
     });
   });
 
+  it('cycles in the visible order after changing host, project, and harness grouping', async () => {
+    const projects: Project[] = [
+      ...mockProjects,
+      { ...mockProjects[0], id: 'proj-3', name: 'Aardvark Tools' },
+      { ...mockProjects[1], id: 'proj-4', name: 'Zebra Tools' },
+    ];
+    const sessions: Session[] = [
+      { ...mockSessions[0], id: 'a', name: 'Alpha', serverId: 'srv-2', projectId: 'proj-2', agentId: 'agent-codex' },
+      { ...mockSessions[0], id: 'b', name: 'Bravo', serverId: 'srv-1', projectId: 'proj-1', agentId: 'agent-claude' },
+      { ...mockSessions[0], id: 'c', name: 'Charlie', serverId: 'srv-2', projectId: 'proj-4', agentId: 'agent-claude' },
+      { ...mockSessions[0], id: 'd', name: 'Delta', serverId: 'srv-1', projectId: 'proj-3', agentId: 'agent-codex' },
+    ];
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue(sessions),
+      listProjects: vi.fn().mockResolvedValue(projects),
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (4)')).toBeDefined());
+
+    const assertCycle = async (mode: 'host' | 'project' | 'harness', ids: string[]) => {
+      fireEvent.click(screen.getByTestId(`grouping-mode-${mode}`));
+      await waitFor(() => {
+        const renderedIds = Array.from(screen.getByTestId('session-list').querySelectorAll('[data-testid^="session-item-"]'))
+          .map((item) => item.getAttribute('data-testid')?.replace('session-item-', ''));
+        expect(renderedIds).toEqual(ids);
+      });
+
+      fireEvent.click(screen.getByTestId(`session-item-${ids[0]}`));
+      for (const id of [...ids.slice(1), ids[0]]) {
+        fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
+        await waitFor(() => expect(screen.getByTestId(`session-item-${id}`).getAttribute('aria-current')).toBe('page'));
+      }
+    };
+
+    await assertCycle('host', ['b', 'd', 'a', 'c']);
+    await assertCycle('project', ['d', 'b', 'a', 'c']);
+    await assertCycle('harness', ['b', 'c', 'a', 'd']);
+  });
+
   it('selects active session when clicked from a grouped view (FG-4.1.4, FG-4.1.5)', async () => {
     window.spawneaApi = createMockSpawneaApi();
 
@@ -2132,7 +2172,7 @@ describe('App Desktop Shell', () => {
     expect(ordered.map((s) => s.id)).toEqual(['p-b', 'c-b1', 'p-a', 'c-a1', 'c-a2']);
   });
 
-  it('navigates to the father session with Ctrl-4 and cycles father then children with Ctrl-Tab', async () => {
+  it('cycles through children only while their parent is expanded', async () => {
     const parent1: Session = {
       id: 'p-1',
       name: 'Session A',
@@ -2170,10 +2210,30 @@ describe('App Desktop Shell', () => {
       expect(screen.getByTestId('session-item-p-4').getAttribute('aria-current')).toBe('page');
     });
 
-    // Press Ctrl+Tab: MUST cycle to child 4-1 (first child of Delta Project 4)
+    // The fourth parent starts collapsed, so cycling wraps to the first parent.
+    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-p-1').getAttribute('aria-current')).toBe('page');
+    });
+
+    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true, shiftKey: true });
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-p-4').getAttribute('aria-current')).toBe('page');
+    });
+
+    fireEvent.click(screen.getByTestId('session-toggle-children-p-4'));
+    expect(screen.getByTestId('session-toggle-children-p-4').getAttribute('aria-expanded')).toBe('true');
+
     fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
     await waitFor(() => {
       expect(screen.getByTestId('session-item-c-4-1').getAttribute('aria-current')).toBe('page');
+    });
+
+    // Collapsing the currently active child skips its hidden row on the next cycle.
+    fireEvent.click(screen.getByTestId('session-toggle-children-p-4'));
+    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-p-1').getAttribute('aria-current')).toBe('page');
     });
   });
 

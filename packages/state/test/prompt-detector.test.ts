@@ -8,6 +8,22 @@ describe('prompt-detector', () => {
     expect(cleaned).toBe('✔ Success: Do you want to proceed? [y/N]');
   });
 
+  it('treats later agent activity as current after a failed background command', () => {
+    const tail = [
+      '● Background command "Set up screenshot capture" failed with exit code 144',
+      'Called chrome-devtools 2 times, ran 1 shell command',
+      '✽ Wibbling… (3m 52s · ↓ 8.8k tokens)',
+      '❯',
+      '⏵⏵ auto mode on · esc to interrupt',
+    ];
+
+    const result = detectPromptInTail(tail, { harness: 'zsh', tailLinesCount: 20 });
+
+    expect(result.kind).toBe('working');
+    expect(result.matchedRuleId).toBe('generic-agent-spinner-status');
+    expect(result.promptLine).toContain('Wibbling');
+  });
+
   it('detects confirmation prompts ([y/N], (y/n), proceed?)', () => {
     const tail1 = [
       'Applying database migrations...',

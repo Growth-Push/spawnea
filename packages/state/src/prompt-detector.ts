@@ -151,6 +151,37 @@ export function detectPromptInTail(
     return ruleHarness === targetHarness;
   });
 
+  // An agent can report a failed background command and then continue the
+  // task. Prefer that later live activity over the historical failure text.
+  const errorRules = applicableRules.filter((rule) => rule.category === 'error');
+  const workingRules = applicableRules.filter((rule) => rule.category === 'working');
+  let latestErrorIndex = -1;
+  let latestWorkingIndex = -1;
+  for (let i = 0; i < effectiveTailLines.length; i++) {
+    const line = effectiveTailLines[i];
+    if (errorRules.some((rule) => new RegExp(rule.pattern, 'i').test(line))) {
+      latestErrorIndex = i;
+    }
+    if (workingRules.some((rule) => new RegExp(rule.pattern, 'i').test(line))) {
+      latestWorkingIndex = i;
+    }
+  }
+  if (latestErrorIndex >= 0 && latestWorkingIndex > latestErrorIndex) {
+    const rule = workingRules.find((candidate) =>
+      new RegExp(candidate.pattern, 'i').test(effectiveTailLines[latestWorkingIndex])
+    );
+    if (rule) {
+      return {
+        isPrompt: false,
+        kind: 'working',
+        promptLine: effectiveTailLines[latestWorkingIndex].trim(),
+        matchedRuleId: rule.id,
+        matchedPattern: new RegExp(rule.pattern, 'i').source,
+        confidence: rule.confidence ?? 0.85,
+      };
+    }
+  }
+
   // Evaluate in priority order: confirmation -> choice -> question -> working -> error -> idle_prompt -> shell_prompt
   const categoriesInPriority: RuleCategory[] = [
     'confirmation',

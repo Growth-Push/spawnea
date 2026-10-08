@@ -443,4 +443,12 @@ export const DEFAULT_PATTERN_RULES: PatternRule[] = [
     confidence: 0.9,
     description: 'Matches active agent status verbs like generating, reading file, working',
   },
+  {
+    id: 'generic-agent-spinner-status',
+    name: 'Agent Spinner Status',
+    category: 'working',
+    pattern: /(?:^|\n)\s*[✻✽]\s+[A-Za-z][A-Za-z -]*…/,
+    confidence: 0.9,
+    description: 'Matches active agent spinner status lines',
+  },
 ];

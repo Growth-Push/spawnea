@@ -153,6 +153,7 @@ interface SidebarProps {
   gitChangeCountBySessionId?: Record<string, number>;
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
+  onVisibleSessionIdsChange?: (ids: string[]) => void;
   onOpenCreateModal: () => void;
   onOpenCreateChildModal?: (parentSessionId?: string) => void;
   onOpenNewProject?: () => void;
@@ -345,6 +346,7 @@ export function Sidebar({
   gitChangeCountBySessionId = {},
   activeSessionId,
   onSelectSession,
+  onVisibleSessionIdsChange,
   onOpenCreateModal,
   onOpenCreateChildModal,
   onOpenNewProject,
@@ -731,6 +733,26 @@ export function Sidebar({
     sessionLayoutPreference,
     visibleSessions.length
   );
+
+  // Keep keyboard cycling aligned with the child rows currently shown in the sidebar.
+  const hasChildFilter = Boolean(normalizedSearchTerm || statusFilter !== 'all');
+  const keyboardSessionIds = visibleSessions.flatMap((parent) => {
+    const children = childrenByParentId.get(parent.id) || [];
+    const matchingChildren = hasChildFilter
+      ? children.filter((child) =>
+          sessionMatchesStatus(child) &&
+          (!normalizedSearchTerm || sessionMatchesSearch(child, normalizedSearchTerm))
+        )
+      : children;
+    const showChildren = isCollapsed || isDenseLayout || expandedParents.has(parent.id) ||
+      (hasChildFilter && matchingChildren.length > 0);
+    return [parent.id, ...(showChildren ? matchingChildren.map((child) => child.id) : [])];
+  });
+  const keyboardSessionIdsKey = JSON.stringify(keyboardSessionIds);
+
+  useEffect(() => {
+    onVisibleSessionIdsChange?.(JSON.parse(keyboardSessionIdsKey) as string[]);
+  }, [keyboardSessionIdsKey, onVisibleSessionIdsChange]);
   const [denseHoveredSessionId, setDenseHoveredSessionId] = useState<string | null>(null);
   const [denseFocusedSessionId, setDenseFocusedSessionId] = useState<string | null>(null);
 

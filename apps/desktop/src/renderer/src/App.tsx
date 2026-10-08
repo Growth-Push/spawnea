@@ -60,7 +60,7 @@ function readStoredUiZoom(): number {
 }
 
 /**
- * Orders sessions hierarchically for keyboard cycling (Ctrl-Tab / Ctrl-Shift-Tab):
+ * Orders sessions hierarchically:
  * Root (father) session first, immediately followed by its children in order (child-1, child-2, ..., child-N).
  */
 export function getHierarchicalSessionOrder(sessions: Session[]): Session[] {
@@ -112,6 +112,7 @@ export function getHierarchicalSessionOrder(sessions: Session[]): Session[] {
 
 export function App(): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [visibleSessionIds, setVisibleSessionIds] = useState<string[]>([]);
   const [servers, setServers] = useState<Server[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -1129,17 +1130,22 @@ export function App(): React.JSX.Element {
         .filter((s) => !s.parentSessionId)
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
 
-      // Hierarchical ordered list for Ctrl-Tab / Ctrl-Shift-Tab cycling: father first, then children in order
-      const cyclingSessions = getHierarchicalSessionOrder(sessions);
-
-      if (cyclingSessions.length === 0) return;
+      // Cycle through the entries the sidebar currently exposes.
+      const cyclingSessions = visibleSessionIds
+        .map((id) => sessions.find((session) => session.id === id))
+        .filter((session): session is Session => Boolean(session));
 
       // 4. Handle Ctrl+Tab / Ctrl+Shift+Tab
       if (e.key === 'Tab') {
+        if (cyclingSessions.length === 0) return;
         e.preventDefault();
         e.stopPropagation();
 
-        const currentIndex = cyclingSessions.findIndex((s) => s.id === activeSessionId);
+        const activeSession = sessions.find((session) => session.id === activeSessionId);
+        const currentId = cyclingSessions.some((session) => session.id === activeSessionId)
+          ? activeSessionId
+          : activeSession?.parentSessionId;
+        const currentIndex = cyclingSessions.findIndex((session) => session.id === currentId);
         if (e.shiftKey) {
           // Previous session
           const prevIndex = currentIndex <= 0 ? cyclingSessions.length - 1 : currentIndex - 1;
@@ -1178,7 +1184,7 @@ export function App(): React.JSX.Element {
 
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [sessions, activeSessionId, handleTabChange]);
+  }, [sessions, visibleSessionIds, activeSessionId, handleTabChange]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
   const activeServer = activeSession ? servers.find((s) => s.id === activeSession.serverId) : undefined;
@@ -1268,6 +1274,7 @@ export function App(): React.JSX.Element {
         gitChangeCountBySessionId={gitChangeCountBySessionId}
         activeSessionId={activeSessionId}
         onSelectSession={setActiveSessionId}
+        onVisibleSessionIdsChange={setVisibleSessionIds}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
         onOpenCreateChildModal={(parentId) => {
           const target = (parentId ? sessions.find((s) => s.id === parentId) : null) ||
