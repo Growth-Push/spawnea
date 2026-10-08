@@ -14,291 +14,54 @@ import {
   FolderGit2,
   Sparkles,
   ChevronDown,
+  Search,
 } from 'lucide-react';
-import { AgentIcon } from './AgentIcon';
+import { AgentIcon, detectProviderType, getProviderDisplayName, type ProviderType } from './AgentIcon';
 import { OsIcon } from './OsIcon';
 
 const NUMBER_SHORTCUTS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
-
-interface IconSelectOption {
-  value: string;
-  label: string;
-  detail?: string;
-  icon: React.ReactNode;
-  shortcut?: string;
-}
-
-interface IconSelectProps {
-  id: string;
-  value: string;
-  options: IconSelectOption[];
-  disabled?: boolean;
-  emptyLabel: string;
-  onChange: (value: string) => void;
-  triggerRef?: React.Ref<HTMLButtonElement>;
-  autoFocus?: boolean;
-  onSpecialKey?: (key: string) => boolean | void;
-}
-
-/** A native-select-compatible picker with rich keyboard navigation (arrows, enter, 1..0 keys). */
-function IconSelect({
-  id,
-  value,
-  options,
-  disabled = false,
-  emptyLabel,
-  onChange,
-  triggerRef,
-  autoFocus = false,
-  onSpecialKey,
-}: IconSelectProps): React.JSX.Element {
-  const [isOpen, setIsOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  const setTriggerRef = useCallback(
-    (el: HTMLButtonElement | null) => {
-      buttonRef.current = el;
-      if (!triggerRef) return;
-      if (typeof triggerRef === 'function') {
-        triggerRef(el);
-      } else {
-        (triggerRef as React.MutableRefObject<HTMLButtonElement | null>).current = el;
-      }
-    },
-    [triggerRef]
-  );
-
-  const selectedIndex = options.findIndex((option) => option.value === value);
-  const [highlightedIndex, setHighlightedIndex] = useState<number>(selectedIndex >= 0 ? selectedIndex : 0);
-  const selected = options.find((option) => option.value === value);
-
-  useEffect(() => {
-    const idx = options.findIndex((option) => option.value === value);
-    setHighlightedIndex(idx >= 0 ? idx : 0);
-  }, [value, options]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', handlePointerDown);
-    return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (isOpen && listRef.current) {
-      const activeEl = listRef.current.querySelector<HTMLElement>(`[data-index="${highlightedIndex}"]`);
-      activeEl?.scrollIntoView?.({ block: 'nearest' });
-    }
-  }, [isOpen, highlightedIndex]);
-
-  const selectOption = useCallback(
-    (optionValue: string) => {
-      onChange(optionValue);
-      setIsOpen(false);
-      buttonRef.current?.focus();
-    },
-    [onChange]
-  );
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (disabled || options.length === 0) return;
-
-    if (e.key === 'Escape' && isOpen) {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsOpen(false);
-      return;
-    }
-
-    if (e.ctrlKey || e.metaKey || e.altKey) {
-      return;
-    }
-
-    if (onSpecialKey && onSpecialKey(e.key)) {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsOpen(false);
-      return;
-    }
-
-    const numIdx = NUMBER_SHORTCUTS.indexOf(e.key);
-    if (numIdx !== -1 && numIdx < options.length) {
-      const targetOption = options[numIdx];
-      if (!targetOption.shortcut || targetOption.shortcut === NUMBER_SHORTCUTS[numIdx]) {
-        e.preventDefault();
-        e.stopPropagation();
-        selectOption(targetOption.value);
-        return;
-      }
-    }
-
-    const shortcutMatch = options.find(
-      (opt) => opt.shortcut && opt.shortcut.toLowerCase() === e.key.toLowerCase()
-    );
-    if (shortcutMatch) {
-      e.preventDefault();
-      e.stopPropagation();
-      selectOption(shortcutMatch.value);
-      return;
-    }
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      if (!isOpen) {
-        setIsOpen(true);
-        const idx = options.findIndex((opt) => opt.value === value);
-        setHighlightedIndex(idx >= 0 ? idx : 0);
-      } else {
-        setHighlightedIndex((prev) => Math.min(prev + 1, options.length - 1));
-      }
-      return;
-    }
-
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (!isOpen) {
-        setIsOpen(true);
-        const idx = options.findIndex((opt) => opt.value === value);
-        setHighlightedIndex(idx >= 0 ? idx : 0);
-      } else {
-        setHighlightedIndex((prev) => Math.max(prev - 1, 0));
-      }
-      return;
-    }
-
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      e.stopPropagation();
-      if (isOpen) {
-        if (options[highlightedIndex]) {
-          selectOption(options[highlightedIndex].value);
-        }
-      } else {
-        setIsOpen(true);
-        const idx = options.findIndex((opt) => opt.value === value);
-        setHighlightedIndex(idx >= 0 ? idx : 0);
-      }
-      return;
-    }
-  };
-
-  const handleBlur = (e: React.FocusEvent) => {
-    if (!rootRef.current?.contains(e.relatedTarget as Node)) {
-      setIsOpen(false);
-    }
-  };
-
-  return (
-    <div ref={rootRef} onBlur={handleBlur} className="relative">
-      <select
-        data-testid={id}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        disabled={disabled}
-        aria-hidden="true"
-        tabIndex={-1}
-        className="sr-only"
-      >
-        {options.length === 0 ? (
-          <option value="">{emptyLabel}</option>
-        ) : (
-          options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))
-        )}
-      </select>
-
-      <button
-        ref={setTriggerRef}
-        type="button"
-        data-testid={`${id}-trigger`}
-        aria-haspopup="listbox"
-        aria-expanded={isOpen}
-        disabled={disabled}
-        autoFocus={autoFocus}
-        onKeyDown={handleKeyDown}
-        onClick={() => {
-          if (options.length === 0) return;
-          if (!isOpen) {
-            const idx = options.findIndex((opt) => opt.value === value);
-            setHighlightedIndex(idx >= 0 ? idx : 0);
-          }
-          setIsOpen((open) => !open);
-        }}
-        className="w-full min-h-[38px] px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200 focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 text-left"
-      >
-        {selected ? (
-          <>
-            {selected.icon}
-            <span className="truncate flex-1">{selected.label}</span>
-          </>
-        ) : (
-          <span className="text-zinc-500 flex-1">{emptyLabel}</span>
-        )}
-        <ChevronDown className={`w-3.5 h-3.5 text-zinc-500 shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-      </button>
-
-      {isOpen && options.length > 0 && (
-        <div
-          ref={listRef}
-          role="listbox"
-          aria-label={id}
-          className="absolute left-0 right-0 top-[calc(100%+4px)] z-20 max-h-56 overflow-y-auto rounded-lg border border-[#30363d] bg-[#161b22] p-1 shadow-2xl"
-        >
-          {options.map((option, index) => {
-            const isSelected = option.value === value;
-            const isHighlighted = index === highlightedIndex;
-            const shortcutBadge = option.shortcut || (index < 10 ? NUMBER_SHORTCUTS[index] : null);
-
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="option"
-                tabIndex={-1}
-                data-index={index}
-                aria-selected={isSelected}
-                onMouseEnter={() => setHighlightedIndex(index)}
-                onClick={() => selectOption(option.value)}
-                className={`w-full flex items-center gap-2 rounded-md px-2 py-2 text-left transition-colors cursor-pointer ${
-                  isHighlighted
-                    ? isSelected
-                      ? 'bg-emerald-500/20 text-emerald-200'
-                      : 'bg-[#21262d] text-zinc-100'
-                    : isSelected
-                      ? 'bg-emerald-500/10 text-emerald-300'
-                      : 'text-zinc-200 hover:bg-[#21262d]'
-                }`}
-              >
-                {option.icon}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs">{option.label}</span>
-                  {option.detail && <span className="block truncate text-[10px] text-zinc-500">{option.detail}</span>}
-                </span>
-                {shortcutBadge && (
-                  <kbd className="text-[10px] font-mono text-zinc-400 bg-[#0d1117] border border-[#30363d] px-1.5 py-0.5 rounded shrink-0">
-                    {shortcutBadge}
-                  </kbd>
-                )}
-                {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export const NEW_PROJECT_OPTION_VALUE = '__new_project__';
+
+const CANONICAL_PROVIDER_ORDER: (ProviderType | 'shell')[] = [
+  'codex',
+  'claude',
+  'hermes',
+  'antigravity',
+  'grok',
+  'deepseek',
+  'gemini',
+  'copilot',
+  'cursor',
+  'generic',
+  'shell',
+];
+
+export function getAgentProvider(agent: Agent): ProviderType | 'shell' {
+  if (
+    agent.harness === 'shell' ||
+    agent.id.endsWith(':shell') ||
+    agent.id === 'agent-shell' ||
+    agent.name.toLowerCase().includes('shell')
+  ) {
+    return 'shell';
+  }
+  const detected = detectProviderType(agent.harness, agent.name, agent.command);
+  if (detected === 'none') {
+    return 'shell';
+  }
+  return detected;
+}
+
+export function isLocalHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return (
+    normalized === 'localhost' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::1' ||
+    normalized === '' ||
+    normalized.startsWith('127.')
+  );
+}
 
 interface CreateSessionModalProps {
   isOpen: boolean;
@@ -327,7 +90,7 @@ export function CreateSessionModal({
   createdProject,
   hasChildModalOpen = false,
 }: CreateSessionModalProps): React.JSX.Element | null {
-  const [serverId, setServerId] = useState<string>('');
+  const [serverId, setServerId] = useState<string>(() => servers[0]?.id || '');
   const [projectId, setProjectId] = useState<string>('');
   const [agentId, setAgentId] = useState<string>('');
   const [task, setTask] = useState<string>('');
@@ -337,7 +100,16 @@ export function CreateSessionModal({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Project Combobox state
+  const [projectSearchQuery, setProjectSearchQuery] = useState<string>('');
+  const [isProjectOpen, setIsProjectOpen] = useState<boolean>(false);
+  const [highlightedProjectIdx, setHighlightedProjectIdx] = useState<number>(0);
+
   const serverTriggerRef = useRef<HTMLButtonElement>(null);
+  const projectInputRef = useRef<HTMLInputElement>(null);
+  const projectComboboxRef = useRef<HTMLDivElement>(null);
+  const projectListRef = useRef<HTMLDivElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
 
   // Host connectivity testing state (FG-1.2, FG-2.1)
   const [hostTestStatus, setHostTestStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
@@ -376,13 +148,19 @@ export function CreateSessionModal({
   }, []);
 
   const lastConsumedCreatedProjectRef = useRef<string | null>(null);
-  const modalRef = useRef<HTMLDivElement>(null);
 
-  // Escape key to dismiss modal
+  // Escape key to dismiss modal or close open combobox
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !isSubmitting && !hasChildModalOpen) {
+        if (isProjectOpen) {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsProjectOpen(false);
+          setProjectSearchQuery('');
+          return;
+        }
         if (modalRef.current?.querySelector('[role="listbox"]')) {
           return;
         }
@@ -393,9 +171,30 @@ export function CreateSessionModal({
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [isOpen, isSubmitting, hasChildModalOpen, onClose]);
+  }, [isOpen, isSubmitting, hasChildModalOpen, isProjectOpen, onClose]);
 
-  // Reset dialog state only when it opens, preserving choices on catalog refresh.
+  // Click outside project combobox dropdown
+  useEffect(() => {
+    if (!isProjectOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        !projectComboboxRef.current?.contains(event.target as Node) &&
+        !projectListRef.current?.contains(event.target as Node)
+      ) {
+        setIsProjectOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [isProjectOpen]);
+
+  const effectiveServerId = useMemo(() => {
+    return serverId && servers.some((s) => s.id === serverId)
+      ? serverId
+      : servers[0]?.id || '';
+  }, [serverId, servers]);
+
+  // Reset dialog state only when it opens
   useEffect(() => {
     if (!isOpen) return;
     setIsCustomTask(false);
@@ -404,39 +203,54 @@ export function CreateSessionModal({
     setError(null);
     setHostTestStatus('idle');
     setHostTestResult(null);
+    setIsProjectOpen(false);
+    setProjectSearchQuery('');
+    serverTriggerRef.current?.focus();
     const timer = setTimeout(() => serverTriggerRef.current?.focus(), 0);
     return () => clearTimeout(timer);
   }, [isOpen]);
 
+  // Focus host trigger whenever modal opens or active host changes
+  useEffect(() => {
+    if (isOpen) {
+      serverTriggerRef.current?.focus();
+      const timer = setTimeout(() => {
+        serverTriggerRef.current?.focus();
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, effectiveServerId]);
+
   // Synchronize selections when modal opens or lists change.
   useEffect(() => {
     if (isOpen) {
-      const initialServerId = servers.length > 0 ? (serverId && servers.some((s) => s.id === serverId) ? serverId : servers[0].id) : '';
-      if (initialServerId && initialServerId !== serverId) {
-        setServerId(initialServerId);
-      }
-      if (agents.length > 0 && (!agentId || !agents.some((a) => a.id === agentId))) {
-        setAgentId(agents[0].id);
+      if (effectiveServerId && effectiveServerId !== serverId) {
+        setServerId(effectiveServerId);
       }
     }
-  }, [isOpen, servers, agents]);
+  }, [isOpen, effectiveServerId, serverId]);
 
-  // Memoize project & agent selections when server changes
+  // Available projects for currently selected server
   const availableProjects = useMemo(() => {
     return projects
-      .filter((p) => !serverId || p.serverId === serverId)
+      .filter((p) => !effectiveServerId || p.serverId === effectiveServerId)
       .sort((a, b) => {
         const byName = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
         return byName !== 0 ? byName : a.id.localeCompare(b.id);
       });
-  }, [projects, serverId]);
+  }, [projects, effectiveServerId]);
 
+  // Auto-select created project if signaled
   useEffect(() => {
     if (!createdProject) return;
     const projectKey = `${createdProject.serverId}:${createdProject.projectId}`;
     if (lastConsumedCreatedProjectRef.current === projectKey) return;
 
-    if (createdProject.serverId && createdProject.serverId !== serverId && servers.some((s) => s.id === createdProject.serverId)) {
+    if (
+      createdProject.serverId &&
+      createdProject.serverId !== effectiveServerId &&
+      servers.some((s) => s.id === createdProject.serverId)
+    ) {
       setServerId(createdProject.serverId);
     }
 
@@ -448,11 +262,12 @@ export function CreateSessionModal({
       setProjectId(fullId);
       lastConsumedCreatedProjectRef.current = projectKey;
     }
-  }, [createdProject, serverId, servers, availableProjects]);
+  }, [createdProject, effectiveServerId, servers, availableProjects]);
 
+  // Available agents: filter by server and order harnesses so shell is last
   const availableAgents = useMemo(() => {
     return agents
-      .filter((a) => !serverId || !a.id.includes(':') || a.id.startsWith(`${serverId}:`))
+      .filter((a) => !effectiveServerId || !a.id.includes(':') || a.id.startsWith(`${effectiveServerId}:`))
       .sort((a, b) => {
         const aIsShell = a.harness === 'shell' || a.id.endsWith(':shell') || a.id === 'agent-shell';
         const bIsShell = b.harness === 'shell' || b.id.endsWith(':shell') || b.id === 'agent-shell';
@@ -460,8 +275,9 @@ export function CreateSessionModal({
         if (!aIsShell && bIsShell) return -1;
         return 0;
       });
-  }, [agents, serverId]);
+  }, [agents, effectiveServerId]);
 
+  // Keep project selection valid
   useEffect(() => {
     if (availableProjects.length > 0) {
       if (!projectId || !availableProjects.some((p) => p.id === projectId)) {
@@ -470,8 +286,9 @@ export function CreateSessionModal({
     } else {
       setProjectId('');
     }
-  }, [serverId, availableProjects, projectId]);
+  }, [availableProjects, projectId]);
 
+  // Keep agent selection valid
   useEffect(() => {
     if (availableAgents.length > 0) {
       if (!agentId || !availableAgents.some((a) => a.id === agentId)) {
@@ -480,9 +297,64 @@ export function CreateSessionModal({
     } else {
       setAgentId('');
     }
-  }, [serverId, availableAgents, agentId]);
+  }, [availableAgents, agentId]);
 
-  // Auto-generate task description from current project & agent selection if not manually overridden
+  // Two-tier agent grouping
+  const groupedAgents = useMemo(() => {
+    const map = new Map<string, Agent[]>();
+    for (const a of availableAgents) {
+      const key = getAgentProvider(a);
+      const list = map.get(key) || [];
+      list.push(a);
+      map.set(key, list);
+    }
+    return map;
+  }, [availableAgents]);
+
+  const orderedProviders = useMemo(() => {
+    const seen = new Set<string>();
+    const order: string[] = [];
+    for (const a of availableAgents) {
+      const p = getAgentProvider(a);
+      if (p !== 'shell' && !seen.has(p)) {
+        seen.add(p);
+        order.push(p);
+      }
+    }
+    if (availableAgents.some((a) => getAgentProvider(a) === 'shell')) {
+      order.push('shell');
+    }
+    return order;
+  }, [availableAgents]);
+
+  const currentAgent = useMemo(() => {
+    return availableAgents.find((a) => a.id === agentId) || availableAgents[0];
+  }, [availableAgents, agentId]);
+
+  const selectedProvider = useMemo(() => {
+    if (currentAgent) {
+      return getAgentProvider(currentAgent);
+    }
+    return orderedProviders[0] || 'shell';
+  }, [currentAgent, orderedProviders]);
+
+  const currentProviderAgents = useMemo(() => {
+    return groupedAgents.get(selectedProvider) || [];
+  }, [groupedAgents, selectedProvider]);
+
+  const handleSelectProvider = useCallback(
+    (pKey: string) => {
+      const agentsInGroup = groupedAgents.get(pKey) || [];
+      if (agentsInGroup.length > 0) {
+        if (!agentsInGroup.some((a) => a.id === agentId)) {
+          setAgentId(agentsInGroup[0].id);
+        }
+      }
+    },
+    [groupedAgents, agentId]
+  );
+
+  // Auto-generate task description from current selection
   useEffect(() => {
     if (!isCustomTask) {
       const proj = availableProjects.find((p) => p.id === projectId) || projects.find((p) => p.id === projectId);
@@ -497,6 +369,14 @@ export function CreateSessionModal({
     }
   }, [projectId, agentId, isCustomTask, availableProjects, availableAgents, projects, agents]);
 
+  // Project base branch
+  useEffect(() => {
+    const selectedProj = projects.find((project) => project.id === projectId);
+    if (selectedProj?.baseBranch) {
+      setBaseBranch(selectedProj.baseBranch);
+    }
+  }, [projectId, projects]);
+
   // If the selected project does not support worktree, turn it off
   useEffect(() => {
     if (!projectId) {
@@ -504,7 +384,9 @@ export function CreateSessionModal({
       return;
     }
     const proj = projects.find((p) => p.id === projectId);
-    const catHost = catalog?.hosts[serverId] || (serverId ? Object.values(catalog?.hosts || {}).find((h) => h.name === serverId) : undefined);
+    const catHost =
+      catalog?.hosts[serverId] ||
+      (serverId ? Object.values(catalog?.hosts || {}).find((h) => h.name === serverId) : undefined);
     const catProj = catHost?.projects
       ? Object.entries(catHost.projects).find(
           ([key, p]) => key === projectId || `${serverId}:${key}` === projectId || p.path === proj?.rootPath
@@ -516,65 +398,218 @@ export function CreateSessionModal({
     }
   }, [projectId, serverId, catalog, projects]);
 
-  const projectOptions = useMemo<IconSelectOption[]>(() => {
-    const items: IconSelectOption[] = availableProjects.map((p) => ({
+  // Filtered projects for searchable combobox
+  const filteredProjects = useMemo(() => {
+    if (!projectSearchQuery.trim()) return availableProjects;
+    const q = projectSearchQuery.toLowerCase().trim();
+    return availableProjects.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.rootPath.toLowerCase().includes(q)
+    );
+  }, [availableProjects, projectSearchQuery]);
+
+  interface ProjectOptionItem {
+    value: string;
+    label: string;
+    detail?: string;
+    icon: React.ReactNode;
+    shortcut?: string;
+  }
+
+  const projectComboboxOptions = useMemo<ProjectOptionItem[]>(() => {
+    const items: ProjectOptionItem[] = filteredProjects.map((p) => ({
       value: p.id,
       label: p.name,
       detail: p.rootPath,
-      icon: <FolderGit2 className="w-4 h-4 text-zinc-400" />,
+      icon: <FolderGit2 className="w-4 h-4 text-zinc-400 shrink-0" />,
     }));
     if (onOpenNewProject) {
       items.push({
         value: NEW_PROJECT_OPTION_VALUE,
         label: '+ New Project...',
         detail: 'Register or clone a repository on this host',
-        icon: <Sparkles className="w-4 h-4 text-emerald-400" />,
+        icon: <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />,
         shortcut: 'N',
       });
     }
     return items;
-  }, [availableProjects, onOpenNewProject]);
+  }, [filteredProjects, onOpenNewProject]);
 
-  const handleProjectChange = useCallback(
+  // Scroll active item into view in project list
+  useEffect(() => {
+    if (isProjectOpen && projectListRef.current) {
+      const activeEl = projectListRef.current.querySelector<HTMLElement>(`[data-index="${highlightedProjectIdx}"]`);
+      activeEl?.scrollIntoView?.({ block: 'nearest' });
+    }
+  }, [isProjectOpen, highlightedProjectIdx]);
+
+  const handleProjectSelect = useCallback(
     (newVal: string) => {
       if (newVal === NEW_PROJECT_OPTION_VALUE) {
+        setIsProjectOpen(false);
+        setProjectSearchQuery('');
         onOpenNewProject?.(serverId);
         return;
       }
       setProjectId(newVal);
+      setIsProjectOpen(false);
+      setProjectSearchQuery('');
     },
     [onOpenNewProject, serverId]
   );
 
-  const handleProjectSpecialKey = useCallback(
-    (key: string) => {
-      if (key.toLowerCase() === 'n' && onOpenNewProject) {
-        onOpenNewProject(serverId);
-        return true;
-      }
-      return false;
-    },
-    [onOpenNewProject, serverId]
-  );
-
-  useEffect(() => {
-    const selectedProject = projects.find((project) => project.id === projectId);
-    if (selectedProject?.baseBranch) {
-      setBaseBranch(selectedProject.baseBranch);
-    }
-  }, [projectId, projects]);
-
-  const handleServerChange = (newServerId: string) => {
+  const handleServerChange = useCallback((newServerId: string) => {
     setServerId(newServerId);
     setHostTestStatus('idle');
     setHostTestResult(null);
-  };
+  }, []);
+
+  const handleHostKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>, currentIdx: number) => {
+      if (servers.length === 0) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const numIdx = NUMBER_SHORTCUTS.indexOf(e.key);
+      if (numIdx !== -1 && numIdx < servers.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleServerChange(servers[numIdx].id);
+        return;
+      }
+
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const nextIdx = (currentIdx + 1) % servers.length;
+        handleServerChange(servers[nextIdx].id);
+        return;
+      }
+
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prevIdx = (currentIdx - 1 + servers.length) % servers.length;
+        handleServerChange(servers[prevIdx].id);
+        return;
+      }
+
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handleServerChange(servers[currentIdx].id);
+      }
+    },
+    [servers, handleServerChange]
+  );
+
+  const handleProjectKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      // 'n' or 'N' shortcut to trigger + New Project...
+      if (e.key.toLowerCase() === 'n' && onOpenNewProject) {
+        if (!projectSearchQuery || projectComboboxOptions[highlightedProjectIdx]?.value === NEW_PROJECT_OPTION_VALUE) {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsProjectOpen(false);
+          setProjectSearchQuery('');
+          onOpenNewProject(serverId);
+          return;
+        }
+      }
+
+      // 1..0 number shortcuts
+      const numIdx = NUMBER_SHORTCUTS.indexOf(e.key);
+      if (numIdx !== -1 && numIdx < projectComboboxOptions.length && !projectSearchQuery) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleProjectSelect(projectComboboxOptions[numIdx].value);
+        return;
+      }
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (!isProjectOpen) {
+          setIsProjectOpen(true);
+          const currentIdx = projectComboboxOptions.findIndex((opt) => opt.value === projectId);
+          setHighlightedProjectIdx(currentIdx >= 0 ? currentIdx : 0);
+        } else {
+          setHighlightedProjectIdx((prev) => Math.min(prev + 1, projectComboboxOptions.length - 1));
+        }
+        return;
+      }
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!isProjectOpen) {
+          setIsProjectOpen(true);
+          const currentIdx = projectComboboxOptions.findIndex((opt) => opt.value === projectId);
+          setHighlightedProjectIdx(currentIdx >= 0 ? currentIdx : 0);
+        } else {
+          setHighlightedProjectIdx((prev) => Math.max(prev - 1, 0));
+        }
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (isProjectOpen && projectComboboxOptions[highlightedProjectIdx]) {
+          handleProjectSelect(projectComboboxOptions[highlightedProjectIdx].value);
+        } else {
+          setIsProjectOpen(true);
+        }
+        return;
+      }
+
+      if (e.key === 'Escape' && isProjectOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsProjectOpen(false);
+        setProjectSearchQuery('');
+        return;
+      }
+    },
+    [
+      onOpenNewProject,
+      serverId,
+      projectSearchQuery,
+      projectComboboxOptions,
+      highlightedProjectIdx,
+      isProjectOpen,
+      projectId,
+      handleProjectSelect,
+    ]
+  );
+
+  const handleProviderKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>, currentIdx: number) => {
+      if (orderedProviders.length === 0) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const numIdx = NUMBER_SHORTCUTS.indexOf(e.key);
+      if (numIdx !== -1 && numIdx < availableAgents.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        setAgentId(availableAgents[numIdx].id);
+        return;
+      }
+
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const nextIdx = (currentIdx + 1) % orderedProviders.length;
+        handleSelectProvider(orderedProviders[nextIdx]);
+        return;
+      }
+
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prevIdx = (currentIdx - 1 + orderedProviders.length) % orderedProviders.length;
+        handleSelectProvider(orderedProviders[prevIdx]);
+        return;
+      }
+    },
+    [orderedProviders, handleSelectProvider]
+  );
 
   const handleTaskChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setTask(val);
-    // Any direct edit is intentional, including clearing the field. Keep it blank
-    // until the user explicitly chooses "Use default name".
     setIsCustomTask(true);
   };
 
@@ -595,7 +630,9 @@ export function CreateSessionModal({
 
   const selectedProject = projects.find((p) => p.id === projectId);
 
-  const catalogHost = catalog?.hosts[serverId] || (serverId ? Object.values(catalog?.hosts || {}).find((h) => h.name === serverId) : undefined);
+  const catalogHost =
+    catalog?.hosts[serverId] ||
+    (serverId ? Object.values(catalog?.hosts || {}).find((h) => h.name === serverId) : undefined);
   const catalogProject = catalogHost?.projects
     ? Object.entries(catalogHost.projects).find(
         ([key, p]) => key === projectId || `${serverId}:${key}` === projectId || p.path === selectedProject?.rootPath
@@ -604,11 +641,13 @@ export function CreateSessionModal({
 
   const isWorktreeConfigured = Boolean(catalogProject?.worktree?.enabled);
 
-  const slug = task
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .substring(0, 30) || 'task';
+  // Slugification rule: lowercase, hyphens, alphanumeric only, max 30 chars
+  const slug =
+    task
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .substring(0, 30) || 'task';
 
   const previewBasePath = selectedProject ? selectedProject.rootPath : `/workspace/code`;
   const previewWorktreePath = `${previewBasePath}__worktrees/${slug}`;
@@ -647,7 +686,7 @@ export function CreateSessionModal({
         projectId,
         agentId,
         task: task.trim(),
-        baseBranch: isEffectiveWorktree ? (baseBranch.trim() || undefined) : undefined,
+        baseBranch: isEffectiveWorktree ? baseBranch.trim() || undefined : undefined,
         useWorktree: isEffectiveWorktree,
       });
       // Reset form
@@ -669,9 +708,9 @@ export function CreateSessionModal({
       aria-labelledby="modal-title"
       className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
     >
-      <div className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col">
+      <div className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Modal Header */}
-        <div className="h-14 px-5 border-b border-[#30363d] flex items-center justify-between bg-[#12161c]">
+        <div className="h-14 px-5 border-b border-[#30363d] flex items-center justify-between bg-[#12161c] shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 rounded-md bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
               <Terminal className="w-3.5 h-3.5" />
@@ -688,7 +727,7 @@ export function CreateSessionModal({
         </div>
 
         {/* Modal Form Body */}
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto">
           {error && (
             <div
               data-testid="create-session-error-banner"
@@ -702,108 +741,459 @@ export function CreateSessionModal({
             </div>
           )}
 
-          {/* Grid Selection: Server & Project */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1">
-                  <ServerIcon className="w-3 h-3 text-zinc-400" />
-                  <span>Target Host</span>
-                </label>
-                {/* Host connection indicator & Test button */}
-                {serverId && (
-                  <div className="flex items-center gap-1.5 text-[10px]">
-                    {hostTestStatus === 'testing' && (
-                      <span className="flex items-center gap-1 text-yellow-400 font-mono">
-                        <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                        Testing...
-                      </span>
-                    )}
-                    {hostTestStatus === 'success' && (
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          data-testid="host-status-connected"
-                          className="flex items-center gap-1 text-emerald-400 font-mono"
-                          title={hostTestResult?.details || 'Host reachable'}
-                        >
-                          <CheckCircle2 className="w-2.5 h-2.5" />
-                          Connected
-                        </span>
-                        <button
-                          type="button"
-                          data-testid="test-host-button"
-                          onClick={() => testHostConnection(serverId)}
-                          className="flex items-center gap-0.5 text-zinc-400 hover:text-emerald-300 font-mono transition-colors cursor-pointer px-1 py-0.5 bg-[#21262d] rounded border border-[#30363d]"
-                          title="Click to test connection again on demand"
-                        >
-                          <RefreshCw className="w-2.5 h-2.5" />
-                          <span>Test</span>
-                        </button>
-                      </div>
-                    )}
-                    {hostTestStatus === 'failed' && (
-                      <button
-                        type="button"
-                        data-testid="retry-host-test"
-                        onClick={() => testHostConnection(serverId)}
-                        className="flex items-center gap-1 text-rose-400 hover:text-rose-300 font-mono cursor-pointer px-1.5 py-0.5 bg-rose-950/40 rounded border border-rose-500/30"
-                        title={hostTestResult?.error || 'Connection failed'}
+          {/* Target Host Selection (1-click segmented pill picker) */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                <ServerIcon className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Target Host</span>
+              </label>
+
+              {/* Host connection indicator & Test button */}
+              {serverId && (
+                <div className="flex items-center gap-1.5 text-[10px]">
+                  {hostTestStatus === 'testing' && (
+                    <span className="flex items-center gap-1 text-yellow-400 font-mono">
+                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                      Testing...
+                    </span>
+                  )}
+                  {hostTestStatus === 'success' && (
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        data-testid="host-status-connected"
+                        className="flex items-center gap-1 text-emerald-400 font-mono"
+                        title={hostTestResult?.details || 'Host reachable'}
                       >
-                        <RefreshCw className="w-2.5 h-2.5" />
-                        <span>Retry Test</span>
-                      </button>
-                    )}
-                    {hostTestStatus === 'idle' && (
+                        <CheckCircle2 className="w-2.5 h-2.5" />
+                        Connected
+                      </span>
                       <button
                         type="button"
                         data-testid="test-host-button"
                         onClick={() => testHostConnection(serverId)}
-                        className="flex items-center gap-1 text-zinc-400 hover:text-emerald-400 font-mono cursor-pointer px-1.5 py-0.5 bg-[#21262d] rounded border border-[#30363d]"
+                        className="flex items-center gap-0.5 text-zinc-400 hover:text-emerald-300 font-mono transition-colors cursor-pointer px-1.5 py-0.5 bg-[#21262d] rounded border border-[#30363d]"
+                        title="Click to test connection again on demand"
                       >
                         <RefreshCw className="w-2.5 h-2.5" />
-                        <span>Test Connection</span>
+                        <span>Test</span>
                       </button>
-                    )}
-                  </div>
-                )}
-              </div>
-              <IconSelect
-                id="select-server"
-                triggerRef={serverTriggerRef}
-                autoFocus={isOpen}
-                value={serverId}
-                onChange={handleServerChange}
-                disabled={isSubmitting}
-                emptyLabel="No hosts configured"
-                options={servers.map((s) => {
-                  const health = hostHealthMap[s.id];
-                  const latency = health?.latencyMs !== undefined && health.status !== 'unreachable' ? ` • ${health.latencyMs}ms` : '';
-                  const statusLabel = health?.status === 'unreachable' ? ' (unreachable)' : '';
-                  return {
-                    value: s.id,
-                    label: `${s.name} (${s.host})${latency}${statusLabel}`,
-                    detail: s.host,
-                    icon: <OsIcon osName={`${s.name} ${s.host}`} className="w-4 h-4" />,
-                  };
-                })}
-              />
+                    </div>
+                  )}
+                  {hostTestStatus === 'failed' && (
+                    <button
+                      type="button"
+                      data-testid="retry-host-test"
+                      onClick={() => testHostConnection(serverId)}
+                      className="flex items-center gap-1 text-rose-400 hover:text-rose-300 font-mono cursor-pointer px-1.5 py-0.5 bg-rose-950/40 rounded border border-rose-500/30"
+                      title={hostTestResult?.error || 'Connection failed'}
+                    >
+                      <RefreshCw className="w-2.5 h-2.5" />
+                      <span>Retry Test</span>
+                    </button>
+                  )}
+                  {hostTestStatus === 'idle' && (
+                    <button
+                      type="button"
+                      data-testid="test-host-button"
+                      onClick={() => testHostConnection(serverId)}
+                      className="flex items-center gap-1 text-zinc-400 hover:text-emerald-400 font-mono cursor-pointer px-1.5 py-0.5 bg-[#21262d] rounded border border-[#30363d]"
+                    >
+                      <RefreshCw className="w-2.5 h-2.5" />
+                      <span>Test Connection</span>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1">
-                <Layers className="w-3 h-3 text-zinc-400" />
-                <span>Project Root</span>
-              </label>
-              <IconSelect
-                id="select-project"
-                value={projectId}
-                onChange={handleProjectChange}
-                onSpecialKey={handleProjectSpecialKey}
-                disabled={isSubmitting}
-                emptyLabel={availableProjects.length === 0 ? 'No projects for host' : 'Select project'}
-                options={projectOptions}
-              />
+            {/* Hidden native select for backwards compatibility */}
+            <select
+              data-testid="select-server"
+              value={effectiveServerId}
+              onChange={(e) => handleServerChange(e.target.value)}
+              disabled={isSubmitting}
+              aria-hidden="true"
+              tabIndex={-1}
+              className="sr-only"
+            >
+              {servers.length === 0 ? (
+                <option value="">No hosts configured</option>
+              ) : (
+                servers.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.host})
+                  </option>
+                ))
+              )}
+            </select>
+
+            {/* Segmented Pill Selector (1-click picking) */}
+            <div
+              role="radiogroup"
+              aria-label="Target Host"
+              data-testid="host-pill-group"
+              className="flex flex-wrap gap-2"
+            >
+              {servers.length === 0 ? (
+                <button
+                  ref={serverTriggerRef}
+                  type="button"
+                  data-testid="select-server-trigger"
+                  disabled
+                  className="w-full min-h-[38px] px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-500 text-left cursor-not-allowed"
+                >
+                  No hosts configured
+                </button>
+              ) : (
+                servers.map((s, idx) => {
+                  const isSelected = s.id === effectiveServerId;
+                  const isLocal = isLocalHost(s.host);
+                  const health = hostHealthMap[s.id];
+                  const shortcut = idx < 10 ? NUMBER_SHORTCUTS[idx] : null;
+
+                  return (
+                    <button
+                      key={s.id}
+                      ref={isSelected ? serverTriggerRef : undefined}
+                      type="button"
+                      role="radio"
+                      aria-checked={isSelected}
+                      tabIndex={isSelected ? 0 : -1}
+                      autoFocus={isOpen && isSelected}
+                      data-testid={isSelected ? 'select-server-trigger' : `host-pill-${s.id}`}
+                      onClick={() => handleServerChange(s.id)}
+                      onKeyDown={(e) => handleHostKeyDown(e, idx)}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all cursor-pointer select-none ${
+                        isSelected
+                          ? 'bg-emerald-500/15 border-emerald-500/60 text-white shadow-sm ring-1 ring-emerald-500/30'
+                          : 'bg-[#0d1117] border-[#30363d] text-zinc-300 hover:bg-[#1c2128] hover:border-zinc-500'
+                      }`}
+                    >
+                      <span className="contents">
+                        <OsIcon osName={`${s.name} ${s.host}`} className="w-4 h-4 shrink-0" />
+                        <span className="font-medium truncate max-w-[140px]">{s.name}</span>
+                        {/* Local vs Remote indicator */}
+                        {isLocal ? (
+                          <span
+                            data-testid="host-badge-local"
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/25 font-mono shrink-0"
+                          >
+                            Local
+                          </span>
+                        ) : (
+                          <span
+                            data-testid="host-badge-remote"
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/25 font-mono shrink-0"
+                          >
+                            Remote
+                          </span>
+                        )}
+                        {/* Latency */}
+                        {health?.latencyMs !== undefined && health.status !== 'unreachable' && (
+                          <span data-testid="host-latency" className="text-[10px] text-zinc-400 font-mono shrink-0">
+                            {health.latencyMs}ms
+                          </span>
+                        )}
+                        {health?.status === 'unreachable' && (
+                          <span className="text-[10px] text-rose-400 font-mono shrink-0">offline</span>
+                        )}
+                        {shortcut && (
+                          <kbd className="text-[10px] font-mono text-zinc-500 bg-[#161b22] border border-[#30363d] px-1 rounded shrink-0">
+                            {shortcut}
+                          </kbd>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
             </div>
+          </div>
+
+          {/* Searchable Project Combobox */}
+          <div ref={projectComboboxRef} className="relative space-y-1.5">
+            <label className="block text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Project Root</span>
+            </label>
+
+            {/* Hidden native select for backwards compatibility */}
+            <select
+              data-testid="select-project"
+              value={projectId}
+              onChange={(e) => handleProjectSelect(e.target.value)}
+              disabled={isSubmitting}
+              aria-hidden="true"
+              tabIndex={-1}
+              className="sr-only"
+            >
+              {availableProjects.length === 0 ? (
+                <option value="">No projects for host</option>
+              ) : (
+                availableProjects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))
+              )}
+              {onOpenNewProject && (
+                <option value={NEW_PROJECT_OPTION_VALUE}>+ New Project...</option>
+              )}
+            </select>
+
+            {/* Searchable Combobox Input & Trigger */}
+            <div data-testid="select-project-combobox" className="relative flex items-center">
+              <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
+                <Search className="w-3.5 h-3.5" />
+              </div>
+
+              <input
+                ref={projectInputRef}
+                type="text"
+                role="combobox"
+                aria-expanded={isProjectOpen}
+                aria-haspopup="listbox"
+                aria-autocomplete="list"
+                data-testid="select-project-input"
+                disabled={isSubmitting || availableProjects.length === 0}
+                placeholder={
+                  availableProjects.length === 0
+                    ? 'No projects for host'
+                    : selectedProject
+                      ? `${selectedProject.name} (${selectedProject.rootPath})`
+                      : 'Search projects by name or path...'
+                }
+                value={isProjectOpen ? projectSearchQuery : selectedProject ? selectedProject.name : ''}
+                onFocus={() => {
+                  if (availableProjects.length > 0) {
+                    setIsProjectOpen(true);
+                    setProjectSearchQuery('');
+                  }
+                }}
+                onChange={(e) => {
+                  setProjectSearchQuery(e.target.value);
+                  setIsProjectOpen(true);
+                  setHighlightedProjectIdx(0);
+                }}
+                onKeyDown={handleProjectKeyDown}
+                className="w-full min-h-[38px] pl-9 pr-9 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+              />
+
+              <button
+                type="button"
+                data-testid="select-project-trigger"
+                aria-label="Toggle project list"
+                aria-haspopup="listbox"
+                aria-expanded={isProjectOpen}
+                disabled={isSubmitting || availableProjects.length === 0}
+                tabIndex={0}
+                onKeyDown={handleProjectKeyDown}
+                onClick={() => {
+                  if (availableProjects.length === 0) return;
+                  setIsProjectOpen((prev) => !prev);
+                  if (!isProjectOpen) {
+                    projectInputRef.current?.focus();
+                  }
+                }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+              >
+                {availableProjects.length === 0 && (
+                  <span className="sr-only">No projects for host</span>
+                )}
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isProjectOpen ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
+
+            {/* Filtered Dropdown list */}
+            {isProjectOpen && (
+              <div
+                ref={projectListRef}
+                role="listbox"
+                aria-label="select-project"
+                className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 max-h-56 overflow-y-auto rounded-lg border border-[#30363d] bg-[#161b22] p-1 shadow-2xl"
+              >
+                {projectComboboxOptions.length === 0 ? (
+                  <div className="p-3 text-xs text-zinc-500 text-center">No matching projects</div>
+                ) : (
+                  projectComboboxOptions.map((opt, index) => {
+                    const isSelected = opt.value === projectId;
+                    const isHighlighted = index === highlightedProjectIdx;
+                    const shortcutBadge = opt.shortcut || (index < 10 ? NUMBER_SHORTCUTS[index] : null);
+
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        role="option"
+                        tabIndex={-1}
+                        data-index={index}
+                        aria-selected={isSelected}
+                        onMouseEnter={() => setHighlightedProjectIdx(index)}
+                        onClick={() => handleProjectSelect(opt.value)}
+                        className={`w-full flex items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors cursor-pointer ${
+                          isHighlighted
+                            ? isSelected
+                              ? 'bg-emerald-500/20 text-emerald-200'
+                              : 'bg-[#21262d] text-zinc-100'
+                            : isSelected
+                              ? 'bg-emerald-500/10 text-emerald-300'
+                              : 'text-zinc-200 hover:bg-[#21262d]'
+                        }`}
+                      >
+                        {opt.icon}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-xs font-medium">{opt.label}</span>
+                          {opt.detail && (
+                            <span className="block truncate text-[10px] text-zinc-400">{opt.detail}</span>
+                          )}
+                        </span>
+                        {shortcutBadge && (
+                          <kbd className="text-[10px] font-mono text-zinc-400 bg-[#0d1117] border border-[#30363d] px-1.5 py-0.5 rounded shrink-0">
+                            {shortcutBadge}
+                          </kbd>
+                        )}
+                        {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Two-Tier Agent Selection (Provider -> Profile) */}
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <Bot className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Agent Harness</span>
+            </label>
+
+            {/* Hidden native select for backwards compatibility */}
+            <select
+              data-testid="select-agent"
+              value={agentId}
+              onChange={(e) => setAgentId(e.target.value)}
+              disabled={isSubmitting}
+              aria-hidden="true"
+              tabIndex={-1}
+              className="sr-only"
+            >
+              {availableAgents.length === 0 ? (
+                <option value="">No harnesses for host</option>
+              ) : (
+                availableAgents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} ({a.command})
+                  </option>
+                ))
+              )}
+            </select>
+
+            {/* Tier 1: Primary Providers */}
+            <div
+              role="radiogroup"
+              aria-label="Agent Provider"
+              data-testid="agent-provider-group"
+              className="flex flex-wrap gap-2"
+            >
+              {availableAgents.length === 0 ? (
+                <button
+                  type="button"
+                  data-testid="select-agent-trigger"
+                  disabled
+                  className="w-full min-h-[38px] px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-500 text-left cursor-not-allowed"
+                >
+                  No harnesses for host
+                </button>
+              ) : (
+                orderedProviders.map((pKey, idx) => {
+                  const isSelected = selectedProvider === pKey;
+                  const count = groupedAgents.get(pKey)?.length || 0;
+                  const displayName =
+                    pKey === 'shell' ? 'Interactive Shell' : getProviderDisplayName(pKey as ProviderType);
+                  const shortcut = idx < 10 ? NUMBER_SHORTCUTS[idx] : null;
+
+                  return (
+                    <button
+                      key={pKey}
+                      type="button"
+                      role="radio"
+                      aria-checked={isSelected}
+                      tabIndex={isSelected ? 0 : -1}
+                      data-testid={isSelected ? 'select-agent-trigger' : `provider-radio-${pKey}`}
+                      onClick={() => handleSelectProvider(pKey)}
+                      onKeyDown={(e) => handleProviderKeyDown(e, idx)}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all cursor-pointer select-none ${
+                        isSelected
+                          ? 'bg-emerald-500/15 border-emerald-500/60 text-white shadow-sm ring-1 ring-emerald-500/30'
+                          : 'bg-[#0d1117] border-[#30363d] text-zinc-300 hover:bg-[#1c2128] hover:border-zinc-500'
+                      }`}
+                    >
+                      <span className="contents">
+                        <AgentIcon
+                          type={pKey === 'shell' ? 'none' : (pKey as ProviderType)}
+                          harness={pKey === 'shell' ? 'shell' : undefined}
+                          className="w-4 h-4 shrink-0"
+                        />
+                        <span className="font-medium">{displayName}</span>
+                        {count > 1 && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400 font-mono">
+                            {count}
+                          </span>
+                        )}
+                        {shortcut && (
+                          <kbd className="text-[10px] font-mono text-zinc-500 bg-[#161b22] border border-[#30363d] px-1 rounded shrink-0">
+                            {shortcut}
+                          </kbd>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Tier 2: Profile Selection (when multi-profile or Hermes) */}
+            {currentProviderAgents.length > 0 && (
+              <div
+                role="radiogroup"
+                aria-label="Agent Profile"
+                data-testid="agent-profile-selector"
+                className="flex flex-wrap items-center gap-2 pt-1 pl-1"
+              >
+                <span className="text-[11px] font-medium text-zinc-400 mr-1">Profile:</span>
+                {currentProviderAgents.map((ag) => {
+                  const isProfileSelected = ag.id === agentId;
+                  return (
+                    <button
+                      key={ag.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={isProfileSelected}
+                      data-testid={`profile-pill-${ag.id}`}
+                      onClick={() => setAgentId(ag.id)}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs transition-colors cursor-pointer ${
+                        isProfileSelected
+                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-200'
+                          : 'bg-[#12161c] border-[#30363d] text-zinc-400 hover:text-zinc-200 hover:bg-[#1c2128]'
+                      }`}
+                    >
+                      <AgentIcon
+                        harness={ag.harness}
+                        agentName={ag.name}
+                        command={ag.command}
+                        className="w-3.5 h-3.5 shrink-0"
+                      />
+                      <span>{ag.name}</span>
+                      {ag.command && ag.command !== ag.name && (
+                        <span className="text-[10px] text-zinc-500 font-mono">({ag.command})</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Isolated Git Worktree Option */}
@@ -862,48 +1252,24 @@ export function CreateSessionModal({
             </div>
           </div>
 
-          {/* Grid Selection: Agent Harness & Base Branch */}
-          <div className={isWorktreeConfigured && useWorktree ? 'grid grid-cols-2 gap-3' : 'space-y-3'}>
+          {/* Base Branch (if worktree active) */}
+          {isWorktreeConfigured && useWorktree && (
             <div>
               <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1">
-                <Bot className="w-3 h-3 text-zinc-400" />
-                <span>Agent Harness</span>
+                <GitBranch className="w-3 h-3 text-zinc-400" />
+                <span>Base Branch</span>
               </label>
-              <IconSelect
-                id="select-agent"
-                value={agentId}
-                onChange={setAgentId}
+              <input
+                type="text"
+                data-testid="input-branch"
+                placeholder="Defaults to current branch"
+                value={baseBranch}
+                onChange={(e) => setBaseBranch(e.target.value)}
                 disabled={isSubmitting}
-                emptyLabel="No harnesses for host"
-                options={availableAgents.map((a) => ({
-                  value: a.id,
-                  label: `${a.name} (${a.command})`,
-                  detail: a.command,
-                  icon: a.harness === 'none' || a.harness === 'terminal'
-                    ? <Bot className="w-4 h-4 text-zinc-400" />
-                    : <AgentIcon harness={a.harness} agentName={a.name} command={a.command} className="w-4 h-4" />,
-                }))}
+                className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
               />
             </div>
-
-            {isWorktreeConfigured && useWorktree && (
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1">
-                  <GitBranch className="w-3 h-3 text-zinc-400" />
-                  <span>Base Branch</span>
-                </label>
-                <input
-                  type="text"
-                  data-testid="input-branch"
-                  placeholder="Defaults to current branch"
-                  value={baseBranch}
-                  onChange={(e) => setBaseBranch(e.target.value)}
-                  disabled={isSubmitting}
-                  className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
-                />
-              </div>
-            )}
-          </div>
+          )}
 
           {/* Task Name / Prompt */}
           <div>
@@ -950,49 +1316,52 @@ export function CreateSessionModal({
               )}
             </div>
 
-            {isWorktreeConfigured && useWorktree ? (
-              <div className="space-y-1.5">
-                <div
-                  className="flex items-baseline justify-between gap-3 group cursor-help"
-                  title={`Full Worktree Path: ${previewWorktreePath}`}
-                >
-                  <span className="text-zinc-500 shrink-0">Worktree Path:</span>
-                  <span className="truncate text-emerald-400 font-medium text-right max-w-[280px]">
-                    {previewWorktreePath}
-                  </span>
-                </div>
-                <div
-                  className="flex items-baseline justify-between gap-3 group cursor-help"
-                  title={`Full Branch Name: ${previewTaskBranch}`}
-                >
-                  <span className="text-zinc-500 shrink-0">Task Branch:</span>
-                  <span className="truncate text-cyan-400 text-right max-w-[280px]">
-                    {previewTaskBranch}
-                  </span>
-                </div>
-                <div
-                  className="flex items-baseline justify-between gap-3 group cursor-help"
-                  title={`Base Branch Target: ${previewBaseBranch}`}
-                >
-                  <span className="text-zinc-500 shrink-0">Base Branch:</span>
-                  <span className="truncate text-zinc-300 text-right max-w-[280px]">
-                    {previewBaseBranch}
-                  </span>
-                </div>
-                {copyFiles.length > 0 && (
+            <div className="space-y-1.5">
+              {isWorktreeConfigured && useWorktree ? (
+                <>
                   <div
                     className="flex items-baseline justify-between gap-3 group cursor-help"
-                    title={`Files copied into worktree: ${copyFiles.join(', ')}`}
+                    title={`Full Worktree Path: ${previewWorktreePath}`}
                   >
-                    <span className="text-zinc-500 shrink-0">Copied Configs:</span>
-                    <span className="truncate text-zinc-300 text-right max-w-[280px]">
-                      {copyFiles.join(', ')}
+                    <span className="text-zinc-500 shrink-0">Worktree Path:</span>
+                    <span className="truncate text-emerald-400 font-medium text-right max-w-[280px]">
+                      {previewWorktreePath}
                     </span>
                   </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-1.5">
+                  <div
+                    className="flex items-baseline justify-between gap-3 group cursor-help"
+                    title={`Full Branch Name: ${previewTaskBranch}`}
+                  >
+                    <span className="text-zinc-500 shrink-0">Task Branch:</span>
+                    <span
+                      data-testid="preview-task-branch"
+                      className="truncate text-cyan-400 text-right max-w-[280px]"
+                    >
+                      {previewTaskBranch}
+                    </span>
+                  </div>
+                  <div
+                    className="flex items-baseline justify-between gap-3 group cursor-help"
+                    title={`Base Branch Target: ${previewBaseBranch}`}
+                  >
+                    <span className="text-zinc-500 shrink-0">Base Branch:</span>
+                    <span className="truncate text-zinc-300 text-right max-w-[280px]">
+                      {previewBaseBranch}
+                    </span>
+                  </div>
+                  {copyFiles.length > 0 && (
+                    <div
+                      className="flex items-baseline justify-between gap-3 group cursor-help"
+                      title={`Files copied into worktree: ${copyFiles.join(', ')}`}
+                    >
+                      <span className="text-zinc-500 shrink-0">Copied Configs:</span>
+                      <span className="truncate text-zinc-300 text-right max-w-[280px]">
+                        {copyFiles.join(', ')}
+                      </span>
+                    </div>
+                  )}
+                </>
+              ) : (
                 <div
                   className="flex items-baseline justify-between gap-3 group cursor-help"
                   title={`Project Path: ${previewBasePath}`}
@@ -1000,26 +1369,29 @@ export function CreateSessionModal({
                   <span className="text-zinc-500 shrink-0">Project Path:</span>
                   <span className="truncate text-zinc-300 text-right max-w-[280px]">{previewBasePath}</span>
                 </div>
-                {selectedProject?.repoUrl ? (
-                  <div className="flex items-center gap-1.5 text-[10px] text-zinc-400 pt-0.5">
-                    <FolderGit2 className="w-3 h-3 text-blue-400 shrink-0" />
-                    <span className="truncate" title={`Clone URL: ${selectedProject.repoUrl}`}>Reuse folder or clone from Git URL</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 text-[10px] text-zinc-400 pt-0.5">
-                    <FolderGit2 className="w-3 h-3 text-zinc-500 shrink-0" />
-                    <span className="truncate">Reuse folder or create directory</span>
-                  </div>
-                )}
-              </div>
-            )}
+              )}
 
-            <div
-              className="flex items-baseline justify-between gap-3 pt-1.5 border-t border-[#21262d]/60 cursor-help"
-              title={`tmux Session Target: ${previewTmux}`}
-            >
-              <span className="text-zinc-500 shrink-0">tmux Session:</span>
-              <span className="truncate text-zinc-300 text-right max-w-[280px]">{previewTmux}</span>
+              {/* Task Slug live preview */}
+              <div
+                className="flex items-baseline justify-between gap-3 cursor-help"
+                title={`Task Slug: ${slug}`}
+              >
+                <span className="text-zinc-500 shrink-0">Task Slug:</span>
+                <span data-testid="preview-slug" className="truncate text-zinc-300 text-right max-w-[280px]">
+                  {slug}
+                </span>
+              </div>
+
+              {/* tmux session preview */}
+              <div
+                className="flex items-baseline justify-between gap-3 pt-1.5 border-t border-[#21262d]/60 cursor-help"
+                title={`tmux Session Target: ${previewTmux}`}
+              >
+                <span className="text-zinc-500 shrink-0">tmux Session:</span>
+                <span data-testid="preview-tmux-session" className="truncate text-zinc-300 text-right max-w-[280px]">
+                  {previewTmux}
+                </span>
+              </div>
             </div>
           </div>
 
