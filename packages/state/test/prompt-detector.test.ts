@@ -584,6 +584,18 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('hermes-working-footer');
   });
 
+  it('does not classify historical spinner as working if a shell prompt follows', () => {
+    const tail = [
+      '✻ Generating test files…',
+      'Done generating test files.',
+      'user@host:~/code$ ',
+    ];
+    const res = detectPromptInTail(tail);
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('shell_prompt');
+    expect(res.matchedRuleId).toBe('generic-shell-prompt-ps1');
+  });
+
   it('returns none for ordinary output', () => {
     const tail = [
       'Building project @spawnea/desktop...',

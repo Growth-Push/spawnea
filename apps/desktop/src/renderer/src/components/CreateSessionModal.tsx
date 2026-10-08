@@ -151,7 +151,7 @@ export function CreateSessionModal({
 
 
 
-  // Click outside project combobox dropdown
+  // Click outside or focus leaving project combobox dropdown
   useEffect(() => {
     if (!isProjectOpen) return;
     const handlePointerDown = (event: PointerEvent) => {
@@ -162,8 +162,20 @@ export function CreateSessionModal({
         setIsProjectOpen(false);
       }
     };
+    const handleFocusIn = (event: FocusEvent) => {
+      if (
+        !projectComboboxRef.current?.contains(event.target as Node) &&
+        !projectListRef.current?.contains(event.target as Node)
+      ) {
+        setIsProjectOpen(false);
+      }
+    };
     document.addEventListener('pointerdown', handlePointerDown);
-    return () => document.removeEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('focusin', handleFocusIn);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('focusin', handleFocusIn);
+    };
   }, [isProjectOpen]);
 
   const effectiveServerId = useMemo(() => {
@@ -1014,7 +1026,20 @@ export function CreateSessionModal({
           </div>
 
           {/* Searchable Project Combobox */}
-          <div ref={projectComboboxRef} className="relative space-y-1.5">
+          <div
+            ref={projectComboboxRef}
+            className="relative space-y-1.5"
+            onBlur={(e) => {
+              const nextTarget = e.relatedTarget as Node | null;
+              if (
+                isProjectOpen &&
+                !e.currentTarget.contains(nextTarget) &&
+                !projectListRef.current?.contains(nextTarget)
+              ) {
+                setIsProjectOpen(false);
+              }
+            }}
+          >
             <label className="block text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
               <Layers className="w-3.5 h-3.5 text-zinc-400" />
               <span>Project Root</span>

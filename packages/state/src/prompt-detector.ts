@@ -226,10 +226,14 @@ export function detectPromptInTail(
   const workingRulesWithRegex = applicableRules
     .filter((rule) => rule.category === 'working')
     .map((rule) => ({ rule, regex: toRegex(rule.pattern) }));
+  const shellPromptRulesWithRegex = applicableRules
+    .filter((rule) => rule.category === 'shell_prompt')
+    .map((rule) => ({ rule, regex: toRegex(rule.pattern) }));
 
   let latestErrorIndex = -1;
   let latestWorkingIndex = -1;
   let latestWorkingRule: PatternRule | null = null;
+  let latestShellPromptIndex = -1;
   for (let i = 0; i < effectiveTailLines.length; i++) {
     const line = effectiveTailLines[i];
     if (errorRulesWithRegex.some(({ regex }) => regex.test(line))) {
@@ -240,8 +244,16 @@ export function detectPromptInTail(
       latestWorkingIndex = i;
       latestWorkingRule = matchedWorking.rule;
     }
+    if (shellPromptRulesWithRegex.some(({ regex }) => regex.test(line))) {
+      latestShellPromptIndex = i;
+    }
   }
-  if (latestErrorIndex >= 0 && latestWorkingIndex > latestErrorIndex && latestWorkingRule) {
+
+  const isWorkingSuperseded =
+    (latestErrorIndex >= 0 && latestErrorIndex > latestWorkingIndex) ||
+    (latestShellPromptIndex >= 0 && latestShellPromptIndex > latestWorkingIndex);
+
+  if (!isWorkingSuperseded && latestErrorIndex >= 0 && latestWorkingIndex > latestErrorIndex && latestWorkingRule) {
     return {
       isPrompt: false,
       kind: 'working',
@@ -261,7 +273,7 @@ export function detectPromptInTail(
   ];
 
   for (const category of remainingCategories) {
-    if (category === 'working' && latestErrorIndex >= 0 && latestErrorIndex > latestWorkingIndex) {
+    if (category === 'working' && isWorkingSuperseded) {
       continue;
     }
     const categoryRules = applicableRules.filter((r) => r.category === category);

@@ -431,6 +431,28 @@ describe('CreateSessionModal', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('closes the open project list when focus leaves the combobox', () => {
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={mockAgents}
+      />
+    );
+
+    const input = screen.getByTestId('select-project-input');
+    fireEvent.focus(input);
+    expect(screen.getByRole('listbox')).toBeDefined();
+
+    // Focus an outside element like submit button
+    const submitBtn = screen.getByTestId('submit-create-session');
+    fireEvent.focusIn(submitBtn);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
   it('defaults worktree to unchecked even when project has worktree configured in catalog', () => {
     const catalog = {
       version: 1 as const,
