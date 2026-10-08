@@ -596,6 +596,19 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('generic-shell-prompt-ps1');
   });
 
+  it('lets a later shell prompt supersede an earlier failed command and spinner', () => {
+    const tail = [
+      '● Background command "Set up screenshot capture" failed with exit code 144',
+      '✻ Generating test files…',
+      'Done generating test files.',
+      'user@host:~/code$ ',
+    ];
+    const res = detectPromptInTail(tail);
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('shell_prompt');
+    expect(res.matchedRuleId).toBe('generic-shell-prompt-ps1');
+  });
+
   it('returns none for ordinary output', () => {
     const tail = [
       'Building project @spawnea/desktop...',

@@ -253,6 +253,9 @@ export function detectPromptInTail(
     (latestErrorIndex >= 0 && latestErrorIndex > latestWorkingIndex) ||
     (latestShellPromptIndex >= 0 && latestShellPromptIndex > latestWorkingIndex);
 
+  const isErrorSuperseded =
+    latestShellPromptIndex >= 0 && latestShellPromptIndex > latestErrorIndex;
+
   if (!isWorkingSuperseded && latestErrorIndex >= 0 && latestWorkingIndex > latestErrorIndex && latestWorkingRule) {
     return {
       isPrompt: false,
@@ -274,6 +277,9 @@ export function detectPromptInTail(
 
   for (const category of remainingCategories) {
     if (category === 'working' && isWorkingSuperseded) {
+      continue;
+    }
+    if (category === 'error' && isErrorSuperseded) {
       continue;
     }
     const categoryRules = applicableRules.filter((r) => r.category === category);
