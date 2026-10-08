@@ -453,14 +453,14 @@ export function CreateSessionModal({
       if (newVal === NEW_PROJECT_OPTION_VALUE) {
         setIsProjectOpen(false);
         setProjectSearchQuery('');
-        onOpenNewProject?.(serverId);
+        onOpenNewProject?.(effectiveServerId);
         return;
       }
       setProjectId(newVal);
       setIsProjectOpen(false);
       setProjectSearchQuery('');
     },
-    [onOpenNewProject, serverId]
+    [onOpenNewProject, effectiveServerId]
   );
 
   const handleServerChange = useCallback((newServerId: string) => {
@@ -517,16 +517,14 @@ export function CreateSessionModal({
       const isInput = (e.target as HTMLElement)?.tagName?.toLowerCase() === 'input';
 
       // 'n' or 'N' shortcut to trigger + New Project...
-      // Only trigger if focus is on the dropdown trigger/button or when explicitly pressing uppercase 'N' or when selecting '+ New Project...' option
-      if (e.key.toLowerCase() === 'n' && onOpenNewProject) {
-        if (!isInput || e.key === 'N' || projectComboboxOptions[highlightedProjectIdx]?.value === NEW_PROJECT_OPTION_VALUE) {
-          e.preventDefault();
-          e.stopPropagation();
-          setIsProjectOpen(false);
-          setProjectSearchQuery('');
-          onOpenNewProject(serverId);
-          return;
-        }
+      // Only trigger if focus is outside the text search input (e.g. on trigger button or listbox)
+      if (e.key.toLowerCase() === 'n' && onOpenNewProject && !isInput) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsProjectOpen(false);
+        setProjectSearchQuery('');
+        onOpenNewProject(effectiveServerId);
+        return;
       }
 
       // 1..0 number shortcuts: only when not typing inside the text input
@@ -652,11 +650,11 @@ export function CreateSessionModal({
   const selectedProject = projects.find((p) => p.id === projectId);
 
   const catalogHost =
-    catalog?.hosts[serverId] ||
-    (serverId ? Object.values(catalog?.hosts || {}).find((h) => h.name === serverId) : undefined);
+    catalog?.hosts[effectiveServerId] ||
+    (effectiveServerId ? Object.values(catalog?.hosts || {}).find((h) => h.name === effectiveServerId) : undefined);
   const catalogProject = catalogHost?.projects
     ? Object.entries(catalogHost.projects).find(
-        ([key, p]) => key === projectId || `${serverId}:${key}` === projectId || p.path === selectedProject?.rootPath
+        ([key, p]) => key === projectId || `${effectiveServerId}:${key}` === projectId || p.path === selectedProject?.rootPath
       )?.[1]
     : undefined;
 
@@ -685,7 +683,7 @@ export function CreateSessionModal({
       setError('Please provide a task description.');
       return;
     }
-    if (!serverId) {
+    if (!effectiveServerId) {
       setError('Please select a target server.');
       return;
     }
@@ -703,7 +701,7 @@ export function CreateSessionModal({
       setError(null);
       const isEffectiveWorktree = Boolean(isWorktreeConfigured && useWorktree);
       await onSubmit({
-        serverId,
+        serverId: effectiveServerId,
         projectId,
         agentId,
         task: task.trim(),
@@ -882,10 +880,11 @@ export function CreateSessionModal({
                       aria-checked={isSelected}
                       tabIndex={isSelected ? 0 : -1}
                       autoFocus={isOpen && isSelected}
+                      disabled={isSubmitting}
                       data-testid={isSelected ? 'select-server-trigger' : `host-pill-${s.id}`}
                       onClick={() => handleServerChange(s.id)}
                       onKeyDown={(e) => handleHostKeyDown(e, idx)}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all cursor-pointer select-none ${
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
                         isSelected
                           ? 'bg-emerald-500/15 border-emerald-500/60 text-white shadow-sm ring-1 ring-emerald-500/30'
                           : 'bg-[#0d1117] border-[#30363d] text-zinc-300 hover:bg-[#1c2128] hover:border-zinc-500'
@@ -1153,10 +1152,11 @@ export function CreateSessionModal({
                       role="radio"
                       aria-checked={isSelected}
                       tabIndex={isSelected ? 0 : -1}
+                      disabled={isSubmitting}
                       data-testid={isSelected ? 'select-agent-trigger' : `provider-radio-${pKey}`}
                       onClick={() => handleSelectProvider(pKey)}
                       onKeyDown={(e) => handleProviderKeyDown(e, idx)}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all cursor-pointer select-none ${
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
                         isSelected
                           ? 'bg-emerald-500/15 border-emerald-500/60 text-white shadow-sm ring-1 ring-emerald-500/30'
                           : 'bg-[#0d1117] border-[#30363d] text-zinc-300 hover:bg-[#1c2128] hover:border-zinc-500'
@@ -1203,9 +1203,10 @@ export function CreateSessionModal({
                       type="button"
                       role="radio"
                       aria-checked={isProfileSelected}
+                      disabled={isSubmitting}
                       data-testid={`profile-pill-${ag.id}`}
                       onClick={() => setAgentId(ag.id)}
-                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs transition-colors cursor-pointer ${
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                         isProfileSelected
                           ? 'bg-emerald-500/20 border-emerald-500 text-emerald-200'
                           : 'bg-[#12161c] border-[#30363d] text-zinc-400 hover:text-zinc-200 hover:bg-[#1c2128]'

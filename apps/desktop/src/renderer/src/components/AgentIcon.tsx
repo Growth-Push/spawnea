@@ -28,6 +28,23 @@ export function detectProviderType(
     return 'none';
   }
 
+  // Exact known harness values have highest priority
+  const normalizedHarness = (harness || '').trim().toLowerCase();
+  if (normalizedHarness === 'hermes') return 'hermes';
+  if (normalizedHarness === 'agy' || normalizedHarness === 'antigravity') return 'antigravity';
+  if (normalizedHarness === 'claude' || normalizedHarness === 'anthropic') return 'claude';
+  if (normalizedHarness === 'codex' || normalizedHarness === 'openai') return 'codex';
+  if (normalizedHarness === 'grok' || normalizedHarness === 'xai') return 'grok';
+  if (normalizedHarness === 'deepseek') return 'deepseek';
+  if (normalizedHarness === 'kimi') return 'kimi';
+  if (normalizedHarness === 'ollama') return 'ollama';
+  if (normalizedHarness === 'gemini') return 'gemini';
+  if (normalizedHarness === 'copilot') return 'copilot';
+  if (normalizedHarness === 'cursor') return 'cursor';
+  if (normalizedHarness === 'mistral') return 'mistral';
+  if (normalizedHarness === 'qwen') return 'qwen';
+  if (normalizedHarness === 'llama') return 'llama';
+
   const str = `${harness || ''} ${agentName || ''} ${command || ''}`.toLowerCase();
 
   if (str.includes('hermes')) return 'hermes';
