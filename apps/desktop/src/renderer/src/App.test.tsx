@@ -1278,6 +1278,27 @@ describe('App Desktop Shell', () => {
     expect(screen.queryByText('Create Agent Session')).toBeNull();
   });
 
+  it('allows Ctrl+N to pass through when triggered inside terminal (.xterm)', async () => {
+    window.spawneaApi = createMockSpawneaApi();
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+    });
+
+    const xtermEl = document.querySelector('.xterm');
+    expect(xtermEl).toBeDefined();
+    if (xtermEl) {
+      fireEvent.keyDown(xtermEl, { key: 'n', ctrlKey: true, bubbles: true });
+      expect(screen.queryByText('Create Agent Session')).toBeNull();
+
+      // Cmd+N should still work globally even from terminal
+      fireEvent.keyDown(xtermEl, { key: 'n', metaKey: true, bubbles: true });
+      expect(screen.getByText('Create Agent Session')).toBeDefined();
+    }
+  });
+
   it('auto-populates task description from selection and preserves manual edits', async () => {
     window.spawneaApi = createMockSpawneaApi();
     render(<App />);

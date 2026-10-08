@@ -1082,6 +1082,12 @@ export function CreateSessionModal({
                 aria-expanded={isProjectOpen}
                 aria-haspopup="listbox"
                 aria-autocomplete="list"
+                aria-controls="create-session-project-listbox"
+                aria-activedescendant={
+                  isProjectOpen && projectComboboxOptions[highlightedProjectIdx]
+                    ? `create-session-project-option-${highlightedProjectIdx}`
+                    : undefined
+                }
                 data-testid="select-project-input"
                 disabled={isSubmitting || (availableProjects.length === 0 && !onOpenNewProject)}
                 placeholder={
@@ -1147,8 +1153,9 @@ export function CreateSessionModal({
             {isProjectOpen && (
               <div
                 ref={projectListRef}
+                id="create-session-project-listbox"
                 role="listbox"
-                aria-label="select-project"
+                aria-label="Projects"
                 className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 max-h-56 overflow-y-auto rounded-lg border border-[#30363d] bg-[#161b22] p-1 shadow-2xl"
               >
                 {projectComboboxOptions.length === 0 ? (
@@ -1162,6 +1169,7 @@ export function CreateSessionModal({
                     return (
                       <button
                         key={opt.value}
+                        id={`create-session-project-option-${index}`}
                         type="button"
                         role="option"
                         tabIndex={-1}
