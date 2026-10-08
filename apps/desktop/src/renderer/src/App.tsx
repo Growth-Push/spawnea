@@ -1200,7 +1200,19 @@ export function App(): React.JSX.Element {
 
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [sessions, visibleSessionIds, activeSessionId, handleTabChange, isCreateModalOpen, isQuickSwitcherOpen]);
+  }, [
+    sessions,
+    visibleSessionIds,
+    activeSessionId,
+    handleTabChange,
+    isCreateModalOpen,
+    isQuickSwitcherOpen,
+    isNewProjectModalOpen,
+    isLocalDiscoveryOpen,
+    isAdoptModalOpen,
+    isFeedbackModalOpen,
+    isAgentSetupOpen,
+  ]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
   const activeServer = activeSession ? servers.find((s) => s.id === activeSession.serverId) : undefined;

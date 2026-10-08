@@ -147,6 +147,7 @@ export function CreateSessionModal({
   }, []);
 
   const lastConsumedCreatedProjectRef = useRef<string | null>(null);
+  const prevProjectIdRef = useRef<string>(projectId);
 
 
 
@@ -390,7 +391,6 @@ export function CreateSessionModal({
   }, [projectId, agentId, isCustomTask, availableProjects, availableAgents, projects, agents]);
 
   // Project base branch: update only when selected project changes
-  const prevProjectIdRef = useRef<string>(projectId);
   useEffect(() => {
     if (prevProjectIdRef.current !== projectId) {
       prevProjectIdRef.current = projectId;

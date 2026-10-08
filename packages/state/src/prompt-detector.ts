@@ -261,6 +261,9 @@ export function detectPromptInTail(
   ];
 
   for (const category of remainingCategories) {
+    if (category === 'working' && latestErrorIndex >= 0 && latestErrorIndex > latestWorkingIndex) {
+      continue;
+    }
     const categoryRules = applicableRules.filter((r) => r.category === category);
     for (const rule of categoryRules) {
       const reg = typeof rule.pattern === 'string' ? new RegExp(rule.pattern, 'i') : rule.pattern;
