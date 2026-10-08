@@ -744,8 +744,8 @@ export function Sidebar({
           (!normalizedSearchTerm || sessionMatchesSearch(child, normalizedSearchTerm))
         )
       : children;
-    const showChildren = !isCollapsed && (isDenseLayout || expandedParents.has(parent.id) ||
-      (hasChildFilter && matchingChildren.length > 0));
+    const showChildren = isCollapsed || isDenseLayout || expandedParents.has(parent.id) ||
+      (hasChildFilter && matchingChildren.length > 0);
     return [parent.id, ...(showChildren ? matchingChildren.map((child) => child.id) : [])];
   });
   const keyboardSessionIdsKey = JSON.stringify(keyboardSessionIds);

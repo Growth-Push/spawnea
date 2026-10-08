@@ -609,6 +609,18 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('generic-shell-prompt-ps1');
   });
 
+  it('lets a later idle prompt supersede a historical spinner when agent has completed', () => {
+    const tail = [
+      '✻ Generating test files…',
+      'Done generating test files.',
+      '> Try "npm test"',
+    ];
+    const res = detectPromptInTail(tail, { harness: 'claude' });
+    expect(res.isPrompt).toBe(true);
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-prompt');
+  });
+
   it('returns none for ordinary output', () => {
     const tail = [
       'Building project @spawnea/desktop...',

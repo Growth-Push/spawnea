@@ -229,11 +229,15 @@ export function detectPromptInTail(
   const shellPromptRulesWithRegex = applicableRules
     .filter((rule) => rule.category === 'shell_prompt')
     .map((rule) => ({ rule, regex: toRegex(rule.pattern) }));
+  const idlePromptRulesWithRegex = applicableRules
+    .filter((rule) => rule.category === 'idle_prompt')
+    .map((rule) => ({ rule, regex: toRegex(rule.pattern) }));
 
   let latestErrorIndex = -1;
   let latestWorkingIndex = -1;
   let latestWorkingRule: PatternRule | null = null;
   let latestShellPromptIndex = -1;
+  let latestIdlePromptIndex = -1;
   for (let i = 0; i < effectiveTailLines.length; i++) {
     const line = effectiveTailLines[i];
     if (errorRulesWithRegex.some(({ regex }) => regex.test(line))) {
@@ -247,7 +251,25 @@ export function detectPromptInTail(
     if (shellPromptRulesWithRegex.some(({ regex }) => regex.test(line))) {
       latestShellPromptIndex = i;
     }
+    if (idlePromptRulesWithRegex.some(({ regex }) => regex.test(line))) {
+      latestIdlePromptIndex = i;
+    }
   }
+
+  const activeWorkingFooterPattern =
+    /\b(?:esc\s+to\s+(?:interrupt|cancel)|msg=interrupt|Ctrl\+C\s+cancel|auto\s+mode\s+on)\b/i;
+
+  const isSpinnerSupersededByIdle = (rule: PatternRule) => {
+    if (rule.id !== 'generic-agent-spinner-status') return false;
+    if (latestIdlePromptIndex < 0 || latestWorkingIndex < 0) return false;
+    if (latestIdlePromptIndex <= latestWorkingIndex) return false;
+    for (let i = latestIdlePromptIndex; i < effectiveTailLines.length; i++) {
+      if (activeWorkingFooterPattern.test(effectiveTailLines[i])) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   const isWorkingSuperseded =
     (latestErrorIndex >= 0 && latestErrorIndex > latestWorkingIndex) ||
@@ -256,7 +278,13 @@ export function detectPromptInTail(
   const isErrorSuperseded =
     latestShellPromptIndex >= 0 && latestShellPromptIndex > latestErrorIndex;
 
-  if (!isWorkingSuperseded && latestErrorIndex >= 0 && latestWorkingIndex > latestErrorIndex && latestWorkingRule) {
+  if (
+    !isWorkingSuperseded &&
+    latestErrorIndex >= 0 &&
+    latestWorkingIndex > latestErrorIndex &&
+    latestWorkingRule &&
+    !isSpinnerSupersededByIdle(latestWorkingRule)
+  ) {
     return {
       isPrompt: false,
       kind: 'working',
@@ -284,6 +312,9 @@ export function detectPromptInTail(
     }
     const categoryRules = applicableRules.filter((r) => r.category === category);
     for (const rule of categoryRules) {
+      if (category === 'working' && isSpinnerSupersededByIdle(rule)) {
+        continue;
+      }
       const reg = typeof rule.pattern === 'string' ? new RegExp(rule.pattern, 'i') : rule.pattern;
       if (reg.test(combinedTail) || reg.test(lastLine)) {
         if (rule.id === 'hermes-needs-input-menu') {
