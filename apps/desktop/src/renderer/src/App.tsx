@@ -1093,11 +1093,18 @@ export function App(): React.JSX.Element {
       if (isCtrl && !e.shiftKey && !e.altKey && (e.key === 'n' || e.key === 'N')) {
         if (
           isCreateModalOpen ||
+          isQuickSwitcherOpen ||
           isNewProjectModalOpen ||
           isLocalDiscoveryOpen ||
           isAdoptModalOpen ||
           isFeedbackModalOpen ||
-          isAgentSetupOpen
+          isAgentSetupOpen ||
+          sessionToStop !== null ||
+          sessionToUnadopt !== null ||
+          sessionToFinish !== null ||
+          sessionToCreateChildFor !== null ||
+          parentSessionToClose !== null ||
+          controlFinalizationRequests.length > 0
         ) {
           return;
         }
@@ -1212,6 +1219,12 @@ export function App(): React.JSX.Element {
     isAdoptModalOpen,
     isFeedbackModalOpen,
     isAgentSetupOpen,
+    sessionToStop,
+    sessionToUnadopt,
+    sessionToFinish,
+    sessionToCreateChildFor,
+    parentSessionToClose,
+    controlFinalizationRequests,
   ]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;

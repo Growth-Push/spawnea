@@ -1260,6 +1260,24 @@ describe('App Desktop Shell', () => {
     expect(screen.getByText('Create Agent Session')).toBeDefined();
   });
 
+  it('does not open CreateSessionModal with Ctrl+N when another modal is open', async () => {
+    window.spawneaApi = createMockSpawneaApi();
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+    });
+
+    // Open QuickSwitcher via Ctrl+P
+    fireEvent.keyDown(window, { key: 'p', ctrlKey: true });
+    expect(screen.getByTestId('quick-switcher-modal')).toBeDefined();
+
+    // Try pressing Ctrl+N while QuickSwitcher is open
+    fireEvent.keyDown(window, { key: 'n', ctrlKey: true });
+    expect(screen.queryByText('Create Agent Session')).toBeNull();
+  });
+
   it('auto-populates task description from selection and preserves manual edits', async () => {
     window.spawneaApi = createMockSpawneaApi();
     render(<App />);
