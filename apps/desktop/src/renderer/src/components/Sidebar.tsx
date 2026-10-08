@@ -1594,7 +1594,7 @@ export function Sidebar({
                 <button
                   type="button"
                   data-testid="sidebar-new-session-button"
-                  title="Create new session"
+                  title="Create new session (Ctrl+N)"
                   onClick={onOpenCreateModal}
                   className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md text-xs font-medium transition-colors shadow-sm cursor-pointer"
                 >
@@ -1645,7 +1645,7 @@ export function Sidebar({
               <button
                 type="button"
                 data-testid="sidebar-new-session-button"
-                title="Create new session"
+                title="Create new session (Ctrl+N)"
                 onClick={onOpenCreateModal}
                 className="w-8 h-8 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center shadow-sm cursor-pointer transition-colors"
               >

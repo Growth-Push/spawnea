@@ -1233,6 +1233,33 @@ describe('App Desktop Shell', () => {
     });
   });
 
+  it('opens CreateSessionModal via global Ctrl+N and Cmd+N shortcuts', async () => {
+    window.spawneaApi = createMockSpawneaApi();
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+    });
+
+    // Modal is initially closed
+    expect(screen.queryByText('Create Agent Session')).toBeNull();
+
+    // Trigger Ctrl+N
+    fireEvent.keyDown(window, { key: 'n', ctrlKey: true });
+    expect(screen.getByText('Create Agent Session')).toBeDefined();
+
+    // Close via Escape
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByText('Create Agent Session')).toBeNull();
+    });
+
+    // Trigger Cmd+N (metaKey)
+    fireEvent.keyDown(window, { key: 'N', metaKey: true });
+    expect(screen.getByText('Create Agent Session')).toBeDefined();
+  });
+
   it('auto-populates task description from selection and preserves manual edits', async () => {
     window.spawneaApi = createMockSpawneaApi();
     render(<App />);

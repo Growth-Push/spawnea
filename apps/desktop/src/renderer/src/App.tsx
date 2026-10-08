@@ -1088,7 +1088,15 @@ export function App(): React.JSX.Element {
         return;
       }
 
-      // 2. Tab Navigation: Alt+1..6
+      // 2. New Session: Ctrl+N / Cmd+N
+      if (isCtrl && !e.shiftKey && !e.altKey && (e.key === 'n' || e.key === 'N')) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsCreateModalOpen(true);
+        return;
+      }
+
+      // 3. Tab Navigation: Alt+1..6
       if (e.altKey && !isCtrl && !e.shiftKey) {
         const tabKeyMap: Record<string, WorkspaceTabType> = {
           '1': 'terminal',

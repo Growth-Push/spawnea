@@ -89,7 +89,7 @@ describe('CreateSessionModal', () => {
     expect(optionValues).toEqual(['srv-1:claude', 'srv-1:codex', 'srv-1:shell']);
   });
 
-  it('renders target host segmented pills with local and remote indicators', () => {
+  it('renders target host segmented pills with local and remote indicators without latency or offline badges', () => {
     render(
       <CreateSessionModal
         isOpen={true}
@@ -100,7 +100,7 @@ describe('CreateSessionModal', () => {
         agents={mockAgents}
         hostHealthMap={{
           'srv-1': { hostId: 'srv-1', target: 'localhost', status: 'healthy', latencyMs: 8, lastCheckedAt: new Date().toISOString() },
-          'srv-2': { hostId: 'srv-2', target: '192.0.2.100', status: 'healthy', latencyMs: 45, lastCheckedAt: new Date().toISOString() },
+          'srv-2': { hostId: 'srv-2', target: '192.0.2.100', status: 'unreachable', latencyMs: 45, lastCheckedAt: new Date().toISOString() },
         }}
       />
     );
@@ -108,8 +108,8 @@ describe('CreateSessionModal', () => {
     expect(screen.getByTestId('host-pill-group')).toBeDefined();
     expect(screen.getByTestId('host-badge-local')).toBeDefined();
     expect(screen.getByTestId('host-badge-remote')).toBeDefined();
-    expect(screen.getAllByTestId('host-latency')[0].textContent).toContain('8ms');
-    expect(screen.getAllByTestId('host-latency')[1].textContent).toContain('45ms');
+    expect(screen.queryByTestId('host-latency')).toBeNull();
+    expect(screen.queryByText('offline')).toBeNull();
   });
 
   it('allows 1-click host selection via segmented pills and keyboard navigation', () => {

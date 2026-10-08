@@ -84,7 +84,7 @@ export function CreateSessionModal({
   projects,
   agents,
   catalog,
-  hostHealthMap = {},
+  hostHealthMap: _hostHealthMap = {},
   onOpenNewProject,
   createdProject,
   hasChildModalOpen = false,
@@ -881,7 +881,6 @@ export function CreateSessionModal({
                 servers.map((s, idx) => {
                   const isSelected = s.id === effectiveServerId;
                   const isLocal = isLocalHost(s.host);
-                  const health = hostHealthMap[s.id];
                   const shortcut = idx < 10 ? NUMBER_SHORTCUTS[idx] : null;
 
                   return (
@@ -921,15 +920,6 @@ export function CreateSessionModal({
                           >
                             Remote
                           </span>
-                        )}
-                        {/* Latency */}
-                        {health?.latencyMs !== undefined && health.status !== 'unreachable' && (
-                          <span data-testid="host-latency" className="text-[10px] text-zinc-400 font-mono shrink-0">
-                            {health.latencyMs}ms
-                          </span>
-                        )}
-                        {health?.status === 'unreachable' && (
-                          <span className="text-[10px] text-rose-400 font-mono shrink-0">offline</span>
                         )}
                         {shortcut && (
                           <kbd className="text-[10px] font-mono text-zinc-500 bg-[#161b22] border border-[#30363d] px-1 rounded shrink-0">

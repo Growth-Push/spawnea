@@ -210,7 +210,7 @@ export function QuickSwitcherModal({
       title: 'New Session',
       subtitle: 'Create and launch a new agent persistent session',
       keywords: ['create', 'new', 'start', 'launch', 'agent'],
-      shortcut: 'New',
+      shortcut: 'Ctrl+N',
       icon: Plus,
       onSelect: () => {
         onOpenCreateModal();
