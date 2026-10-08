@@ -231,6 +231,34 @@ describe('CreateSessionModal', () => {
     expect(onOpenNewProject).not.toHaveBeenCalled();
   });
 
+  it('selects the tenth project option with Ctrl+0 shortcut', () => {
+    const tenProjects: Project[] = Array.from({ length: 12 }, (_, i) => ({
+      id: `srv-1:proj-${i + 1}`,
+      serverId: 'srv-1',
+      name: `Project ${String(i + 1).padStart(2, '0')}`,
+      rootPath: `/path/to/proj-${i + 1}`,
+      createdAt: new Date(),
+    }));
+
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={tenProjects}
+        agents={mockAgents}
+      />
+    );
+
+    const input = screen.getByTestId('select-project-input');
+    const nativeSelect = screen.getByTestId('select-project') as HTMLSelectElement;
+
+    // Press Ctrl+0 in the input
+    fireEvent.keyDown(input, { key: '0', ctrlKey: true });
+    expect(nativeSelect.value).toBe('srv-1:proj-10');
+  });
+
   it('renders two-tier agent selection with provider pills and profile selection', () => {
     const multiAgents: Agent[] = [
       {

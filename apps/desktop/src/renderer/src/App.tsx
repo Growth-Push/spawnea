@@ -1065,10 +1065,12 @@ export function App(): React.JSX.Element {
       // Global UI zoom: Ctrl/Cmd+plus, Ctrl/Cmd+minus, and Ctrl/Cmd+0 reset.
       // Handle this before terminal and session shortcuts so zoom keys never
       // reach the PTY or get interpreted as session navigation.
+      // Note: When CreateSessionModal is open, do not intercept Ctrl+0 so that
+      // the tenth project option shortcut (Ctrl+0) remains usable.
       if (isCtrl && !e.altKey && (
         e.key === '+' || (e.key === '=' && e.shiftKey) ||
         e.key === '-' || (e.key === '_' && e.shiftKey) ||
-        e.key === '0'
+        (e.key === '0' && !isCreateModalOpen)
       )) {
         e.preventDefault();
         e.stopPropagation();
