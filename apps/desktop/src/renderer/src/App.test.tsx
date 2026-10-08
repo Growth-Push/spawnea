@@ -1470,11 +1470,11 @@ describe('App Desktop Shell', () => {
     const worktreeCheckbox = screen.getByTestId('checkbox-use-worktree') as HTMLInputElement;
     expect(worktreeCheckbox.checked).toBe(false);
 
-    // 6. Select harness with number key '1'
+    // 6. Select harness with number key '1' (first canonical provider is codex)
     const agentTrigger = screen.getByTestId('select-agent-trigger');
     fireEvent.keyDown(agentTrigger, { key: '1' });
     const agentSelect = screen.getByTestId('select-agent') as HTMLSelectElement;
-    expect(agentSelect.value).toBe('agent-claude');
+    expect(agentSelect.value).toBe('agent-codex');
   });
 
   it('renders friendly empty state when no sessions are returned', async () => {

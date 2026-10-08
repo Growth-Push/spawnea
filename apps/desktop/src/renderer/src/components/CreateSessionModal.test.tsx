@@ -220,6 +220,7 @@ describe('CreateSessionModal', () => {
     expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
 
     // Keyboard shortcut 'n' / 'N'
+    onOpenNewProject.mockClear();
     fireEvent.keyDown(trigger, { key: 'n' });
     expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
   });
@@ -571,6 +572,72 @@ describe('CreateSessionModal', () => {
 
     fireEvent.keyDown(hostTrigger, { key: '2', altKey: true });
     expect(nativeSelect.value).toBe('srv-1');
+  });
+
+  it('allows opening new project when host has 0 projects and onOpenNewProject is passed', () => {
+    const onOpenNewProject = vi.fn();
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={[]}
+        agents={mockAgents}
+        onOpenNewProject={onOpenNewProject}
+      />
+    );
+
+    const trigger = screen.getByTestId('select-project-trigger') as HTMLButtonElement;
+    expect(trigger.disabled).toBe(false);
+    fireEvent.click(trigger);
+
+    const newProjectOption = screen.getByRole('option', { name: /\+ New Project\.\.\./ });
+    expect(newProjectOption).toBeDefined();
+    fireEvent.click(newProjectOption);
+    expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
+
+    // Shortcut 'n' should also work
+    onOpenNewProject.mockClear();
+    fireEvent.keyDown(trigger, { key: 'n' });
+    expect(onOpenNewProject).toHaveBeenCalledWith('srv-1');
+  });
+
+  it('navigates provider pills with ArrowRight / ArrowLeft and respects canonical order', () => {
+    const customAgents: Agent[] = [
+      { id: 'srv-1:shell', name: 'Shell', command: 'bash', harness: 'shell', createdAt: new Date() },
+      { id: 'srv-1:hermes', name: 'Hermes', command: 'hermes', harness: 'hermes', createdAt: new Date() },
+      { id: 'srv-1:codex', name: 'Codex', command: 'codex', harness: 'codex', createdAt: new Date() },
+    ];
+
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={customAgents}
+      />
+    );
+
+    // Initial agent is first available agent: srv-1:hermes (or user clicks codex)
+    // Canonical order in pill selector: codex (idx 0) -> hermes (idx 1) -> shell (idx 2)
+    const codexRadio = screen.getByTestId('provider-radio-codex');
+    fireEvent.click(codexRadio);
+
+    const nativeSelect = screen.getByTestId('select-agent') as HTMLSelectElement;
+    expect(nativeSelect.value).toBe('srv-1:codex');
+
+    const codexTrigger = screen.getByTestId('select-agent-trigger');
+    // ArrowRight should move to Hermes (next in canonical order)
+    fireEvent.keyDown(codexTrigger, { key: 'ArrowRight' });
+    expect(nativeSelect.value).toBe('srv-1:hermes');
+
+    // Number key '3' should move to shell (3rd provider)
+    const hermesTrigger = screen.getByTestId('select-agent-trigger');
+    fireEvent.keyDown(hermesTrigger, { key: '3' });
+    expect(nativeSelect.value).toBe('srv-1:shell');
   });
 
   it('handles empty options gracefully without opening dropdown or throwing', () => {

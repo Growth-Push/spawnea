@@ -210,16 +210,7 @@ export function CreateSessionModal({
     return () => clearTimeout(timer);
   }, [isOpen]);
 
-  // Focus host trigger whenever modal opens or active host changes
-  useEffect(() => {
-    if (isOpen) {
-      serverTriggerRef.current?.focus();
-      const timer = setTimeout(() => {
-        serverTriggerRef.current?.focus();
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-  }, [isOpen, effectiveServerId]);
+
 
   // Synchronize selections when modal opens or lists change.
   useEffect(() => {
@@ -312,16 +303,26 @@ export function CreateSessionModal({
   }, [availableAgents]);
 
   const orderedProviders = useMemo(() => {
-    const seen = new Set<string>();
-    const order: string[] = [];
+    const available = new Set<string>();
     for (const a of availableAgents) {
-      const p = getAgentProvider(a);
-      if (p !== 'shell' && !seen.has(p)) {
-        seen.add(p);
+      available.add(getAgentProvider(a));
+    }
+
+    const order: string[] = [];
+    for (const canonical of CANONICAL_PROVIDER_ORDER) {
+      if (canonical !== 'shell' && available.has(canonical)) {
+        order.push(canonical);
+      }
+    }
+
+    // Include any other non-shell providers not in CANONICAL_PROVIDER_ORDER
+    for (const p of available) {
+      if (p !== 'shell' && !order.includes(p)) {
         order.push(p);
       }
     }
-    if (availableAgents.some((a) => getAgentProvider(a) === 'shell')) {
+
+    if (available.has('shell')) {
       order.push('shell');
     }
     return order;
@@ -372,9 +373,7 @@ export function CreateSessionModal({
   // Project base branch
   useEffect(() => {
     const selectedProj = projects.find((project) => project.id === projectId);
-    if (selectedProj?.baseBranch) {
-      setBaseBranch(selectedProj.baseBranch);
-    }
+    setBaseBranch(selectedProj?.baseBranch || '');
   }, [projectId, projects]);
 
   // If the selected project does not support worktree, turn it off
@@ -583,10 +582,10 @@ export function CreateSessionModal({
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       const numIdx = NUMBER_SHORTCUTS.indexOf(e.key);
-      if (numIdx !== -1 && numIdx < availableAgents.length) {
+      if (numIdx !== -1 && numIdx < orderedProviders.length) {
         e.preventDefault();
         e.stopPropagation();
-        setAgentId(availableAgents[numIdx].id);
+        handleSelectProvider(orderedProviders[numIdx]);
         return;
       }
 
@@ -594,6 +593,8 @@ export function CreateSessionModal({
         e.preventDefault();
         const nextIdx = (currentIdx + 1) % orderedProviders.length;
         handleSelectProvider(orderedProviders[nextIdx]);
+        const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
+        buttons?.[nextIdx]?.focus();
         return;
       }
 
@@ -601,6 +602,8 @@ export function CreateSessionModal({
         e.preventDefault();
         const prevIdx = (currentIdx - 1 + orderedProviders.length) % orderedProviders.length;
         handleSelectProvider(orderedProviders[prevIdx]);
+        const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
+        buttons?.[prevIdx]?.focus();
         return;
       }
     },
@@ -956,17 +959,19 @@ export function CreateSessionModal({
                 aria-haspopup="listbox"
                 aria-autocomplete="list"
                 data-testid="select-project-input"
-                disabled={isSubmitting || availableProjects.length === 0}
+                disabled={isSubmitting || (availableProjects.length === 0 && !onOpenNewProject)}
                 placeholder={
                   availableProjects.length === 0
-                    ? 'No projects for host'
+                    ? onOpenNewProject
+                      ? 'No projects for host. Press N to add...'
+                      : 'No projects for host'
                     : selectedProject
                       ? `${selectedProject.name} (${selectedProject.rootPath})`
                       : 'Search projects by name or path...'
                 }
                 value={isProjectOpen ? projectSearchQuery : selectedProject ? selectedProject.name : ''}
                 onFocus={() => {
-                  if (availableProjects.length > 0) {
+                  if (availableProjects.length > 0 || onOpenNewProject) {
                     setIsProjectOpen(true);
                     setProjectSearchQuery('');
                   }
@@ -986,11 +991,11 @@ export function CreateSessionModal({
                 aria-label="Toggle project list"
                 aria-haspopup="listbox"
                 aria-expanded={isProjectOpen}
-                disabled={isSubmitting || availableProjects.length === 0}
+                disabled={isSubmitting || (availableProjects.length === 0 && !onOpenNewProject)}
                 tabIndex={0}
                 onKeyDown={handleProjectKeyDown}
                 onClick={() => {
-                  if (availableProjects.length === 0) return;
+                  if (availableProjects.length === 0 && !onOpenNewProject) return;
                   setIsProjectOpen((prev) => !prev);
                   if (!isProjectOpen) {
                     projectInputRef.current?.focus();
@@ -998,7 +1003,7 @@ export function CreateSessionModal({
                 }}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
               >
-                {availableProjects.length === 0 && (
+                {availableProjects.length === 0 && !onOpenNewProject && (
                   <span className="sr-only">No projects for host</span>
                 )}
                 <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isProjectOpen ? 'rotate-180' : ''}`} />

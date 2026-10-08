@@ -34,7 +34,7 @@ export function detectProviderType(
   if (str.includes('agy') || str.includes('antigravity')) return 'antigravity';
   if (str.includes('claude') || str.includes('anthropic')) return 'claude';
   if (str.includes('codex') || str.includes('openai') || str.includes('chatgpt') || str.includes('gpt')) return 'codex';
-  if (str.includes('grok') || str.includes('xai')) return 'grok';
+  if (str.includes('grok') || /\b(xai|x\.ai)\b/i.test(str)) return 'grok';
   if (str.includes('deepseek') || str.includes('deep-seek')) return 'deepseek';
   if (str.includes('kimi') || str.includes('kimmy') || str.includes('moonshot')) return 'kimi';
   if (str.includes('ollama')) return 'ollama';
