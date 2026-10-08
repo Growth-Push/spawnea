@@ -1329,6 +1329,7 @@ export function Sidebar({
       : children;
     const visibleChildren = hasFilter ? matchingChildren : children;
     const isSelected = session.id === activeSessionId;
+    const hasSelectedChild = children.some((c) => c.id === activeSessionId);
     const shortcut = shortcutLabels.get(session.id);
     const server = getServer(session.serverId);
     const hostInfo = hostInfoMap?.[session.serverId];
@@ -1360,18 +1361,24 @@ export function Sidebar({
               ? session.isExternal
                 ? 'bg-[#1f242c] border-2 border-cyan-500 text-cyan-400 shadow-md ring-2 ring-cyan-500/20'
                 : 'bg-[#1f242c] border-2 border-emerald-500 text-emerald-400 shadow-md ring-2 ring-emerald-500/20'
+              : hasSelectedChild
+              ? 'bg-[#1f242c] border-2 border-purple-500 text-purple-300 shadow-md ring-2 ring-purple-500/20'
               : session.isExternal
               ? 'bg-[#12161c] border border-cyan-900/60 text-cyan-400 hover:bg-[#21262d] hover:text-cyan-200 hover:border-cyan-500'
               : 'bg-[#12161c] border border-[#30363d] text-zinc-400 hover:bg-[#21262d] hover:text-zinc-200 hover:border-zinc-500'
           }`}
-          title={`${displayTitle} (${session.status})${shortcut ? ` — ${shortcut}` : ''}`}
+          title={`${displayTitle} (${session.status})${shortcut ? ` — ${shortcut}` : ''}${hasSelectedChild ? ' (child active)' : ''}`}
         >
           {/* Child Count Badge (for parents with children) */}
           {children.length > 0 && (
             <span
               data-testid={`session-compact-child-count-${session.id}`}
-              className="absolute -top-1 -left-1 px-1 min-w-[14px] h-[14px] rounded-full bg-purple-600 text-white font-mono text-[9px] font-bold flex items-center justify-center border border-[#161b22] z-10"
-              title={`${children.length} child session${children.length === 1 ? '' : 's'}`}
+              className={`absolute -top-1 -left-1 px-1 min-w-[14px] h-[14px] rounded-full text-white font-mono text-[9px] font-bold flex items-center justify-center border border-[#161b22] z-10 ${
+                hasSelectedChild
+                  ? 'bg-purple-500 ring-2 ring-purple-400/40'
+                  : 'bg-purple-600'
+              }`}
+              title={`${children.length} child session${children.length === 1 ? '' : 's'}${hasSelectedChild ? ' (child active)' : ''}`}
             >
               {children.length}
             </span>

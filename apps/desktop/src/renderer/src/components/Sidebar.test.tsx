@@ -609,6 +609,19 @@ describe('Sidebar session hierarchy', () => {
     expect(onSelectSession).toHaveBeenCalledWith('child-1');
   });
 
+  it('indicates active child selection on parent compact card when collapsed', () => {
+    renderSidebar([rootParentSession, childSessionOne], {
+      isCollapsed: true,
+      activeSessionId: 'child-1',
+    });
+
+    const parentButton = screen.getByTestId('session-item-parent-root');
+    expect(parentButton.className).toContain('border-purple-500');
+
+    const badge = screen.getByTestId('session-compact-child-count-parent-root');
+    expect(badge.className).toContain('bg-purple-500');
+  });
+
   it('renders dense subgrid in Grid/Dense view', () => {
     const onSelectSession = vi.fn();
     // 12 sessions triggers dense threshold
