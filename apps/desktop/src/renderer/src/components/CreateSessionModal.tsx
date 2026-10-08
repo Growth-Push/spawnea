@@ -259,6 +259,26 @@ export function CreateSessionModal({
       });
   }, [agents, effectiveServerId]);
 
+  // When effectiveServerId changes, reset selections to the first available options
+  const prevEffectiveServerIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isOpen) {
+      prevEffectiveServerIdRef.current = null;
+      return;
+    }
+
+    if (prevEffectiveServerIdRef.current !== null && prevEffectiveServerIdRef.current !== effectiveServerId) {
+      // Host changed: select first project and first agent/harness for this host
+      if (!createdProject || lastConsumedCreatedProjectRef.current === `${createdProject.serverId}:${createdProject.projectId}`) {
+        setProjectId(availableProjects[0]?.id || '');
+      }
+      setProjectSearchQuery('');
+      setIsProjectOpen(false);
+      setAgentId(availableAgents[0]?.id || '');
+    }
+    prevEffectiveServerIdRef.current = effectiveServerId;
+  }, [effectiveServerId, isOpen, availableProjects, availableAgents, createdProject]);
+
   // Keep project selection valid
   useEffect(() => {
     // If a newly created project is in the process of switching hosts, don't preemptively select the first project
@@ -511,13 +531,14 @@ export function CreateSessionModal({
 
   const handleProjectKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.altKey) return;
 
       const isInput = (e.target as HTMLElement)?.tagName?.toLowerCase() === 'input';
+      const isCtrl = e.ctrlKey || e.metaKey;
 
       // 'n' or 'N' shortcut to trigger + New Project...
       // Only trigger if focus is outside the text search input (e.g. on trigger button or listbox)
-      if (e.key.toLowerCase() === 'n' && onOpenNewProject && !isInput) {
+      if (e.key.toLowerCase() === 'n' && onOpenNewProject && !isInput && !isCtrl) {
         e.preventDefault();
         e.stopPropagation();
         setIsProjectOpen(false);
@@ -526,17 +547,18 @@ export function CreateSessionModal({
         return;
       }
 
-      // 1..0 number shortcuts:
-      // Active on trigger button or listbox, or on input when dropdown is closed
+      // Ctrl+1..0 in input, or 1..0 / Ctrl+1..0 outside input (e.g. on trigger button)
       const numIdx = NUMBER_SHORTCUTS.indexOf(e.key);
       if (numIdx !== -1 && numIdx < projectComboboxOptions.length) {
-        if (!isInput || (!isProjectOpen && !projectSearchQuery)) {
+        if (isCtrl || !isInput) {
           e.preventDefault();
           e.stopPropagation();
           handleProjectSelect(projectComboboxOptions[numIdx].value);
           return;
         }
       }
+
+      if (isCtrl) return;
 
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -1112,7 +1134,7 @@ export function CreateSessionModal({
                   projectComboboxOptions.map((opt, index) => {
                     const isSelected = opt.value === projectId;
                     const isHighlighted = index === highlightedProjectIdx;
-                    const shortcutBadge = opt.shortcut || (index < 10 ? NUMBER_SHORTCUTS[index] : null);
+                    const shortcutBadge = opt.shortcut;
 
                     return (
                       <button
