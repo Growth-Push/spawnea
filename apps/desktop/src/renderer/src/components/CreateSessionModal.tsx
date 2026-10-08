@@ -204,6 +204,12 @@ export function CreateSessionModal({
     setHostTestResult(null);
     setIsProjectOpen(false);
     setProjectSearchQuery('');
+
+    // Restore configured baseBranch from currently selected project
+    prevProjectIdRef.current = projectId;
+    const currentProj = projects.find((p) => p.id === projectId);
+    setBaseBranch(currentProj?.baseBranch || '');
+
     serverTriggerRef.current?.focus();
     const timer = setTimeout(() => serverTriggerRef.current?.focus(), 0);
     return () => clearTimeout(timer);
@@ -391,18 +397,18 @@ export function CreateSessionModal({
     }
     const proj = projects.find((p) => p.id === projectId);
     const catHost =
-      catalog?.hosts[serverId] ||
-      (serverId ? Object.values(catalog?.hosts || {}).find((h) => h.name === serverId) : undefined);
+      catalog?.hosts[effectiveServerId] ||
+      (effectiveServerId ? Object.values(catalog?.hosts || {}).find((h) => h.name === effectiveServerId) : undefined);
     const catProj = catHost?.projects
       ? Object.entries(catHost.projects).find(
-          ([key, p]) => key === projectId || `${serverId}:${key}` === projectId || p.path === proj?.rootPath
+          ([key, p]) => key === projectId || `${effectiveServerId}:${key}` === projectId || p.path === proj?.rootPath
         )?.[1]
       : undefined;
     const isConfigured = Boolean(catProj?.worktree?.enabled);
     if (!isConfigured) {
       setUseWorktree(false);
     }
-  }, [projectId, serverId, catalog, projects]);
+  }, [projectId, effectiveServerId, catalog, projects]);
 
   // Filtered projects for searchable combobox
   const filteredProjects = useMemo(() => {
