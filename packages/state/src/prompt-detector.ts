@@ -1,5 +1,5 @@
 import type { PatternRule, RuleCategory } from './rules/types.js';
-import { DEFAULT_PATTERN_RULES } from './rules/default-rules.js';
+import { CLAUDE_WORKING_INTERRUPT_PATTERN, DEFAULT_PATTERN_RULES } from './rules/default-rules.js';
 
 /**
  * ANSI escape sequence regex matching standard VT100/xterm control codes.
@@ -38,6 +38,26 @@ const HERMES_INTERRUPT = /msg=interrupt|\/steer|\/queue|Ctrl\+C cancel/i;
 const HERMES_STOPWATCH = /[|│]\s*⏱\s*\d+/;
 const HERMES_QUESTION_PROMPT = /^\s*\?\s*[>❯›][^a-zA-Z0-9]*$/;
 const HERMES_IDLE_CHECK = /^\s*⚕[^\n]*[|│]\s*✓\s*\d+(?:ms|[smh])(?:\s|$)/i;
+const CLAUDE_TURN_COMPLETION = /^\s*[✻✽]\s+[A-Za-z][A-Za-z -]*\s+for\s+\d+(?:\.\d+)?[smh](?:\s+\d+(?:\.\d+)?[smh])*\s*·\s*done\b[^\n]*$/i;
+const CLAUDE_INPUT_CHROME = /^\s*(?:─+|❯[^\n]*|⏵⏵[^\n]*\b(?:auto\s+mode|plan\s+mode|accept edits(?:\s+mode)?|bypass permissions(?:\s+mode)?)\s+on[^\n]*)\s*$/i;
+
+/** Recognizes idle Claude input chrome, including drafts bounded by separators. */
+function isClaudeReadyTail(lines: string[]): boolean {
+  const separator = /^\s*─+\s*$/;
+  const draftStart = lines.findIndex((line, index) =>
+    /^\s*❯/.test(line) && index > 0 && separator.test(lines[index - 1])
+  );
+  const draftEnd = draftStart < 0 ? -1 : lines.findIndex((line, index) =>
+    index > draftStart && separator.test(line)
+  );
+  return lines.every((line, index) => {
+    // Wrapped or multiline input belongs to the draft only inside its borders.
+    if (draftStart >= 0 && draftEnd > draftStart && index >= draftStart && index < draftEnd) {
+      return true;
+    }
+    return CLAUDE_INPUT_CHROME.test(line) && !CLAUDE_WORKING_INTERRUPT_PATTERN.test(line);
+  });
+}
 
 /**
  * A Hermes choice footer stays in the scrollback after the menu closes.
@@ -123,9 +143,29 @@ export function detectPromptInTail(
   // Filter rules by harness if specified (keep rules that match this harness or generic rules)
   const targetHarness = options.harness?.toLowerCase() === 'agy' ? 'antigravity' : options.harness?.toLowerCase();
 
-  // For Codex, if a completion marker ('Worked for ...') is present in the tail,
-  // ignore historical prompts that occurred before the completion marker.
+  // Completion markers separate historical prompts from the current turn.
   let effectiveTailLines = recentLines;
+  let claudeCompletion: PromptDetectionResult | undefined;
+  if (targetHarness === 'claude') {
+    const reverseIndex = [...recentLines].reverse().findIndex((line) => CLAUDE_TURN_COMPLETION.test(line));
+    const completionIndex = reverseIndex < 0 ? -1 : recentLines.length - 1 - reverseIndex;
+    if (completionIndex >= 0) {
+      const linesAfter = recentLines.slice(completionIndex + 1);
+      // The editable draft and mode footer remain visible when the turn ends.
+      // Any newer output invalidates the old completion evidence.
+      if (isClaudeReadyTail(linesAfter)) {
+        claudeCompletion = {
+          isPrompt: true,
+          kind: 'idle_prompt',
+          promptLine: recentLines[completionIndex].trim(),
+          matchedRuleId: 'claude-idle-turn-completion',
+          matchedPattern: CLAUDE_TURN_COMPLETION.source,
+          confidence: 0.98,
+        };
+      }
+      effectiveTailLines = linesAfter.length > 0 ? linesAfter : [recentLines[completionIndex]];
+    }
+  }
   if (targetHarness === 'codex') {
     const completionPattern = /(?:^\s*─\s+Worked for\b|Worked for \d+(?:\.\d+)?(?:s|m|h))/i;
     const lastCompIdx = [...recentLines].reverse().findIndex((l) => completionPattern.test(l));
@@ -141,7 +181,9 @@ export function detectPromptInTail(
 
   const rules: PatternRule[] = [
     ...(options.customRules || []),
-    ...DEFAULT_PATTERN_RULES,
+    // A completed turn's editable draft is not a built-in interactive prompt.
+    // Caller-supplied rules still evaluate it before the completion fallback.
+    ...(claudeCompletion ? [] : DEFAULT_PATTERN_RULES),
   ];
 
   const applicableRules = rules.filter((rule) => {
@@ -336,5 +378,5 @@ export function detectPromptInTail(
     }
   }
 
-  return { isPrompt: false, kind: 'none' };
+  return claudeCompletion ?? { isPrompt: false, kind: 'none' };
 }

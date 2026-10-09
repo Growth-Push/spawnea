@@ -66,7 +66,7 @@ By default, Spawnea includes standard harness profiles for local workstations. Y
 
 ### 4. Create an Agent Session
 
-1. In Spawnea, click **New Session** (or the terminal icon with a plus).
+1. In Spawnea, click **New Session** (or the terminal icon with a plus), or press **Ctrl+N** (**Cmd+N** on macOS). The shortcut also works while the terminal has focus.
 2. Select your **Target Host** (Local).
 3. Select your **Project Root**.
 4. Select your **Agent Harness** (e.g., Claude Code, Codex, or Shell).

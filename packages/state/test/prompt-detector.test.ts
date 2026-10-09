@@ -633,6 +633,156 @@ describe('prompt-detector', () => {
     expect(res.matchedRuleId).toBe('claude-idle-prompt');
   });
 
+  it.each(['Cooked', 'Crunched', 'Cogitated', 'Brewed'])('detects Claude %s turn completion with a draft and auto mode footer', (verb) => {
+    const res = detectPromptInTail([
+      'Do you want to proceed? [y/N]',
+      '✽ Wibbling…',
+      '● Finished the requested changes.',
+      `✻ ${verb} for 1m 40s · done 11:42 AM`,
+      '',
+      '────────────────────────',
+      '❯\u00a0merge the pull request',
+      '────────────────────────',
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #7 · ← for agents',
+      '',
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-turn-completion');
+  });
+
+  it('detects a Claude completion marker without an input bar', () => {
+    expect(detectPromptInTail(['✻ Brewed for 18s · done 11:42 AM'], { harness: 'claude' }).kind).toBe('idle_prompt');
+  });
+
+  it.each(['accept edits on', 'bypass permissions on'])('preserves Claude completion with the %s footer', (mode) => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 27s · done 12:16 PM',
+      '────────────────────────',
+      '❯ Continue',
+      '────────────────────────',
+      `⏵⏵ ${mode} (shift+tab to cycle)`,
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-turn-completion');
+  });
+
+  it.each(['accept edits on', 'bypass permissions on'])('detects active interrupt hints in the %s footer', (mode) => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 27s · done 12:16 PM',
+      '❯ Start another task',
+      '❯',
+      `⏵⏵ ${mode} · esc to interrupt`,
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('working');
+  });
+
+  it('preserves Claude completion with a multiline draft inside input separators', () => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 27s · done 12:16 PM',
+      '────────────────────────',
+      '❯ Review the change',
+      '  and explain the result',
+      '  including the esc to interrupt hint',
+      '────────────────────────',
+      '⏵⏵ auto mode on (shift+tab to cycle)',
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-turn-completion');
+  });
+
+  it('rejects newer Claude output outside the input separators', () => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 27s · done 12:16 PM',
+      '────────────────────────',
+      '❯ Review the change',
+      '  and explain the result',
+      '────────────────────────',
+      '● Read(src/index.ts)',
+      '⏵⏵ auto mode on (shift+tab to cycle)',
+    ], { harness: 'claude' });
+    expect(res.kind).not.toBe('idle_prompt');
+  });
+
+  it.each([
+    ['❯ Start another task', '✽ Wibbling…', '❯', '⏵⏵ auto mode on (shift+tab to cycle)'],
+    ['❯ Start another task', '● Read(src/index.ts)'],
+    ['❯ Start another task', 'Do you want to proceed? [y/N]'],
+    ['❯ Start another task', 'Error: connection refused'],
+  ])('does not reuse Claude completion after newer activity: %j', (...suffix) => {
+    const res = detectPromptInTail(['✻ Brewed for 18s · done 11:42 AM', ...suffix], { harness: 'claude' });
+    expect(res.kind).not.toBe('idle_prompt');
+  });
+
+  it('recognizes the empty modern Claude input prompt', () => {
+    expect(detectPromptInTail(['❯\u00a0', '⏵⏵ auto mode on (shift+tab to cycle)'], { harness: 'claude' }).kind).toBe('idle_prompt');
+  });
+
+  it.each(['esc to interrupt', 'Esc to cancel', 'Ctrl+C cancel'])('detects Claude active interrupt footer without a spinner: %s', (hint) => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 27s · done 12:16 PM',
+      '❯ Start another task',
+      '❯',
+      `⏵⏵ auto mode on · ${hint}`,
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('working');
+    expect(res.matchedRuleId).toBe('claude-working-interrupt');
+  });
+
+  it('detects Claude interrupt footer without a previous completion marker', () => {
+    const res = detectPromptInTail(['❯', '⏵⏵ auto mode on · esc to interrupt'], { harness: 'claude' });
+    expect(res.kind).toBe('working');
+  });
+
+  it('does not treat an explanation of interrupt controls as active work', () => {
+    const res = detectPromptInTail([
+      'esc to interrupt cancels the current turn',
+      '> Try "npm test"',
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-prompt');
+  });
+
+  it('does not treat interrupt text inside a draft as active work without a completion marker', () => {
+    const res = detectPromptInTail([
+      '────────────────────────',
+      '❯ Explain the keyboard controls:',
+      '  esc to interrupt cancels the current turn',
+      '────────────────────────',
+      '⏵⏵ auto mode on (shift+tab to cycle)',
+    ], { harness: 'claude' });
+    expect(res.kind).not.toBe('working');
+  });
+
+  it('does not apply Claude completion to another harness', () => {
+    expect(detectPromptInTail(['✻ Brewed for 18s · done 11:42 AM'], { harness: 'shell' }).kind).toBe('none');
+  });
+
+  it.each(['confirmation', 'working', 'error'] as const)('preserves custom Claude %s rules after completion', (category) => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 27s · done 12:16 PM',
+      '❯ Review pending',
+      '⏵⏵ auto mode on (shift+tab to cycle)',
+    ], {
+      harness: 'claude',
+      customRules: [{ id: 'review-pending', name: 'Review pending', category, harness: 'claude', pattern: /Review pending/, confidence: 1 }],
+    });
+    expect(res.kind).toBe(category);
+    expect(res.matchedRuleId).toBe('review-pending');
+  });
+
+  it('does not reuse a custom Claude prompt from before completion', () => {
+    const res = detectPromptInTail([
+      'Review pending',
+      '✻ Brewed for 27s · done 12:16 PM',
+      '❯ Continue',
+    ], {
+      harness: 'claude',
+      customRules: [{ id: 'review-pending', name: 'Review pending', category: 'confirmation', harness: 'claude', pattern: /Review pending/, confidence: 1 }],
+    });
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-turn-completion');
+  });
+
   it('returns none for ordinary output', () => {
     const tail = [
       'Building project @spawnea/desktop...',
