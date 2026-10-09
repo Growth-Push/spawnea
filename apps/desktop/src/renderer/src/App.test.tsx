@@ -1278,7 +1278,10 @@ describe('App Desktop Shell', () => {
     expect(screen.queryByText('Create Agent Session')).toBeNull();
   });
 
-  it('allows Ctrl+N to pass through when triggered inside terminal (.xterm)', async () => {
+  it.each([
+    { ctrlKey: true },
+    { metaKey: true },
+  ])('opens CreateSessionModal from terminal focus and consumes the shortcut: %j', async (modifiers) => {
     window.spawneaApi = createMockSpawneaApi();
 
     render(<App />);
@@ -1288,15 +1291,13 @@ describe('App Desktop Shell', () => {
     });
 
     const xtermEl = document.querySelector('.xterm');
-    expect(xtermEl).toBeDefined();
-    if (xtermEl) {
-      fireEvent.keyDown(xtermEl, { key: 'n', ctrlKey: true, bubbles: true });
-      expect(screen.queryByText('Create Agent Session')).toBeNull();
-
-      // Cmd+N should still work globally even from terminal
-      fireEvent.keyDown(xtermEl, { key: 'n', metaKey: true, bubbles: true });
-      expect(screen.getByText('Create Agent Session')).toBeDefined();
-    }
+    expect(xtermEl).not.toBeNull();
+    const terminalKeyHandler = vi.fn();
+    xtermEl!.addEventListener('keydown', terminalKeyHandler);
+    const unhandled = fireEvent.keyDown(xtermEl!, { key: 'n', ...modifiers, bubbles: true, cancelable: true });
+    expect(screen.getByText('Create Agent Session')).toBeDefined();
+    expect(unhandled).toBe(false);
+    expect(terminalKeyHandler).not.toHaveBeenCalled();
   });
 
   it('auto-populates task description from selection and preserves manual edits', async () => {

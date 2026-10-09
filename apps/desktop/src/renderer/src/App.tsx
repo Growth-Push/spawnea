@@ -1054,6 +1054,7 @@ export function App(): React.JSX.Element {
   }, [uiZoom]);
 
   // Global keyboard navigation shortcuts:
+  // - New Session: Ctrl+N / Cmd+N, including terminal focus
   // - Quick Switcher: Ctrl+P / Cmd+P / Ctrl+K / Cmd+K
   // - Workspace Tabs: Alt+1..6
   // - Sidebar Toggle: Ctrl+Shift+B
@@ -1093,11 +1094,6 @@ export function App(): React.JSX.Element {
 
       // 2. New Session: Ctrl+N / Cmd+N
       if (isCtrl && !e.shiftKey && !e.altKey && (e.key === 'n' || e.key === 'N')) {
-        const target = e.target as HTMLElement | null;
-        const fromTerminal = Boolean(target?.closest?.('.xterm'));
-        if (e.ctrlKey && !e.metaKey && fromTerminal) {
-          return; // let readline/vim/agent TUIs receive Ctrl+N in terminal
-        }
         if (
           isCreateModalOpen ||
           isQuickSwitcherOpen ||
