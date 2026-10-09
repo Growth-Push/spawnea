@@ -1,5 +1,6 @@
 import React from 'react';
 import { Bot } from 'lucide-react';
+import grokIcon from '../assets/grok.svg';
 
 export type ProviderType =
   | 'hermes'
@@ -76,7 +77,7 @@ export function getProviderDisplayName(type: ProviderType): string {
     case 'codex':
       return 'Codex';
     case 'grok':
-      return 'Grok';
+      return 'Grok (xAI)';
     case 'deepseek':
       return 'DeepSeek';
     case 'kimi':
@@ -325,19 +326,17 @@ export function AgentIcon({
         </svg>
       );
 
-    // xAI Grok
+    // Official Grok favicon from https://grok.com/images/favicon.svg.
+    // Keep the asset unchanged under https://x.ai/legal/brand-guidelines.
     case 'grok':
       return (
-        <svg
-          viewBox="0 0 24 24"
-          fill="currentColor"
-          xmlns="http://www.w3.org/2000/svg"
-          className={`${className} text-[#ef4444] shrink-0`}
+        <img
+          src={grokIcon}
+          alt=""
+          title={resolvedTitle}
+          className={`${className} shrink-0 rounded-[20%]`}
           data-testid="provider-icon-grok"
-        >
-          {resolvedTitle && <title>{resolvedTitle}</title>}
-          <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-        </svg>
+        />
       );
 
     // Generic Agent Bot

@@ -47,6 +47,21 @@ describe('HarnessStatusAdapterRegistry', () => {
     const adapter = registry.getAdapter('grok');
     expect(adapter).toBeInstanceOf(GrokStatusAdapter);
     expect(adapter.harnessId).toBe('grok');
+    expect(registry.getAdapter('/usr/local/bin/grok')).toBeInstanceOf(GrokStatusAdapter);
+    expect(registry.getAdapter('xai')).toBeInstanceOf(GrokStatusAdapter);
+  });
+
+  it('preserves an exact registered ID containing a slash', () => {
+    const scopedRegistry = new HarnessStatusAdapterRegistry();
+    const grok = new GrokStatusAdapter();
+    const custom = {
+      harnessId: 'vendor/grok',
+      displayName: 'Vendor Grok',
+      evaluateStatus: grok.evaluateStatus.bind(grok),
+    };
+    scopedRegistry.register(custom);
+    expect(scopedRegistry.getAdapter('vendor/grok')).toBe(custom);
+    expect(scopedRegistry.getAdapter('/usr/local/bin/grok')).toBeInstanceOf(GrokStatusAdapter);
   });
 
   it('resolves GenericStatusAdapter for unknown or undefined harnesses', () => {

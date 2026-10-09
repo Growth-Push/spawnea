@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLogger } from '@spawnea/domain';
@@ -73,8 +73,56 @@ describe('LocalDiscoveryService', () => {
 
     const result = await service.scan();
     expect(readHosts).toHaveBeenCalledTimes(1);
-    expect(result.harnesses.map((item) => item.candidateId)).toEqual(['claude', 'codex', 'hermes', 'opencode', 'shell']);
+    expect(result.harnesses.map((item) => item.candidateId)).toEqual(['claude', 'codex', 'hermes', 'opencode', 'grok', 'shell']);
     expect(result.localHosts).toEqual([{ id: 'local', name: 'Local Machine' }]);
+  });
+
+  it('finds Grok in its home installation when PATH does not contain it', async () => {
+    const grokDirectory = join(directory, '.grok', 'bin');
+    mkdirSync(grokDirectory, { recursive: true });
+    const grokPath = join(grokDirectory, 'grok');
+    writeFileSync(grokPath, '#!/bin/sh\nexit 0\n');
+    chmodSync(grokPath, 0o755);
+    const service = new LocalDiscoveryService(manager, createLogger('LocalDiscoveryTest'), {
+      readHosts: async () => '',
+      pathValue: join(directory, 'empty-path'),
+      homeDirectory: directory,
+    });
+
+    const scan = await service.scan();
+    expect(scan.harnesses.find((item) => item.candidateId === 'grok')).toEqual({
+      candidateId: 'grok',
+      name: 'Grok (xAI)',
+      command: 'grok',
+      found: true,
+      resolvedPath: grokPath,
+    });
+
+    const preview = await service.preview({
+      scanId: scan.scanId,
+      hosts: [],
+      harnesses: [{ candidateId: 'grok', hostId: 'local', harnessId: 'grok', name: 'Grok (xAI)', mode: 'add' }],
+    });
+    expect(preview.success).toBe(true);
+    expect(manager.getActiveCatalog()?.hosts.local.harnesses.grok).toBeUndefined();
+    expect((await service.apply(preview.previewId!)).success).toBe(true);
+    expect(manager.getActiveCatalog()?.hosts.local.harnesses.grok.command).toBe(grokPath);
+  });
+
+  it('finds Grok on PATH without a home installation', async () => {
+    const pathDirectory = join(directory, 'path-bin');
+    mkdirSync(pathDirectory);
+    const grokPath = join(pathDirectory, 'grok');
+    writeFileSync(grokPath, '#!/bin/sh\nexit 0\n');
+    chmodSync(grokPath, 0o755);
+    const service = new LocalDiscoveryService(manager, createLogger('LocalDiscoveryTest'), {
+      readHosts: async () => '',
+      pathValue: pathDirectory,
+      homeDirectory: directory,
+    });
+
+    const grok = (await service.scan()).harnesses.find((item) => item.candidateId === 'grok');
+    expect(grok?.resolvedPath).toBe(grokPath);
   });
 
   it('reports a hosts-file permission failure without blocking harness suggestions', async () => {

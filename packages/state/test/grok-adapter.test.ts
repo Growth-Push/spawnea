@@ -202,6 +202,45 @@ describe('GrokStatusAdapter', () => {
     expect(res.reason).toContain('ready composer');
   });
 
+  it('treats the live Grok welcome artwork as idle when the composer is ready', () => {
+    const res = adapter.evaluateStatus(signals([
+      '│  ⠀⠀⠀⠀⠀⠀⣀⣀⡀⠀⠀⠀⢀⠄   Grok Build  1.0.46  │',
+      '│  ⠀⠀⣼⡟⠁⠀⠀⠀⢀⡴⠻⣿⡀⠀   Grok 4.7 is here!  │',
+      '│  New worktree  ctrl+w  │',
+      'Update: v1.0.50 available, press ctrl+u to restart',
+      '╭────────────────────────────────────────────╮',
+      '│ ❯                                          │',
+      '╰──────── Grok 4.7 (xhigh) ─╯',
+    ]));
+    expect(res.status).toBe('idle');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
+  it('does not report idle when new work follows a prior completion marker', () => {
+    const res = adapter.evaluateStatus(signals(readyComposer([
+      'Worked for 7.8s',
+      'Reading files',
+    ])));
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('pty_activity');
+  });
+
+  it('does not report idle when new work replaces welcome content', () => {
+    const res = adapter.evaluateStatus(signals(readyComposer([
+      'Grok Build 1.0.46',
+      'Reading files',
+    ])));
+    expect(res.status).toBe('working');
+  });
+
+  it('does not treat model text mentioning a welcome action as welcome chrome', () => {
+    const res = adapter.evaluateStatus(signals(readyComposer([
+      '│ Grok Build 1.0.46 │',
+      'Please Quit the command before editing this file.',
+    ])));
+    expect(res.status).toBe('working');
+  });
+
   it('keeps recent PTY output as working when the ready composer is not on screen', () => {
     const res = adapter.evaluateStatus(
       signals(['Reading packages/state/src/adapters/grok-adapter.ts', '◆ Run vitest'], {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { AgentIcon, detectProviderType } from './AgentIcon';
+import { AgentIcon, detectProviderType, getProviderDisplayName } from './AgentIcon';
 
 describe('AgentIcon Component & detectProviderType', () => {
   it('detects provider types correctly from harness, name, or command', () => {
@@ -31,6 +31,24 @@ describe('AgentIcon Component & detectProviderType', () => {
 
     render(<AgentIcon harness="antigravity" />);
     expect(screen.getByTestId('provider-icon-antigravity')).toBeDefined();
+  });
+
+  it('recognizes Grok from the harness, agent name, or command', () => {
+    expect(detectProviderType('grok')).toBe('grok');
+    expect(detectProviderType('xai')).toBe('grok');
+    expect(detectProviderType(undefined, 'Grok Build')).toBe('grok');
+    expect(detectProviderType(undefined, undefined, '/usr/local/bin/grok')).toBe('grok');
+    expect(getProviderDisplayName('grok')).toBe('Grok (xAI)');
+
+    for (const props of [
+      { harness: 'grok' },
+      { agentName: 'Grok Build' },
+      { command: '/usr/local/bin/grok' },
+    ]) {
+      const { unmount } = render(<AgentIcon {...props} />);
+      expect(screen.getByTestId('provider-icon-grok')).toBeDefined();
+      unmount();
+    }
   });
 
   it('renders null when harness is none or terminal', () => {

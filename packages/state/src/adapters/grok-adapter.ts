@@ -41,6 +41,15 @@ function isReadyChrome(line: string): boolean {
   );
 }
 
+function isWelcomeContent(line: string): boolean {
+  const insidePanel = line.includes('│') || line.includes('|');
+  const content = line.replace(/[│|]/g, '').trim();
+  return /^[\u2800-\u28FF\s]+$/.test(content) ||
+    /^[\u2800-\u28FF\s]*(?:Grok Build\s+\d|Grok\s+\d+(?:\.\d+)?\s+is here|Select ['"]Grok)/i.test(content) ||
+    (insidePanel && /^(?:New worktree|Resume session|Changelog|Quit)\b/i.test(content)) ||
+    /^Update: v/i.test(content);
+}
+
 function hasReadyComposer(lines: string[]): boolean {
   return lines.some((line) => isEmptyComposer(line) || isIdleShortcutBar(line) || isModelFooter(line));
 }
@@ -62,7 +71,7 @@ function isActiveWork(line: string): boolean {
     return false;
   }
   return (
-    /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|[\u2800-\u28FF]/.test(line) ||
+    /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\s|$)/.test(line) ||
     /^\s*[◆●▶]\s+\S/.test(line) ||
     /\b(?:Running|Responding|Generating)\b/.test(line) ||
     /esc to interrupt|send a message to interrupt/i.test(line)
@@ -237,7 +246,11 @@ export class GrokStatusAdapter implements HarnessStatusAdapter {
 
     // The TUI repaints the whole screen while idle, so recent PTY bytes are not
     // evidence of work once the ready composer is the latest content.
-    if (substantive.length === 0 && (lastCompletion >= 0 || afterCompletion.some((line) => isIdleShortcutBar(line) || isEmptyComposer(line)))) {
+    const welcomeScreen = lastCompletion < 0 &&
+      substantive.some((line) => /Grok Build\s+\d/i.test(line)) &&
+      substantive.every(isWelcomeContent);
+    if ((substantive.length === 0 || welcomeScreen) &&
+      (lastCompletion >= 0 || afterCompletion.some((line) => isIdleShortcutBar(line) || isEmptyComposer(line)))) {
       const completionLine = lastCompletion >= 0 ? lines[lastCompletion].trim() : undefined;
       return {
         status: 'idle',
