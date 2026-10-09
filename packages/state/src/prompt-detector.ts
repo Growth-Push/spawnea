@@ -39,8 +39,9 @@ const HERMES_STOPWATCH = /[|│]\s*⏱\s*\d+/;
 const HERMES_QUESTION_PROMPT = /^\s*\?\s*[>❯›][^a-zA-Z0-9]*$/;
 const HERMES_IDLE_CHECK = /^\s*⚕[^\n]*[|│]\s*✓\s*\d+(?:ms|[smh])(?:\s|$)/i;
 const CLAUDE_TURN_COMPLETION = /^\s*[✻✽]\s+[A-Za-z][A-Za-z -]*\s+for\s+\d+(?:\.\d+)?[smh](?:\s+\d+(?:\.\d+)?[smh])*\s*·\s*done\b[^\n]*$/i;
-const CLAUDE_INPUT_CHROME = /^\s*(?:─+|❯[^\n]*|⏵⏵[^\n]*\b(?:auto|accept edits|bypass permissions|plan)\s+mode\s+on[^\n]*)\s*$/i;
+const CLAUDE_INPUT_CHROME = /^\s*(?:─+|❯[^\n]*|⏵⏵[^\n]*\b(?:auto\s+mode|plan\s+mode|accept edits(?:\s+mode)?|bypass permissions(?:\s+mode)?)\s+on[^\n]*)\s*$/i;
 
+/** Recognizes idle Claude input chrome, including drafts bounded by separators. */
 function isClaudeReadyTail(lines: string[]): boolean {
   const separator = /^\s*─+\s*$/;
   const draftStart = lines.findIndex((line, index) =>

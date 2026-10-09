@@ -1,6 +1,6 @@
 import type { PatternRule } from './types.js';
 
-export const CLAUDE_WORKING_INTERRUPT_PATTERN = /^\s*(?:⏵⏵[^\n]*?)?\b(?:esc\s+to\s+(?:interrupt|cancel)|Ctrl\+C\s+(?:to\s+)?cancel)\b[^\n]*$/im;
+export const CLAUDE_WORKING_INTERRUPT_PATTERN = /^\s*⏵⏵[^\n]*?\b(?:esc\s+to\s+(?:interrupt|cancel)|Ctrl\+C\s+(?:to\s+)?cancel)\b[^\n]*$/im;
 
 /**
  * Built-in declarative detection rules for interactive harnesses and terminal sessions.

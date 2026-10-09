@@ -654,6 +654,28 @@ describe('prompt-detector', () => {
     expect(detectPromptInTail(['✻ Brewed for 18s · done 11:42 AM'], { harness: 'claude' }).kind).toBe('idle_prompt');
   });
 
+  it.each(['accept edits on', 'bypass permissions on'])('preserves Claude completion with the %s footer', (mode) => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 27s · done 12:16 PM',
+      '────────────────────────',
+      '❯ Continue',
+      '────────────────────────',
+      `⏵⏵ ${mode} (shift+tab to cycle)`,
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-turn-completion');
+  });
+
+  it.each(['accept edits on', 'bypass permissions on'])('detects active interrupt hints in the %s footer', (mode) => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 27s · done 12:16 PM',
+      '❯ Start another task',
+      '❯',
+      `⏵⏵ ${mode} · esc to interrupt`,
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('working');
+  });
+
   it('preserves Claude completion with a multiline draft inside input separators', () => {
     const res = detectPromptInTail([
       '✻ Brewed for 27s · done 12:16 PM',
@@ -709,6 +731,26 @@ describe('prompt-detector', () => {
   it('detects Claude interrupt footer without a previous completion marker', () => {
     const res = detectPromptInTail(['❯', '⏵⏵ auto mode on · esc to interrupt'], { harness: 'claude' });
     expect(res.kind).toBe('working');
+  });
+
+  it('does not treat an explanation of interrupt controls as active work', () => {
+    const res = detectPromptInTail([
+      'esc to interrupt cancels the current turn',
+      '> Try "npm test"',
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('idle_prompt');
+    expect(res.matchedRuleId).toBe('claude-idle-prompt');
+  });
+
+  it('does not treat interrupt text inside a draft as active work without a completion marker', () => {
+    const res = detectPromptInTail([
+      '────────────────────────',
+      '❯ Explain the keyboard controls:',
+      '  esc to interrupt cancels the current turn',
+      '────────────────────────',
+      '⏵⏵ auto mode on (shift+tab to cycle)',
+    ], { harness: 'claude' });
+    expect(res.kind).not.toBe('working');
   });
 
   it('does not apply Claude completion to another harness', () => {
