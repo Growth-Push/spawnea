@@ -231,6 +231,52 @@ describe('StateDetector', () => {
     expect(res.source).toBe('terminal_prompt');
   });
 
+  it('detects Claude turn completion despite a live process and recent PTY output', () => {
+    const res = detector.detectStatus({
+      sessionId: 'sess-claude',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'claude',
+      lastOutputAt: new Date(),
+      recentOutputBytes: 1024,
+      tailLines: [
+        '● Finished the requested changes.',
+        '✻ Brewed for 18s · done 11:42 AM',
+        '────────────────────────',
+        '❯\u00a0merge the pull request',
+        '────────────────────────',
+        '⏵⏵ auto mode on (shift+tab to cycle) · PR #7 · ← for agents',
+      ],
+    }, 'claude');
+    expect(res.status).toBe('idle');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.confidence).toBeGreaterThanOrEqual(0.95);
+  });
+
+  it('detects a new Claude turn from an interrupt footer before its spinner appears', () => {
+    const res = detector.detectStatus({
+      sessionId: 'sess-claude',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: true,
+      paneCurrentCommand: 'claude',
+      lastOutputAt: new Date(),
+      tailLines: [
+        '✻ Brewed for 27s · done 12:16 PM',
+        '❯ Start another task',
+        '❯',
+        '⏵⏵ auto mode on · esc to interrupt',
+      ],
+    }, 'claude');
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('terminal_prompt');
+  });
+
   it('detects working when active PTY output was received recently', () => {
     const signals: SessionSignals = {
       sessionId: 'sess-1',

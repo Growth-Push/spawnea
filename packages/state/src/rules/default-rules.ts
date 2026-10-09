@@ -1,5 +1,7 @@
 import type { PatternRule } from './types.js';
 
+export const CLAUDE_WORKING_INTERRUPT_PATTERN = /^\s*(?:⏵⏵[^\n]*?)?\b(?:esc\s+to\s+(?:interrupt|cancel)|Ctrl\+C\s+(?:to\s+)?cancel)\b[^\n]*$/im;
+
 /**
  * Built-in declarative detection rules for interactive harnesses and terminal sessions.
  */
@@ -290,6 +292,15 @@ export const DEFAULT_PATTERN_RULES: PatternRule[] = [
   // Claude Code CLI Harness Rules
   // -------------------------------------------------------------
   {
+    id: 'claude-working-interrupt',
+    name: 'Claude Code Active Interrupt Footer',
+    category: 'working',
+    harness: 'claude',
+    pattern: CLAUDE_WORKING_INTERRUPT_PATTERN,
+    confidence: 0.98,
+    description: 'Matches Claude Code active interrupt hints, including before the spinner appears',
+  },
+  {
     id: 'claude-tool-permission',
     name: 'Claude Code Tool Permission',
     category: 'confirmation',
@@ -303,7 +314,7 @@ export const DEFAULT_PATTERN_RULES: PatternRule[] = [
     name: 'Claude Code Idle Prompt',
     category: 'idle_prompt',
     harness: 'claude',
-    pattern: />\s*Try\s+|>\s*$/m,
+    pattern: />\s*Try\s+|^\s*[>❯]\s*$/m,
     confidence: 0.8,
     description: 'Matches Claude Code ready prompt',
   },
