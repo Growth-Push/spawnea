@@ -61,7 +61,7 @@ export interface LocalHostDiscoverySuggestion {
   suggestedName: string;
 }
 
-export type LocalHarnessCandidateId = 'claude' | 'codex' | 'hermes' | 'opencode' | 'shell';
+export type LocalHarnessCandidateId = 'claude' | 'codex' | 'hermes' | 'opencode' | 'grok' | 'shell';
 
 export interface LocalHarnessDiscoverySuggestion {
   candidateId: LocalHarnessCandidateId;

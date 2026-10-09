@@ -3,6 +3,7 @@ import { access, readFile, stat } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import {
   IDENTIFIER_REGEX,
   type CatalogDiscoveryMutation,
@@ -41,6 +42,7 @@ const HARNESS_CANDIDATES: ReadonlyArray<{
   { candidateId: 'codex', name: 'Codex CLI', commands: ['codex'] },
   { candidateId: 'hermes', name: 'Hermes', commands: ['hermes'] },
   { candidateId: 'opencode', name: 'OpenCode', commands: ['opencode'] },
+  { candidateId: 'grok', name: 'Grok (xAI)', commands: ['grok'] },
   { candidateId: 'shell', name: 'Interactive Shell', commands: ['zsh', 'bash', 'sh'] },
 ];
 
@@ -116,6 +118,7 @@ interface ScanSnapshot {
 export interface LocalDiscoveryServiceOptions {
   hostsPath?: string;
   pathValue?: string;
+  homeDirectory?: string;
   readHosts?: (path: string) => Promise<string>;
   resolveHarness?: (commands: readonly string[], pathValue: string) => Promise<{ command: string; path: string } | null>;
 }
@@ -123,6 +126,7 @@ export interface LocalDiscoveryServiceOptions {
 export class LocalDiscoveryService {
   private readonly hostsPath: string;
   private readonly pathValue: string;
+  private readonly homeDirectory: string;
   private readonly readHosts: (path: string) => Promise<string>;
   private readonly resolveHarness: typeof resolveExecutable;
   private readonly scans = new Map<string, ScanSnapshot>();
@@ -135,6 +139,7 @@ export class LocalDiscoveryService {
   ) {
     this.hostsPath = options.hostsPath ?? '/etc/hosts';
     this.pathValue = options.pathValue ?? process.env.PATH ?? '';
+    this.homeDirectory = options.homeDirectory ?? homedir();
     this.readHosts = options.readHosts ?? ((path) => readFile(path, 'utf8'));
     this.resolveHarness = options.resolveHarness ?? resolveExecutable;
   }
@@ -156,7 +161,10 @@ export class LocalDiscoveryService {
       suggestedName: entry.alias,
     }));
     const harnesses = await Promise.all(HARNESS_CANDIDATES.map(async (candidate) => {
-      const resolved = await this.resolveHarness(candidate.commands, this.pathValue);
+      const candidatePath = candidate.candidateId === 'grok'
+        ? [this.pathValue, join(this.homeDirectory, '.grok', 'bin')].filter(Boolean).join(delimiter)
+        : this.pathValue;
+      const resolved = await this.resolveHarness(candidate.commands, candidatePath);
       return {
         candidateId: candidate.candidateId,
         name: candidate.name,

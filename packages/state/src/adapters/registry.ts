@@ -13,6 +13,7 @@ export class HarnessStatusAdapterRegistry {
     ['hermes-python', 'hermes'],
     ['agy', 'antigravity'],
     ['gemini-cli', 'antigravity'],
+    ['xai', 'grok'],
   ]);
 
   constructor() {
@@ -34,16 +35,15 @@ export class HarnessStatusAdapterRegistry {
     }
 
     const normalized = harnessId.toLowerCase().trim();
-    if (this.adapters.has(normalized)) {
-      return this.adapters.get(normalized)!;
+    const exact = this.adapters.get(normalized) ?? this.adapters.get(this.aliases.get(normalized) ?? '');
+    if (exact) {
+      return exact;
     }
 
-    const canonicalId = this.aliases.get(normalized);
-    if (canonicalId) {
-      return this.adapters.get(canonicalId) || this.defaultAdapter;
-    }
-
-    return this.defaultAdapter;
+    const command = normalized.split(/[\\/]/).pop() ?? '';
+    return this.adapters.get(command)
+      ?? this.adapters.get(this.aliases.get(command) ?? '')
+      ?? this.defaultAdapter;
   }
 
   listAdapters(): HarnessStatusAdapter[] {
