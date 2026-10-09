@@ -187,6 +187,15 @@ describe('GrokStatusAdapter', () => {
     expect(res.detectedPrompt).toContain('◆ Run pnpm test');
   });
 
+  it('detects a spinner surrounded by TUI borders as working', () => {
+    const res = adapter.evaluateStatus(
+      signals(readyComposer(['     Worked for 7.8s', '│ ⠋ │']))
+    );
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toContain('⠋');
+  });
+
   it('ignores tool lines that belong to the finished turn', () => {
     const res = adapter.evaluateStatus(
       signals(readyComposer(['     ◆ Run git status', '     Worked for 7.8s']))

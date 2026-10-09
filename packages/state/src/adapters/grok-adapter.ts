@@ -70,8 +70,9 @@ function isActiveWork(line: string): boolean {
   if (/Waiting on answers\b/i.test(line)) {
     return false;
   }
+  const normalized = line.replace(/^[\s│|]+|[\s│|]+$/g, '');
   return (
-    /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\s|$)/.test(line) ||
+    /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\s|$)/.test(normalized) ||
     /^\s*[◆●▶]\s+\S/.test(line) ||
     /\b(?:Running|Responding|Generating)\b/.test(line) ||
     /esc to interrupt|send a message to interrupt/i.test(line)
