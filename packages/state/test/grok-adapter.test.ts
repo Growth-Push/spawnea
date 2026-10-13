@@ -356,4 +356,17 @@ describe('GrokStatusAdapter', () => {
     expect(res.detectedPrompt).toBe('Worked for 9.1s');
     expect(res.reason).toContain('Grok turn finished: Worked for 9.1s');
   });
+
+  it('keeps working when new active work mentioning Recap follows completion', () => {
+    const res = adapter.evaluateStatus(
+      signals([
+        '     Worked for 9.1s                                                                                                                                                                                                          █',
+        '     ◆ Run rg Recap .',
+        ...readyComposer(),
+      ])
+    );
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toContain('◆ Run rg Recap .');
+  });
 });

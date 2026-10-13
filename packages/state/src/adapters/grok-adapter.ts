@@ -38,7 +38,7 @@ function isIdleShortcutBar(line: string): boolean {
 
 function isRecapLine(line: string): boolean {
   const stripped = line.replace(/[\s█]+$/, '').trim();
-  return /^\s*┃/.test(stripped) || /\bRecap\b/i.test(stripped);
+  return /^\s*┃/.test(stripped);
 }
 
 function isReadyChrome(line: string): boolean {
@@ -78,10 +78,13 @@ function isQuestionCardLine(line: string): boolean {
 }
 
 function isActiveWork(line: string): boolean {
-  if (/Waiting on answers\b/i.test(line) || /\bRecap\b/i.test(line)) {
+  if (/Waiting on answers\b/i.test(line)) {
     return false;
   }
   const normalized = line.replace(/^[\s│|┃]+|[\s│|┃]+$/g, '');
+  if (/^\s*[◆◂]?\s*Recap\b/i.test(normalized)) {
+    return false;
+  }
   return (
     /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\s|$)/.test(normalized) ||
     /^\s*[◆●▶]\s+\S/.test(normalized) ||
