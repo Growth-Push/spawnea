@@ -27,6 +27,8 @@ export interface CreateSessionInput {
   task: string;
   baseBranch?: string;
   useWorktree?: boolean;
+  /** Exact per-session model override; omitted means the configured harness default. */
+  model?: string;
 }
 
 export type ChildSessionWorkspaceMode = 'same-project' | 'new-worktree';

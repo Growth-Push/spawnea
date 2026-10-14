@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createDatabase,
   type DatabaseConnection,
@@ -312,6 +315,37 @@ describe('Domain Repositories & Logging Integration', () => {
       const deleted = await repos.sessions.delete('sess-1');
       expect(deleted).toBe(true);
       expect(await repos.sessions.findById('sess-1')).toBeNull();
+    });
+
+    it('persists an explicit requested model and preserves legacy omission on reopen', async () => {
+      conn.close();
+      const directory = await mkdtemp(join(tmpdir(), 'spawnea-db-model-'));
+      const databasePath = join(directory, 'sessions.sqlite');
+      const fileConn = createDatabase({ path: databasePath });
+      const fileRepos = createRepositories(fileConn.db, { logger: createLogger('file-db-test') });
+      await fileRepos.servers.save({ id: 'srv-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+      await fileRepos.projects.save({ id: 'proj-1', serverId: 'srv-1', name: 'Project', rootPath: '/repo' });
+      await fileRepos.agents.save({ id: 'agent-1', name: 'Agent', command: 'codex', harness: 'codex' });
+      const now = new Date();
+      const saved = await fileRepos.sessions.save({
+        id: 'sess-model', name: 'Model Session', serverId: 'srv-1', projectId: 'proj-1', agentId: 'agent-1',
+        task: 'Persist model', worktreePath: '/tmp/model-worktree', branch: 'model-branch', tmuxSessionName: 'model-session', status: 'starting', requestedModel: 'literal-model.v1', createdAt: now, lastActivityAt: now,
+      });
+      expect(saved.requestedModel).toBe('literal-model.v1');
+      expect((await fileRepos.sessions.findById('sess-model'))?.requestedModel).toBe('literal-model.v1');
+
+      const legacy = await fileRepos.sessions.save({
+        id: 'sess-legacy', name: 'Legacy Session', serverId: 'srv-1', projectId: 'proj-1', agentId: 'agent-1',
+        task: 'Legacy', worktreePath: '/tmp/legacy-worktree', branch: 'legacy-branch', tmuxSessionName: 'legacy-session', status: 'starting', createdAt: now, lastActivityAt: now,
+      });
+      expect(legacy.requestedModel).toBeUndefined();
+      fileConn.close();
+      const reopenedConn = createDatabase({ path: databasePath });
+      conn = reopenedConn;
+      const reopenedRepos = createRepositories(reopenedConn.db, { logger: createLogger('reopened-file-db-test') });
+      expect((await reopenedRepos.sessions.findById('sess-model'))?.requestedModel).toBe('literal-model.v1');
+      expect((await reopenedRepos.sessions.findById('sess-legacy'))?.requestedModel).toBeUndefined();
+      await rm(directory, { recursive: true, force: true });
     });
 
     it('persists and updates session topology and agent session id', async () => {

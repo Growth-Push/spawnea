@@ -1,4 +1,4 @@
-import { getAgentSkillPrompt } from '@spawnea/domain';
+import { getAgentSkillPrompt, MODEL_ID_PATTERN } from '@spawnea/domain';
 import type { ControlCliClient } from './client.js';
 
 export interface OutputOptions {
@@ -61,6 +61,7 @@ export async function getSessionStatus(
   console.log(`Host:         ${session.host?.name || session.host?.id || '-'}`);
   console.log(`Project:      ${session.project?.name || session.project?.id || '-'}`);
   console.log(`Harness:      ${session.harness?.name || session.harness?.command || '-'}`);
+  console.log(`Model requested: ${session.requestedModel || 'Harness default / not recorded'}`);
   if (session.parentSessionId) {
     console.log(`Parent:       ${session.parentSessionId}`);
   }
@@ -81,12 +82,16 @@ export interface CreateSessionOptions extends OutputOptions {
   branch?: string;
   worktree?: boolean;
   clientRequestId?: string;
+  model?: string;
   timeoutMs?: number;
 }
 
 export async function createSession(client: ControlCliClient, options: CreateSessionOptions): Promise<void> {
   if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)) {
     throw new Error(`Invalid timeoutMs: '${options.timeoutMs}'. Expected positive number of milliseconds.`);
+  }
+  if (options.model !== undefined && !MODEL_ID_PATTERN.test(options.model)) {
+    throw new Error('Invalid --model. Expected an exact model ID without whitespace or unsupported characters.');
   }
   const result = await client.callTool('spawnea_create_session', {
     projectId: options.project,
@@ -96,6 +101,7 @@ export async function createSession(client: ControlCliClient, options: CreateSes
     baseBranch: options.branch,
     useWorktree: options.worktree ?? true,
     clientRequestId: options.clientRequestId,
+    model: options.model,
   }, options.timeoutMs);
 
   if (options.json) {

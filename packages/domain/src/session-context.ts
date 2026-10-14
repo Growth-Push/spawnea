@@ -83,6 +83,7 @@ export const SessionContextFileSchema = z
     parentSessionId: z.string().min(1).optional(),
     childAlias: z.string().min(1).optional(),
     creationSource: SessionCreationSourceSchema.optional(),
+    requestedModel: z.string().optional(),
     isExternal: z.boolean().optional(),
     savedTopology: SessionTopologySnapshotSchema.optional(),
     agentSessionId: z.string().optional(),

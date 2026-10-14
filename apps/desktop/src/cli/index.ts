@@ -30,6 +30,7 @@ COMMANDS:
     --project <id>              Project identifier (required)
     --task "<description>"      Task description (required)
     [--agent <id>]              Agent harness (e.g. codex, local:codex)
+    [--model <id>]              Exact model ID (omit for harness default)
     [--server <id>]             Target server (default: local)
     [--branch <branch>]         Base git branch
     [--no-worktree]             Do not use isolated worktree
@@ -218,6 +219,8 @@ export async function runCli(argv: string[]): Promise<void> {
 
           const agent = typeof parsed.flags.agent === 'string' ? parsed.flags.agent : undefined;
           const server = typeof parsed.flags.server === 'string' ? parsed.flags.server : undefined;
+          const model = typeof parsed.flags.model === 'string' ? parsed.flags.model : undefined;
+          if (parsed.flags.model !== undefined && !model?.trim()) throw new Error('--model requires a non-empty exact model ID');
           const branch = typeof parsed.flags.branch === 'string' ? parsed.flags.branch : undefined;
           const worktree = parsed.flags['no-worktree'] ? false : true;
           const clientRequestId = typeof parsed.flags['request-id'] === 'string'
@@ -232,6 +235,7 @@ export async function runCli(argv: string[]): Promise<void> {
             project,
             task,
             agent,
+            model,
             server,
             branch,
             worktree,

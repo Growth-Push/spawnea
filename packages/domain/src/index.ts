@@ -8,6 +8,7 @@ export * from './repositories.js';
 export * from './secret-reference.js';
 export * from './control.js';
 export * from './path-security.js';
+export * from './model-selection.js';
 export type SessionStatus =
   | 'starting'
   | 'working'
@@ -186,6 +187,8 @@ export interface Session {
   status: SessionStatus;
   /** Explicit origin of the session creation request. Legacy records may omit this. */
   creationSource?: SessionCreationSource;
+  /** Requested model only; this is not effective-model telemetry. */
+  requestedModel?: string;
   isExternal?: boolean;
   savedTopology?: SessionTopologySnapshot;
   agentSessionId?: string;

@@ -34,6 +34,7 @@ export interface ControlSessionView {
   tmuxSessionName: string;
   status: SessionStatus;
   creationSource: 'ui' | 'mcp';
+  requestedModel?: string;
   active: boolean;
   activeTab?: ControlWorkspaceTab;
   createdAt: string;
