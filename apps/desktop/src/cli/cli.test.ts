@@ -7,7 +7,7 @@ import { ControlMcpGateway } from '../main/control-mcp-gateway.js';
 import type { AgentControlService as AgentControlServiceType } from '../main/agent-control-service.js';
 import { ControlCliClient } from './client.js';
 import { parseArgs, runCli } from './index.js';
-import { createSession, createChild, pollTurn, sendPrompt, sendAndWaitPrompt, showSkillPrompt, waitTurn } from './commands.js';
+import { createSession, createChild, getSessionStatus, pollTurn, sendPrompt, sendAndWaitPrompt, showSkillPrompt, waitTurn } from './commands.js';
 
 describe('Spawnea Control CLI', () => {
   const gateways: ControlMcpGateway[] = [];
@@ -146,6 +146,61 @@ describe('Spawnea Control CLI', () => {
     it('throws when a non-boolean flag is missing a value', () => {
       expect(() => parseArgs(['session', 'create', '--project'])).toThrow("Flag '--project' requires a value.");
       expect(() => parseArgs(['session', 'create', '--project', '--task', 'do-work'])).toThrow("Flag '--project' requires a value.");
+      expect(() => parseArgs(['session', 'create', '--project', 'proj', '--task', 'do-work', '--model'])).toThrow("Flag '--model' requires a value.");
+    });
+
+    it('parses an exact model identifier literally and leaves omission undefined', () => {
+      expect(parseArgs(['session', 'create', '--project', 'proj', '--task', 'do-work', '--model', 'literal-model.v1:/exact']).flags.model)
+        .toBe('literal-model.v1:/exact');
+      expect(parseArgs(['session', 'create', '--project', 'proj', '--task', 'do-work']).flags.model).toBeUndefined();
+    });
+  });
+
+  describe('session create model request path', () => {
+    it('forwards the exact model and preserves omitted model through the real command function', async () => {
+      const callTool = vi.fn().mockResolvedValue({ sessionId: 'session-1' });
+      const client = { callTool } as unknown as ControlCliClient;
+      await createSession(client, { project: 'proj', task: 'task', model: 'literal-model.v1:/exact' });
+      expect(callTool).toHaveBeenCalledWith('spawnea_create_session', expect.objectContaining({ model: 'literal-model.v1:/exact', projectId: 'proj', task: 'task', useWorktree: true }), undefined);
+
+      callTool.mockClear();
+      await createSession(client, { project: 'proj', task: 'task' });
+      expect(callTool).toHaveBeenCalledWith('spawnea_create_session', expect.objectContaining({ model: undefined }), undefined);
+    });
+
+    it('rejects an empty model before creating a request', async () => {
+      const callTool = vi.fn();
+      const client = { callTool } as unknown as ControlCliClient;
+      await expect(createSession(client, { project: 'proj', task: 'task', model: '' }))
+        .rejects.toThrow('Invalid --model');
+      expect(callTool).not.toHaveBeenCalled();
+    });
+
+    it.each([' model', 'model ', 'mo del', 'model$unsafe'])('rejects invalid supplied model %j before creating a request', async (model) => {
+      const callTool = vi.fn();
+      const client = { callTool } as unknown as ControlCliClient;
+      await expect(createSession(client, { project: 'proj', task: 'task', model })).rejects.toThrow('Invalid --model');
+      expect(callTool).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('requested model status', () => {
+    it.each([
+      [undefined, 'Harness default / not recorded'],
+      ['Literal.v1:Org/Model_ID', 'Literal.v1:Org/Model_ID'],
+    ])('reports requested model %j without inventing historical information', async (model, label) => {
+      const session = { id: 'status-fixture', status: 'idle', ...(model === undefined ? {} : { requestedModel: model }) };
+      const callTool = vi.fn().mockResolvedValue({ session });
+      const client = { callTool } as unknown as ControlCliClient;
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      await getSessionStatus(client, session.id);
+      expect(log).toHaveBeenCalledWith(`Model requested: ${label}`);
+
+      log.mockClear();
+      await getSessionStatus(client, session.id, { json: true });
+      const json = JSON.parse(log.mock.calls[0][0]);
+      expect(json).toEqual(session);
+      expect(Object.hasOwn(json, 'requestedModel')).toBe(model !== undefined);
     });
   });
 

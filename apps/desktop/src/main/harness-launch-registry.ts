@@ -1,3 +1,5 @@
+import { getRootModelFlag, MODEL_ID_PATTERN, normalizeHarnessExecutable } from '@spawnea/domain';
+
 const MODEL_FLAGS: Record<string, string> = {
   codex: '-m',
   claude: '--model',
@@ -17,17 +19,20 @@ export class HarnessLaunchRegistry {
       ? `\x1b[200~${text.split('\x1b[200~').join('').split('\x1b[201~').join('')}\x1b[201~` : text;
   }
 
-  withModel(command: string, harness: string | undefined, args: string[], model: string | undefined): string[] {
-    if (!model) return [...args];
-    if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/.test(model)) {
+  withModel(command: string, harness: string | undefined, args: string[], model: string | undefined, allowExtendedHarness = false): string[] {
+    if (model === undefined) return [...args];
+    if (!MODEL_ID_PATTERN.test(model)) {
       throw new Error('Model must contain only safe model identifier characters and cannot start with a dash');
     }
-    const commandName = (command.split(/[\\/]/).at(-1) ?? command)
-      .replace(/\.(?:exe|cmd|bat)$/i, '')
-      .toLowerCase();
-    const identity = harness?.toLowerCase() || commandName;
-    const flag = MODEL_FLAGS[identity] ?? MODEL_FLAGS[commandName];
-    if (!flag) throw new Error(`Harness '${identity}' does not support explicit model selection`);
+    const commandName = normalizeHarnessExecutable(command);
+    // Keep existing child mappings; root capability requires a known executable.
+    const identity = allowExtendedHarness
+      ? (MODEL_FLAGS[commandName] ? commandName : harness?.toLowerCase() || commandName)
+      : commandName;
+    const flag = allowExtendedHarness ? MODEL_FLAGS[identity] : getRootModelFlag(command);
+    if (!flag) {
+      throw new Error(`Harness '${identity}' does not support explicit model selection`);
+    }
 
     const result: string[] = [];
     const flags = ['-m', '--model'];

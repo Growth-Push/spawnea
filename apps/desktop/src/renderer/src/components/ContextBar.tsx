@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Session, Server, Project, Agent, HostSystemInfo } from '@spawnea/domain';
 import { StatusBadge, isPureShellSession, shouldShowStatusBadge } from './StatusBadge';
 import { OsIcon } from './OsIcon';
@@ -74,7 +74,7 @@ export function ContextBar({
   const titleInputRef = useRef<HTMLInputElement>(null);
   const isEditingTitle = Boolean(session && editingSessionId === session.id);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setEditingSessionId(null);
     setDraftTitle('');
     setRenameError(null);
@@ -326,6 +326,14 @@ export function ContextBar({
                 className="w-3 h-3 shrink-0"
               />
               <span className="truncate">{agentDisplay}</span>
+            </span>
+          )}
+          {hasAgentHarness && (
+            <span
+              className="flex items-center gap-1.5 text-[11px] text-sky-300 px-2 py-0.5 bg-sky-500/10 rounded border border-sky-500/20 truncate hidden xl:flex"
+              title={session.requestedModel ? `Requested model: ${session.requestedModel}` : 'Requested model: Harness default or not recorded'}
+            >
+              <span className="truncate">Requested model: {session.requestedModel || 'Harness default / not recorded'}</span>
             </span>
           )}
         </div>

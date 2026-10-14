@@ -727,6 +727,7 @@ export class SessionManager {
         catHarness?.id || dbAgent?.harness,
         catHarness?.args || dbAgent?.argsTemplate || [],
         options.model,
+        Boolean(options.parentSessionId),
       );
       const harnessName = catHarness?.name || dbAgent?.name || 'Harness';
 
@@ -875,6 +876,7 @@ export class SessionManager {
           },
           status: effectiveStatus,
           creationSource,
+          requestedModel: options.model,
           createdAt: nowIso,
           updatedAt: nowIso,
         };
@@ -899,6 +901,7 @@ export class SessionManager {
           tmuxSessionName,
           status: effectiveStatus,
           creationSource,
+          requestedModel: options.model,
         });
         sessionPersisted = true;
 
@@ -998,6 +1001,7 @@ export class SessionManager {
       task: input.task,
       baseBranch: input.baseBranch,
       useWorktree: input.useWorktree,
+      model: input.model,
       initialStatus: 'working',
       creationSource,
     });
@@ -2184,6 +2188,7 @@ export class SessionManager {
           tmuxSessionName: ctx.persistentSession.name,
           status: ctx.status === 'working' || ctx.status === 'starting' ? 'disconnected' : ctx.status,
           creationSource: ctx.creationSource ?? 'ui',
+          requestedModel: ctx.requestedModel,
           isExternal: ctx.isExternal ?? false,
           parentSessionId: ctx.parentSessionId,
           childAlias: ctx.childAlias,

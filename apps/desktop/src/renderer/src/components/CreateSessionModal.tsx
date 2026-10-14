@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Server, Project, Agent, CreateSessionInput, HostTestResult } from '@spawnea/domain';
+import { getRootModelFlag, MODEL_ID_PATTERN } from '@spawnea/domain';
 import {
   X,
   Bot,
@@ -92,6 +93,8 @@ export function CreateSessionModal({
   const [serverId, setServerId] = useState<string>(() => servers[0]?.id || '');
   const [projectId, setProjectId] = useState<string>('');
   const [agentId, setAgentId] = useState<string>('');
+  const [modelChoice, setModelChoice] = useState<string>('');
+  const [modelMode, setModelMode] = useState<'default' | 'custom'>('default');
   const [task, setTask] = useState<string>('');
   const [isCustomTask, setIsCustomTask] = useState<boolean>(false);
   const [baseBranch, setBaseBranch] = useState<string>('');
@@ -195,6 +198,8 @@ export function CreateSessionModal({
     setHostTestResult(null);
     setIsProjectOpen(false);
     setProjectSearchQuery('');
+    setModelChoice('');
+    setModelMode('default');
 
     // Restore configured baseBranch from currently selected project
     prevProjectIdRef.current = projectId;
@@ -289,6 +294,8 @@ export function CreateSessionModal({
       setProjectSearchQuery('');
       setIsProjectOpen(false);
       setAgentId(availableAgents[0]?.id || '');
+      setModelChoice('');
+      setModelMode('default');
     }
     prevEffectiveServerIdRef.current = effectiveServerId;
   }, [effectiveServerId, isOpen, availableProjects, availableAgents, createdProject]);
@@ -316,9 +323,13 @@ export function CreateSessionModal({
     if (availableAgents.length > 0) {
       if (!agentId || !availableAgents.some((a) => a.id === agentId)) {
         setAgentId(availableAgents[0].id);
+        setModelChoice('');
+        setModelMode('default');
       }
     } else {
       setAgentId('');
+      setModelChoice('');
+      setModelMode('default');
     }
   }, [availableAgents, agentId]);
 
@@ -375,6 +386,13 @@ export function CreateSessionModal({
     return groupedAgents.get(selectedProvider) || [];
   }, [groupedAgents, selectedProvider]);
 
+  const supportsExplicitModel = Boolean(getRootModelFlag(currentAgent?.command || ''));
+
+  useEffect(() => {
+    setModelChoice('');
+    setModelMode('default');
+  }, [currentAgent?.command]);
+
   const handleSelectProvider = useCallback(
     (pKey: string) => {
       const agentsInGroup = groupedAgents.get(pKey) || [];
@@ -382,6 +400,8 @@ export function CreateSessionModal({
         if (!agentsInGroup.some((a) => a.id === agentId)) {
           setAgentId(agentsInGroup[0].id);
         }
+        setModelChoice('');
+        setModelMode('default');
       }
     },
     [groupedAgents, agentId]
@@ -673,6 +693,8 @@ export function CreateSessionModal({
         e.preventDefault();
         e.stopPropagation();
         setAgentId(currentProviderAgents[numIdx].id);
+        setModelChoice('');
+        setModelMode('default');
         const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
         buttons?.[numIdx]?.focus();
         return;
@@ -682,6 +704,8 @@ export function CreateSessionModal({
         e.preventDefault();
         const nextIdx = (currentIdx + 1) % currentProviderAgents.length;
         setAgentId(currentProviderAgents[nextIdx].id);
+        setModelChoice('');
+        setModelMode('default');
         const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
         buttons?.[nextIdx]?.focus();
         return;
@@ -691,6 +715,8 @@ export function CreateSessionModal({
         e.preventDefault();
         const prevIdx = (currentIdx - 1 + currentProviderAgents.length) % currentProviderAgents.length;
         setAgentId(currentProviderAgents[prevIdx].id);
+        setModelChoice('');
+        setModelMode('default');
         const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
         buttons?.[prevIdx]?.focus();
         return;
@@ -799,6 +825,11 @@ export function CreateSessionModal({
       setError('Please select an agent harness.');
       return;
     }
+    if (supportsExplicitModel && modelMode === 'custom' && !MODEL_ID_PATTERN.test(modelChoice)) {
+      setError('Enter an exact model ID without whitespace or unsupported characters.');
+      return;
+    }
+    const requestedModel = supportsExplicitModel && modelMode === 'custom' ? modelChoice : undefined;
 
     try {
       setIsSubmitting(true);
@@ -811,10 +842,13 @@ export function CreateSessionModal({
         task: task.trim(),
         baseBranch: isEffectiveWorktree ? baseBranch.trim() || undefined : undefined,
         useWorktree: isEffectiveWorktree,
+        model: requestedModel,
       });
       // Reset form
       setTask('');
       setBaseBranch('');
+      setModelChoice('');
+      setModelMode('default');
       onClose();
     } catch (err: any) {
       setError(err?.message || 'Failed to create session. Please check details and retry.');
@@ -1219,7 +1253,7 @@ export function CreateSessionModal({
             <select
               data-testid="select-agent"
               value={agentId}
-              onChange={(e) => setAgentId(e.target.value)}
+              onChange={(e) => { setAgentId(e.target.value); setModelChoice(''); setModelMode('default'); }}
               disabled={isSubmitting}
               aria-hidden="true"
               tabIndex={-1}
@@ -1322,7 +1356,7 @@ export function CreateSessionModal({
                       tabIndex={isProfileSelected ? 0 : -1}
                       disabled={isSubmitting}
                       data-testid={`profile-pill-${ag.id}`}
-                      onClick={() => setAgentId(ag.id)}
+                      onClick={() => { setAgentId(ag.id); setModelChoice(''); setModelMode('default'); }}
                       onKeyDown={(e) => handleProfileKeyDown(e, pIdx)}
                       className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                         isProfileSelected
@@ -1350,6 +1384,44 @@ export function CreateSessionModal({
                 })}
               </div>
             )}
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="session-model" className="block text-xs font-semibold text-zinc-300">
+              Model
+            </label>
+            {supportsExplicitModel ? (
+              <>
+                <select
+                  id="session-model"
+                  data-testid="session-model"
+                  value={modelMode}
+                  onChange={(e) => setModelMode(e.target.value as 'default' | 'custom')}
+                  disabled={isSubmitting}
+                  className="w-full rounded-lg border border-[#30363d] bg-[#0d1117] px-3 py-2 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none"
+                >
+                  <option value="default">Harness default</option>
+                  <option value="custom">Exact model ID</option>
+                </select>
+                {modelMode === 'custom' && (
+                  <input
+                    aria-label="Exact model ID"
+                    value={modelChoice}
+                    onChange={(e) => setModelChoice(e.target.value)}
+                    placeholder="e.g. gpt-5-codex"
+                    disabled={isSubmitting}
+                    className="mt-2 w-full rounded-lg border border-[#30363d] bg-[#0d1117] px-3 py-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:border-emerald-500 focus:outline-none"
+                  />
+                )}
+              </>
+            ) : (
+              <div className="rounded-lg border border-[#30363d] bg-[#0d1117] px-3 py-2 text-xs text-zinc-500">
+                Harness default (explicit model selection is not supported for this harness)
+              </div>
+            )}
+            <p id="session-model-help" className="text-[10px] text-zinc-500">
+              {supportsExplicitModel ? 'Choose Harness default to use the configured default.' : 'The configured harness default is used.'} This records a requested choice; the native harness validates access.
+            </p>
           </div>
 
           {/* Isolated Git Worktree Option */}
