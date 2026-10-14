@@ -1,4 +1,4 @@
-import { getAgentSkillPrompt } from '@spawnea/domain';
+import { getAgentSkillPrompt, MODEL_ID_PATTERN } from '@spawnea/domain';
 import type { ControlCliClient } from './client.js';
 
 export interface OutputOptions {
@@ -90,7 +90,7 @@ export async function createSession(client: ControlCliClient, options: CreateSes
   if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)) {
     throw new Error(`Invalid timeoutMs: '${options.timeoutMs}'. Expected positive number of milliseconds.`);
   }
-  if (options.model !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/.test(options.model)) {
+  if (options.model !== undefined && !MODEL_ID_PATTERN.test(options.model)) {
     throw new Error('Invalid --model. Expected an exact model ID without whitespace or unsupported characters.');
   }
   const result = await client.callTool('spawnea_create_session', {

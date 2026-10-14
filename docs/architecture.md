@@ -18,7 +18,10 @@ and operator/bootstrap MCP pass an optional exact `model` value to the main
 process; `SessionManager` persists it as `requestedModel` and the
 `HarnessLaunchRegistry` maps it to native flags (`-m` for Hermes/Codex or
 `--model` for Claude). Supported executables determine model capability even when
-catalog IDs name custom profiles. An omitted value preserves profile defaults.
+catalog IDs name custom profiles. Unknown wrappers do not gain root model
+capability from their profile ID or display name. The UI and control/launch
+boundaries share executable normalization and model-ID validation in the domain
+package. An omitted value preserves profile defaults.
 The persisted value is a request record, not effective-model telemetry;
 context-to-database recovery preserves that value, and legacy sessions keep an
 absent value rather than receiving an inferred model.

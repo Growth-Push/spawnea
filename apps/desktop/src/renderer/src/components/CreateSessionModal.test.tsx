@@ -735,6 +735,36 @@ describe('CreateSessionModal', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ model: 'literal-model.v1:/exact' })));
   });
 
+  it.each([
+    { name: 'OpenAI Review', harness: 'codex' },
+    { name: 'Claude Review', harness: 'review-profile' },
+  ])('keeps unsupported $name wrappers on their configured default', async ({ name, harness }) => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const wrapper = { ...mockAgents[2], id: 'srv-1:review-profile', name, harness, command: 'example-wrapper' };
+    render(<CreateSessionModal isOpen={true} onClose={vi.fn()} onSubmit={onSubmit} servers={mockServers} projects={mockProjects} agents={[wrapper]} />);
+    await waitFor(() => expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe(wrapper.id));
+    expect(screen.queryByTestId('session-model')).toBeNull();
+    expect(screen.getByText('Harness default (explicit model selection is not supported for this harness)')).toBeDefined();
+    fireEvent.change(screen.getByTestId('input-task-name'), { target: { value: 'Wrapper default' } });
+    fireEvent.click(screen.getByTestId('submit-create-session'));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ agentId: wrapper.id, model: undefined })));
+  });
+
+  it('clears a requested model when the selected profile changes to an unsupported executable', () => {
+    const onSubmit = vi.fn();
+    const props = { isOpen: true, onClose: vi.fn(), onSubmit, servers: mockServers, projects: mockProjects };
+    const { rerender } = render(<CreateSessionModal {...props} agents={[mockAgents[2]]} />);
+    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('Exact model ID'), { target: { value: 'Literal.v1:Exact_ID' } });
+    rerender(<CreateSessionModal {...props} agents={[{ ...mockAgents[2], command: 'example-wrapper' }]} />);
+    expect(screen.queryByTestId('session-model')).toBeNull();
+    rerender(<CreateSessionModal {...props} agents={[mockAgents[2]]} />);
+    expect((screen.getByTestId('session-model') as HTMLSelectElement).value).toBe('default');
+    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
+    expect((screen.getByLabelText('Exact model ID') as HTMLInputElement).value).toBe('');
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it.each(['', ' model', 'model ', 'mo del', 'model$unsafe'])('rejects invalid model ID %j before onSubmit', async (value) => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<CreateSessionModal isOpen={true} onClose={vi.fn()} onSubmit={onSubmit} servers={mockServers} projects={mockProjects} agents={mockAgents} />);

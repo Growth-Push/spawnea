@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import type { Repositories } from '@spawnea/db';
 import {
   SPAWNEA_CONTROL_API_VERSION,
+  getRootModelFlag,
+  MODEL_ID_PATTERN,
+  normalizeHarnessExecutable,
   type ControlBootstrapState,
   type ControlCreateSessionRequest,
   type ControlCreateSessionResult,
@@ -811,11 +814,12 @@ export class AgentControlService {
       }
     }
     if (request.model !== undefined) {
-      if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/.test(request.model)) {
+      if (!MODEL_ID_PATTERN.test(request.model)) {
         throw new Error('Model must contain only safe model identifier characters and cannot start with a dash');
       }
-      const identity = (harness?.harness || harness?.command || '').split(/[\\/]/).at(-1)?.replace(/\.(?:exe|cmd|bat)$/i, '').toLowerCase();
-      if (!identity || !['codex', 'claude', 'claude-code', 'hermes'].includes(identity)) {
+      const command = harness?.command || '';
+      const identity = normalizeHarnessExecutable(command);
+      if (!getRootModelFlag(command)) {
         throw new Error(`Harness '${identity || request.agentId}' does not support explicit model selection`);
       }
     }

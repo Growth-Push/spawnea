@@ -91,6 +91,24 @@ describe('ContextBar session hierarchy actions', () => {
     expect(screen.getByText('Requested model: Harness default / not recorded')).toBeDefined();
   });
 
+  it('keeps a title edit started immediately after selecting a session', () => {
+    const onRename = vi.fn().mockResolvedValue(undefined);
+    function EditOnSelection({ session }: { session: Session | null }) {
+      const container = React.useRef<HTMLDivElement>(null);
+      React.useLayoutEffect(() => {
+        if (session) container.current?.querySelector<HTMLButtonElement>('[data-testid="edit-session-title-button"]')?.click();
+      }, [session?.id]);
+      return <div ref={container}><ContextBar session={session} onRename={onRename} /></div>;
+    }
+    const { rerender } = render(<EditOnSelection session={null} />);
+    rerender(<EditOnSelection session={rootSession} />);
+    expect((screen.getByRole('textbox', { name: 'Session title' }) as HTMLInputElement).value).toBe(rootSession.name);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Session title' }), { target: { value: 'Updated title' } });
+    rerender(<EditOnSelection session={{ ...rootSession, status: 'idle' }} />);
+    expect((screen.getByRole('textbox', { name: 'Session title' }) as HTMLInputElement).value).toBe('Updated title');
+    expect(onRename).not.toHaveBeenCalled();
+  });
+
   it('renders child alias badge when active session has childAlias', () => {
     render(
       <ContextBar

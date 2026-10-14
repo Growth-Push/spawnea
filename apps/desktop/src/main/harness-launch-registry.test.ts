@@ -60,6 +60,14 @@ describe('HarnessLaunchRegistry', () => {
     );
   });
 
+  it.each(['codex', 'claude', 'hermes'])('does not infer root capability from profile key %s', (profile) => {
+    expect(() => registry.withModel('example-wrapper', profile, [], 'model')).toThrow(
+      "Harness 'example-wrapper' does not support explicit model selection"
+    );
+    expect(registry.withModel('example-wrapper', profile, [], 'model', true))
+      .toEqual([profile === 'claude' ? '--model' : '-m', 'model']);
+  });
+
   it('rejects extended harness model overrides for roots but preserves child adapter behavior', () => {
     expect(() => registry.withModel('antigravity', 'antigravity', [], 'model')).toThrow(
       "Harness 'antigravity' does not support explicit model selection"

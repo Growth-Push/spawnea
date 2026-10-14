@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Session, Server, Project, Agent, HostSystemInfo } from '@spawnea/domain';
 import { StatusBadge, isPureShellSession, shouldShowStatusBadge } from './StatusBadge';
 import { OsIcon } from './OsIcon';
@@ -74,7 +74,7 @@ export function ContextBar({
   const titleInputRef = useRef<HTMLInputElement>(null);
   const isEditingTitle = Boolean(session && editingSessionId === session.id);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setEditingSessionId(null);
     setDraftTitle('');
     setRenameError(null);

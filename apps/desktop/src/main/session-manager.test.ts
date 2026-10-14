@@ -391,6 +391,11 @@ ${profile ? `      ${profile.id}:
       },
     );
 
+    it('rejects an unknown catalog executable with a canonical profile key before resources', async () => {
+      await enableManagedWorktrees({ id: 'codex', command: 'example-wrapper', args: [] });
+      await expectResourceFreeRejection('dev-workstation:codex', 'Literal.v1:Exact_ID', 'does not support explicit model selection');
+    });
+
     it.each(['claude', 'codex', 'hermes'])(
       'permits a literal %s root override in the same creation-capable fixture', async (harness) => {
         await enableManagedWorktrees();

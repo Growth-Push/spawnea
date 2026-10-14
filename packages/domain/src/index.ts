@@ -8,6 +8,7 @@ export * from './repositories.js';
 export * from './secret-reference.js';
 export * from './control.js';
 export * from './path-security.js';
+export * from './model-selection.js';
 export type SessionStatus =
   | 'starting'
   | 'working'

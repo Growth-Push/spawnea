@@ -173,6 +173,8 @@ preserved as omission across restart.
 
 Configured profile IDs may differ from the native executable name; supported
 Hermes, Codex, and Claude executables retain model selection for these profiles.
+Unknown wrapper executables cannot acquire root model support from their profile
+ID or display name. Existing child adapter behavior remains unchanged.
 Context-to-database recovery preserves an existing `requestedModel`. Historical
 records without the field remain unrecorded; absence does not establish an
 effective model or a previously recorded default choice.

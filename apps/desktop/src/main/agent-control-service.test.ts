@@ -514,6 +514,26 @@ describe('AgentControlService', () => {
     expect(sessionManager.createSession).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { harness: 'codex', command: 'agy', supported: false },
+    { harness: 'claude', command: 'example-wrapper', supported: false },
+    { harness: 'review-profile', command: '/opt/agents/claude.exe', supported: true },
+  ])('validates root capability from $command rather than $harness', async ({ harness, command, supported }) => {
+    await repositories.agents.save({ id: 'model-profile', name: 'Example Review', harness, command });
+    const request = {
+      clientRequestId: 'executable-root', serverId: 'host-1', projectId: 'project-1', agentId: 'model-profile',
+      task: 'Executable capability', model: 'Literal.v1:Exact_ID',
+    };
+    const creation = service.createRootSession(request, { allowRemoteHost: true });
+    if (supported) {
+      await expect(creation).resolves.toMatchObject({ sessionCreated: true });
+      expect(sessionManager.createSession).toHaveBeenCalledWith(expect.objectContaining({ model: request.model }), 'mcp');
+    } else {
+      await expect(creation).rejects.toThrow('does not support explicit model selection');
+      expect(sessionManager.createSession).not.toHaveBeenCalled();
+    }
+  });
+
   it('preserves root creation idempotency after more than 200 successful requests', async () => {
     await repositories.servers.save({ id: 'local-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
     await repositories.projects.save({

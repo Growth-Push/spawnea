@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Server, Project, Agent, CreateSessionInput, HostTestResult } from '@spawnea/domain';
+import { getRootModelFlag, MODEL_ID_PATTERN } from '@spawnea/domain';
 import {
   X,
   Bot,
@@ -385,7 +386,12 @@ export function CreateSessionModal({
     return groupedAgents.get(selectedProvider) || [];
   }, [groupedAgents, selectedProvider]);
 
-  const supportsExplicitModel = selectedProvider === 'codex' || selectedProvider === 'claude' || selectedProvider === 'hermes';
+  const supportsExplicitModel = Boolean(getRootModelFlag(currentAgent?.command || ''));
+
+  useEffect(() => {
+    setModelChoice('');
+    setModelMode('default');
+  }, [currentAgent?.command]);
 
   const handleSelectProvider = useCallback(
     (pKey: string) => {
@@ -819,11 +825,11 @@ export function CreateSessionModal({
       setError('Please select an agent harness.');
       return;
     }
-    if (modelMode === 'custom' && (!modelChoice || modelChoice !== modelChoice.trim() || !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/.test(modelChoice))) {
+    if (supportsExplicitModel && modelMode === 'custom' && !MODEL_ID_PATTERN.test(modelChoice)) {
       setError('Enter an exact model ID without whitespace or unsupported characters.');
       return;
     }
-    const requestedModel = modelMode === 'custom' ? modelChoice : undefined;
+    const requestedModel = supportsExplicitModel && modelMode === 'custom' ? modelChoice : undefined;
 
     try {
       setIsSubmitting(true);
@@ -1414,7 +1420,7 @@ export function CreateSessionModal({
               </div>
             )}
             <p id="session-model-help" className="text-[10px] text-zinc-500">
-              Leave blank to use the configured harness default. This records a requested choice; the native harness validates access.
+              {supportsExplicitModel ? 'Choose Harness default to use the configured default.' : 'The configured harness default is used.'} This records a requested choice; the native harness validates access.
             </p>
           </div>
 

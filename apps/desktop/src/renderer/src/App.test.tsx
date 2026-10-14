@@ -1290,8 +1290,11 @@ describe('App Desktop Shell', () => {
       expect(screen.getByText('Active Sessions (2)')).toBeDefined();
     });
 
-    const xtermEl = document.querySelector('.xterm');
-    expect(xtermEl).not.toBeNull();
+    const xtermEl = await waitFor(() => {
+      const element = document.querySelector('.xterm');
+      expect(element).not.toBeNull();
+      return element!;
+    });
     const terminalKeyHandler = vi.fn();
     xtermEl!.addEventListener('keydown', terminalKeyHandler);
     const unhandled = fireEvent.keyDown(xtermEl!, { key: 'n', ...modifiers, bubbles: true, cancelable: true });
