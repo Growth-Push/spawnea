@@ -28,6 +28,16 @@ This repository is designed to be developed heavily with coding agents.
 - When running or verifying the Electron desktop app on Linux/Wayland environments, always execute via the local project binary (`./apps/desktop/node_modules/.bin/electron`) using native Wayland flags (`--ozone-platform=wayland` or `--ozone-platform-hint=auto`) to prevent Xwayland mapping stalls.
 
 
+## Public pull requests and repository communication
+
+- Treat PR titles, descriptions, comments, commit messages, and attached evidence as public.
+- Make each PR self-contained: explain **what changed**, **why it was needed**, and **how it was validated**, including relevant compatibility risks and remaining limitations. Readers must not need access to a private tracker or conversation to understand the change.
+- Do not include private ticket references, private repository names or links, internal coordination/session identifiers, customer details, personal machine paths, credentials, or sensitive host data. Describe the technical problem and rationale in generic, public-safe terms instead.
+- Link an issue only when it is public and relevant. If the PR template asks for a related task or issue and no suitable public issue exists, omit that section or state that none is linked; never substitute a private reference.
+- Report validation accurately: identify the checks actually run and their results, and explicitly distinguish failed, blocked, skipped, or unrun checks. Do not present fixtures or smoke tests as proof of untested real-provider, remote-host, or interactive behavior.
+- Before publishing or updating a PR, review its text, diff, screenshots, and logs for private information as well as secrets. Use fictional examples and sanitized evidence; preserve useful public technical detail.
+- Keep private planning and coordination in their authorized private channels. Public repository artifacts must stand on their own.
+
 ## Completion
 
 Before declaring a task complete:
