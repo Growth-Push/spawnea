@@ -717,4 +717,134 @@ describe('CreateSessionModal', () => {
     const agentTrigger = screen.getByTestId('select-agent-trigger');
     expect(agentTrigger.textContent).toContain('No harnesses for host');
   });
+
+  it('submits no model by default and forwards an exact model ID literally', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<CreateSessionModal isOpen={true} onClose={vi.fn()} onSubmit={onSubmit} servers={mockServers} projects={mockProjects} agents={mockAgents} />);
+
+    await waitFor(() => expect((screen.getByTestId('select-project') as HTMLSelectElement).value).toBe('srv-1:spawnea'));
+    fireEvent.change(screen.getByTestId('input-task-name'), { target: { value: 'Model test' } });
+    fireEvent.click(screen.getByTestId('submit-create-session'));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ model: undefined })));
+
+    onSubmit.mockClear();
+    fireEvent.change(screen.getByTestId('input-task-name'), { target: { value: 'Exact model test' } });
+    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('Exact model ID'), { target: { value: 'literal-model.v1:/exact' } });
+    fireEvent.click(screen.getByTestId('submit-create-session'));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ model: 'literal-model.v1:/exact' })));
+  });
+
+  it.each(['', ' model', 'model ', 'mo del', 'model$unsafe'])('rejects invalid model ID %j before onSubmit', async (value) => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<CreateSessionModal isOpen={true} onClose={vi.fn()} onSubmit={onSubmit} servers={mockServers} projects={mockProjects} agents={mockAgents} />);
+    await waitFor(() => expect((screen.getByTestId('select-project') as HTMLSelectElement).value).toBe('srv-1:spawnea'));
+    fireEvent.change(screen.getByTestId('input-task-name'), { target: { value: 'Invalid model test' } });
+    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('Exact model ID'), { target: { value } });
+    fireEvent.click(screen.getByTestId('submit-create-session'));
+    await waitFor(() => expect(screen.getByTestId('create-session-error-banner')).toBeDefined());
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  const profileAgents: Agent[] = [
+    ...mockAgents,
+    { ...mockAgents[1], id: 'srv-1:claude-review', name: 'Claude Review' },
+  ];
+
+  function selectCustomModel() {
+    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('Exact model ID'), { target: { value: 'Literal.v1:Exact_ID' } });
+    expect((screen.getByTestId('session-model') as HTMLSelectElement).value).toBe('custom');
+    expect((screen.getByLabelText('Exact model ID') as HTMLInputElement).value).toBe('Literal.v1:Exact_ID');
+  }
+
+  function expectDefaultModel() {
+    expect((screen.getByTestId('session-model') as HTMLSelectElement).value).toBe('default');
+    expect(screen.queryByLabelText('Exact model ID')).toBeNull();
+    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
+    expect((screen.getByLabelText('Exact model ID') as HTMLInputElement).value).toBe('');
+  }
+
+  function resetTestProps() {
+    return { onClose: vi.fn(), onSubmit: vi.fn().mockResolvedValue(undefined), servers: mockServers, projects: mockProjects, agents: profileAgents };
+  }
+
+  it('resets a custom model on close/reopen of the same mounted instance without submission', () => {
+    const props = resetTestProps();
+    const { rerender } = render(<CreateSessionModal {...props} isOpen={true} />);
+    selectCustomModel();
+    rerender(<CreateSessionModal {...props} isOpen={false} />);
+    expect(screen.queryByTestId('session-model')).toBeNull();
+    rerender(<CreateSessionModal {...props} isOpen={true} />);
+    expectDefaultModel();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('resets a custom model when a different profile is clicked on the same host and harness', () => {
+    const props = resetTestProps();
+    render(<CreateSessionModal {...props} isOpen={true} />);
+    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-1:claude');
+    selectCustomModel();
+    fireEvent.click(screen.getByTestId('profile-pill-srv-1:claude-review'));
+    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-1:claude-review');
+    expect((screen.getByTestId('select-server') as HTMLSelectElement).value).toBe('srv-1');
+    expectDefaultModel();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('resets a custom model when the profile changes by keyboard on the same harness', () => {
+    const props = resetTestProps();
+    render(<CreateSessionModal {...props} isOpen={true} />);
+    selectCustomModel();
+    fireEvent.keyDown(screen.getByTestId('profile-pill-srv-1:claude'), { key: 'ArrowRight' });
+    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-1:claude-review');
+    expectDefaultModel();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('resets a custom model when the harness changes by keyboard', () => {
+    const props = resetTestProps();
+    render(<CreateSessionModal {...props} isOpen={true} />);
+    selectCustomModel();
+    fireEvent.keyDown(screen.getByTestId('select-agent-trigger'), { key: '1' });
+    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-1:codex');
+    expectDefaultModel();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('resets a custom model when changed options automatically select another profile', () => {
+    const props = resetTestProps();
+    const { rerender } = render(<CreateSessionModal {...props} isOpen={true} />);
+    selectCustomModel();
+    rerender(<CreateSessionModal {...props} agents={profileAgents.filter((agent) => agent.id !== 'srv-1:claude')} isOpen={true} />);
+    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-1:codex');
+    expectDefaultModel();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('resets a custom model immediately when the host changes', () => {
+    const props = resetTestProps();
+    render(<CreateSessionModal {...props}
+      projects={[...mockProjects, { ...mockProjects[0], id: 'srv-2:spawnea', serverId: 'srv-2' }]}
+      agents={[...profileAgents, { ...mockAgents[2], id: 'srv-2:codex' }]} isOpen={true} />);
+    selectCustomModel();
+    fireEvent.click(screen.getByTestId('host-pill-srv-2'));
+    expect((screen.getByTestId('select-server') as HTMLSelectElement).value).toBe('srv-2');
+    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-2:codex');
+    expectDefaultModel();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('resets a custom model immediately after successful submission while still mounted and open', async () => {
+    const props = resetTestProps();
+    render(<CreateSessionModal {...props} isOpen={true} />);
+    fireEvent.change(screen.getByTestId('input-task-name'), { target: { value: 'Model reset task' } });
+    selectCustomModel();
+    fireEvent.click(screen.getByTestId('submit-create-session'));
+    await waitFor(() => expect(props.onClose).toHaveBeenCalledOnce());
+    expect(props.onSubmit).toHaveBeenCalledWith(expect.objectContaining({ model: 'Literal.v1:Exact_ID' }));
+    expectDefaultModel();
+  });
+
 });

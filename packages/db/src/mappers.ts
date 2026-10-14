@@ -57,6 +57,7 @@ export function toSession(row: SessionRow): Session {
     tmuxWindowName: row.tmuxWindowName ?? undefined,
     status: row.status,
     creationSource: row.creationSource,
+    requestedModel: row.requestedModel ?? undefined,
     isExternal: row.isExternal ?? false,
     savedTopology: row.savedTopology
       ? {

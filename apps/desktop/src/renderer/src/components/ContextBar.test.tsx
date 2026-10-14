@@ -80,6 +80,17 @@ describe('ContextBar session hierarchy actions', () => {
     expect(screen.queryByTestId('session-create-child-button')).toBeNull();
   });
 
+  it('renders the literal requested model or explicit no-override state', () => {
+    const { rerender } = render(
+      <ContextBar session={{ ...rootSession, requestedModel: 'literal-model.v1' }} server={mockServer} project={mockProject} agent={mockAgent} />
+    );
+    expect(screen.getByText('Requested model: literal-model.v1')).toBeDefined();
+    expect(screen.queryByText(/effective|historical/i)).toBeNull();
+
+    rerender(<ContextBar session={rootSession} server={mockServer} project={mockProject} agent={mockAgent} />);
+    expect(screen.getByText('Requested model: Harness default / not recorded')).toBeDefined();
+  });
+
   it('renders child alias badge when active session has childAlias', () => {
     render(
       <ContextBar

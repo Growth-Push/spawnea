@@ -17,17 +17,20 @@ export class HarnessLaunchRegistry {
       ? `\x1b[200~${text.split('\x1b[200~').join('').split('\x1b[201~').join('')}\x1b[201~` : text;
   }
 
-  withModel(command: string, harness: string | undefined, args: string[], model: string | undefined): string[] {
-    if (!model) return [...args];
+  withModel(command: string, harness: string | undefined, args: string[], model: string | undefined, allowExtendedHarness = false): string[] {
+    if (model === undefined) return [...args];
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/.test(model)) {
       throw new Error('Model must contain only safe model identifier characters and cannot start with a dash');
     }
     const commandName = (command.split(/[\\/]/).at(-1) ?? command)
       .replace(/\.(?:exe|cmd|bat)$/i, '')
       .toLowerCase();
-    const identity = harness?.toLowerCase() || commandName;
-    const flag = MODEL_FLAGS[identity] ?? MODEL_FLAGS[commandName];
-    if (!flag) throw new Error(`Harness '${identity}' does not support explicit model selection`);
+    // Catalog IDs may name profiles rather than native harnesses.
+    const identity = MODEL_FLAGS[commandName] ? commandName : harness?.toLowerCase() || commandName;
+    const flag = MODEL_FLAGS[identity];
+    if (!flag || (!allowExtendedHarness && !['codex', 'claude', 'claude-code', 'hermes'].includes(identity))) {
+      throw new Error(`Harness '${identity}' does not support explicit model selection`);
+    }
 
     const result: string[] = [];
     const flags = ['-m', '--model'];

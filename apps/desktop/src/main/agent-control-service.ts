@@ -608,6 +608,7 @@ export class AgentControlService {
       tmuxSessionName: session.tmuxSessionName,
       status: session.status,
       creationSource: session.creationSource ?? 'ui',
+      requestedModel: session.requestedModel,
       active,
       activeTab: active ? this.uiState.activeTab : undefined,
       createdAt: toIso(session.createdAt),
@@ -809,6 +810,15 @@ export class AgentControlService {
         throw new Error(`Harness '${request.agentId}' is not available on host '${host.id}'`);
       }
     }
+    if (request.model !== undefined) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/.test(request.model)) {
+        throw new Error('Model must contain only safe model identifier characters and cannot start with a dash');
+      }
+      const identity = (harness?.harness || harness?.command || '').split(/[\\/]/).at(-1)?.replace(/\.(?:exe|cmd|bat)$/i, '').toLowerCase();
+      if (!identity || !['codex', 'claude', 'claude-code', 'hermes'].includes(identity)) {
+        throw new Error(`Harness '${identity || request.agentId}' does not support explicit model selection`);
+      }
+    }
   }
 
   async createRootSession(
@@ -822,6 +832,7 @@ export class AgentControlService {
       task: request.task,
       baseBranch: request.baseBranch,
       useWorktree: request.useWorktree,
+      model: request.model,
     });
     const cached = this.rootResults.get(request.clientRequestId);
     if (cached) {
@@ -848,6 +859,7 @@ export class AgentControlService {
           task: request.task,
           baseBranch: request.baseBranch,
           useWorktree: request.useWorktree,
+          model: request.model,
         }, 'mcp');
         const result: ControlCreateSessionResult = {
           apiVersion: SPAWNEA_CONTROL_API_VERSION,
@@ -893,6 +905,7 @@ export class AgentControlService {
           task: item.task,
           baseBranch: item.baseBranch,
           useWorktree: item.useWorktree,
+          model: item.model,
         }, 'mcp');
         results.push({
           clientRequestId: item.clientRequestId,

@@ -13,6 +13,16 @@ The product treats **persistent `tmux` sessions** as the execution surface, whil
 4. **Strict Process & Layer Isolation:** The Electron renderer is pure presentation (React UI). All filesystem, SSH, SQLite, PTY, and child process logic lives exclusively in the Electron Main process behind typed IPC boundaries.
 5. **Multi-Agent TDD Baseline:** Because the codebase is developed by AI coding agents, all domain logic, state machines, database models, and adapter contracts are covered by automated unit/contract tests to prevent regressions.
 
+Per-root model selection remains a harness-neutral creation concern. The UI, CLI,
+and operator/bootstrap MCP pass an optional exact `model` value to the main
+process; `SessionManager` persists it as `requestedModel` and the
+`HarnessLaunchRegistry` maps it to native flags (`-m` for Hermes/Codex or
+`--model` for Claude). Supported executables determine model capability even when
+catalog IDs name custom profiles. An omitted value preserves profile defaults.
+The persisted value is a request record, not effective-model telemetry;
+context-to-database recovery preserves that value, and legacy sessions keep an
+absent value rather than receiving an inferred model.
+
 ---
 
 ## 2. System Component Diagram

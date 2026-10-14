@@ -153,6 +153,7 @@ Input:
   "projectId": "spawnea",
   "agentId": "codex",
   "task": "Coordinate the documentation update",
+  "model": "gpt-5-codex",
   "baseBranch": "main",
   "useWorktree": true
 }
@@ -162,6 +163,19 @@ Input:
 `baseBranch` and `useWorktree` use the existing root-session creation inputs and
 are optional. IDs must come from bootstrap discovery rather than from the normal
 root-scoped state of another connection.
+
+`model` is optional. When present it is an exact requested model ID and is mapped
+by the native launch adapter (`-m` for Hermes/Codex, `--model` for Claude). It is
+validated for identifier syntax and harness capability before resources are
+created. It is not an assertion about effective model access. The returned
+session view exposes `requestedModel`; omission means `Harness default` and is
+preserved as omission across restart.
+
+Configured profile IDs may differ from the native executable name; supported
+Hermes, Codex, and Claude executables retain model selection for these profiles.
+Context-to-database recovery preserves an existing `requestedModel`. Historical
+records without the field remain unrecorded; absence does not establish an
+effective model or a previously recorded default choice.
 
 The successful output contains `apiVersion`, `replayed`, and the
 sanitized created `session` view, including its ID, status, host/project/harness
@@ -277,6 +291,7 @@ Input:
   "projectId": "spawnea",
   "agentId": "codex",
   "task": "Review the bootstrap flow",
+  "model": "gpt-5-codex",
   "baseBranch": "main",
   "useWorktree": true
 }

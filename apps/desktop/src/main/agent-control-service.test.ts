@@ -434,6 +434,86 @@ describe('AgentControlService', () => {
     })).rejects.toThrow('enabled local host');
   });
 
+  it.each([
+    { label: 'equal explicit choice', initialModel: 'Literal.v1:Org/Exact_ID', retryModel: 'Literal.v1:Org/Exact_ID', equal: true },
+    { label: 'equal omitted/default choice', initialModel: undefined, retryModel: undefined, equal: true },
+    { label: 'different explicit IDs', initialModel: 'model-a', retryModel: 'model-b', equal: false },
+    { label: 'explicit-to-default', initialModel: 'model-a', retryModel: undefined, equal: false },
+    { label: 'default-to-explicit', initialModel: undefined, retryModel: 'model-a', equal: false },
+  ])('enforces $label in-flight and completed with one actual creation', async ({ initialModel, retryModel, equal }) => {
+    await repositories.servers.save({ id: 'local-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+    await repositories.projects.save({
+      id: 'local-project', serverId: 'local-1', name: 'Local project', rootPath: '/repo', baseBranch: 'main',
+    });
+    let releaseCreation!: () => void;
+    let creationReached!: () => void;
+    const reachedCreation = new Promise<void>((resolve) => { creationReached = resolve; });
+    const creationGate = new Promise<void>((resolve) => { releaseCreation = resolve; });
+    sessionManager.createSession.mockImplementationOnce(async (input) => {
+      createdCount += 1;
+      creationReached();
+      await creationGate;
+      return session(`model-root-${createdCount}`, { task: input.task, requestedModel: input.model });
+    });
+    const bootstrap = service.createBootstrapControl();
+    const request = {
+      clientRequestId: 'model-root', serverId: 'local-1', projectId: 'local-project', agentId: 'agent-1',
+      task: 'Model-aware root', useWorktree: true,
+      ...(initialModel === undefined ? {} : { model: initialModel }),
+    };
+    const retryRequest = { ...request, model: retryModel };
+    const firstPromise = bootstrap.createSession(request);
+    await reachedCreation;
+    expect(sessionManager.createSession).toHaveBeenCalledOnce();
+    expect(createdCount).toBe(1);
+    let concurrentReplay: ReturnType<typeof bootstrap.createSession> | undefined;
+    if (equal) {
+      concurrentReplay = bootstrap.createSession(retryRequest);
+    } else {
+      await expect(bootstrap.createSession(retryRequest)).rejects.toThrow('different root request');
+    }
+    expect(sessionManager.createSession).toHaveBeenCalledOnce();
+    expect(createdCount).toBe(1);
+    releaseCreation();
+    const first = await firstPromise;
+    expect(first).toMatchObject({ replayed: false, rootSessionId: 'model-root-1', sessionId: 'model-root-1' });
+    expect(first.session.id).toBe('model-root-1');
+    expect(first.session.requestedModel).toBe(initialModel);
+    if (concurrentReplay) {
+      const replay = await concurrentReplay;
+      expect(replay).toMatchObject({ replayed: true, rootSessionId: first.rootSessionId, sessionId: first.sessionId });
+      expect(replay.session).toEqual(first.session);
+    }
+    if (equal) {
+      const replay = await bootstrap.createSession(retryRequest);
+      expect(replay).toMatchObject({ replayed: true, rootSessionId: first.rootSessionId, sessionId: first.sessionId });
+      expect(replay.session).toEqual(first.session);
+    } else {
+      await expect(bootstrap.createSession(retryRequest)).rejects.toThrow('different root request');
+      await expect(bootstrap.createSession(request)).resolves.toMatchObject({
+        replayed: true, rootSessionId: first.rootSessionId, sessionId: first.sessionId,
+      });
+    }
+    expect(sessionManager.createSession).toHaveBeenCalledOnce();
+    expect(sessionManager.createSession).toHaveBeenCalledWith(expect.objectContaining({ model: initialModel }), 'mcp');
+    expect(createdCount).toBe(1);
+  });
+
+  it('rejects invalid and unsupported root models before calling the session manager', async () => {
+    await expect(service.createRootSession({
+      clientRequestId: 'invalid-model-root', serverId: 'host-1', projectId: 'project-1', agentId: 'agent-1',
+      task: 'Reject invalid model', model: ' bad-model',
+    }, { allowRemoteHost: true })).rejects.toThrow('safe model identifier');
+    expect(sessionManager.createSession).not.toHaveBeenCalled();
+
+    await repositories.agents.save({ id: 'agy-root', name: 'AGY', harness: 'agy', command: 'agy' });
+    await expect(service.createRootSession({
+      clientRequestId: 'unsupported-model-root', serverId: 'host-1', projectId: 'project-1', agentId: 'agy-root',
+      task: 'Reject unsupported model', model: 'valid-model',
+    }, { allowRemoteHost: true })).rejects.toThrow("Harness 'agy' does not support explicit model selection");
+    expect(sessionManager.createSession).not.toHaveBeenCalled();
+  });
+
   it('preserves root creation idempotency after more than 200 successful requests', async () => {
     await repositories.servers.save({ id: 'local-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
     await repositories.projects.save({

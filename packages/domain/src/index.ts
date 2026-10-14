@@ -186,6 +186,8 @@ export interface Session {
   status: SessionStatus;
   /** Explicit origin of the session creation request. Legacy records may omit this. */
   creationSource?: SessionCreationSource;
+  /** Requested model only; this is not effective-model telemetry. */
+  requestedModel?: string;
   isExternal?: boolean;
   savedTopology?: SessionTopologySnapshot;
   agentSessionId?: string;
