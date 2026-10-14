@@ -30,6 +30,10 @@ spawnea status sess-123
 spawnea status sess-123 --json
 ```
 
+Status labels the recorded model as requested, not effective. If no model choice
+was recorded, human-readable status shows `Harness default / not recorded`;
+JSON preserves the absent field for historical records.
+
 ### `spawnea session create --project <project-id> --task "<description>" [options]`
 Creates a new independent root session.
 
@@ -37,6 +41,7 @@ Options:
 - `--project <id>`: Target project ID (required)
 - `--task "<description>"`: Task description (required)
 - `--agent <id>`: Harness identifier (e.g. `codex`, `local:codex`)
+- `--model <id>`: Exact requested model ID for Hermes, Codex, or Claude; omit to use the configured harness default
 - `--server <id>`: Host server (default: `local`)
 - `--branch <branch>`: Base git branch
 - `--no-worktree`: Do not create an isolated managed worktree

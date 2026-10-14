@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
-import { LocalHostAdapter, MockHostAdapter, OnePasswordResolver, SSHHostAdapter } from '@spawnea/hosts';
+import { LocalHostAdapter, MockHostAdapter, OnePasswordResolver, SSHHostAdapter, GitService, TmuxManager } from '@spawnea/hosts';
+import * as hostOperations from '@spawnea/hosts';
 import {
   createLogger,
   type Logger,
@@ -30,7 +31,7 @@ describe('SessionManager', () => {
   let mockHost: MockHostAdapter;
   let logger: Logger;
 
-  async function enableManagedWorktrees(): Promise<void> {
+  async function enableManagedWorktrees(profile?: { id: string; command: string; args: string[] }): Promise<void> {
     mockHost.customRules.push({ pattern: 'git merge-tree --write-tree', response: { stdout: '0123456789abcdef0123456789abcdef01234567\0', stderr: '', exitCode: 0 } });
     const catalogPath = join(tempDir, 'spawnea.yaml');
     writeFileSync(catalogPath, `
@@ -53,6 +54,12 @@ hosts:
         command: claude
         args: []
         enabled: true
+${profile ? `      ${profile.id}:
+        name: Example Review Profile
+        command: ${profile.command}
+        args: ${JSON.stringify(profile.args)}
+        enabled: true
+` : ''}
 `);
     catManager = new CatalogManager({ catalogPath });
     expect(catManager.load().errors).toBeNull();
@@ -338,6 +345,126 @@ hosts:
     expect(context?.persistentSession.name).toBe(session.tmuxSessionName);
     expect(context?.creationSource).toBe('ui');
     expect(session.creationSource).toBe('ui');
+  });
+
+  describe('direct root model validation before resource creation', () => {
+    const input = {
+      serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude', task: 'Validate root model', useWorktree: true,
+    };
+
+    async function expectResourceFreeRejection(agentId: string, model: string, message: string) {
+      const prepare = vi.spyOn(hostOperations, 'prepareProjectFolder');
+      const saveSession = vi.spyOn(repos.sessions, 'save');
+      const saveContext = vi.spyOn(contextStore, 'save');
+      const createWorktree = vi.spyOn(GitService.prototype, 'createManagedWorktree');
+      const launchTmux = vi.spyOn(TmuxManager.prototype, 'createPersistentSession');
+      const commandsBefore = [...mockHost.executedCommands];
+      try {
+        await expect(sessionManager.createSession({ ...input, agentId, model })).rejects.toThrow(message);
+        expect(prepare).not.toHaveBeenCalled();
+        expect(saveSession).not.toHaveBeenCalled();
+        expect(saveContext).not.toHaveBeenCalled();
+        expect(createWorktree).not.toHaveBeenCalled();
+        expect(launchTmux).not.toHaveBeenCalled();
+        expect(mockHost.executedCommands).toEqual(commandsBefore);
+        expect(await repos.sessions.findAll()).toEqual([]);
+        expect(await contextStore.list()).toEqual([]);
+      } finally {
+        for (const spy of [prepare, saveSession, saveContext, createWorktree, launchTmux]) spy.mockRestore();
+      }
+    }
+
+    it.each(['', ' model', 'model ', 'mo del', 'model\tname', 'model\nname', 'model$unsafe', '-model', 'a'.repeat(241)])(
+      'rejects invalid literal %j directly without preparation, persistence, worktree or tmux', async (model) => {
+        await enableManagedWorktrees();
+        await expectResourceFreeRejection(input.agentId, model, 'safe model identifier');
+      },
+    );
+
+    it.each(['agy', 'antigravity', 'opencode', 'shell'])(
+      'rejects unsupported %s root override directly without resources', async (harness) => {
+        await enableManagedWorktrees();
+        const agentId = `dev-workstation:${harness}`;
+        await repos.agents.save({ id: agentId, name: harness, harness, command: harness === 'shell' ? 'bash' : harness });
+        await expectResourceFreeRejection(agentId, 'Valid.v1:Org/Exact_ID', 'does not support explicit model selection');
+      },
+    );
+
+    it('rejects an unknown catalog executable with a canonical profile key before resources', async () => {
+      await enableManagedWorktrees({ id: 'codex', command: 'example-wrapper', args: [] });
+      await expectResourceFreeRejection('dev-workstation:codex', 'Literal.v1:Exact_ID', 'does not support explicit model selection');
+    });
+
+    it.each(['claude', 'codex', 'hermes'])(
+      'permits a literal %s root override in the same creation-capable fixture', async (harness) => {
+        await enableManagedWorktrees();
+        const agentId = `dev-workstation:${harness}`;
+        await repos.agents.save({ id: agentId, name: harness, harness, command: harness });
+        const model = 'Valid.v1:Org/Exact_ID';
+        const created = await sessionManager.createSession({ ...input, agentId, model });
+        expect(created.requestedModel).toBe(model);
+        expect(created.managedWorktree).toBe(true);
+        expect((await repos.sessions.findById(created.id))?.requestedModel).toBe(model);
+        const context = await contextStore.load(created.id);
+        expect(context?.requestedModel).toBe(model);
+        expect(context?.harness.args).toEqual([harness === 'claude' ? '--model' : '-m', model]);
+        expect(mockHost.executedCommands.some(({ command }) => command.includes('git worktree add -b'))).toBe(true);
+        expect(mockHost.executedCommands.some(({ command }) => command.includes('tmux new-session'))).toBe(true);
+      },
+    );
+
+    it.each([
+      ['hermes', '-m'], ['codex', '-m'], ['claude', '--model'],
+    ])('creates catalog-backed %s profiles with literal overrides and unchanged defaults', async (command, flag) => {
+      const profile = { id: `${command}-review`, command, args: ['--profile', 'example-profile', '--model=previous-model', '--verbose'] };
+      await enableManagedWorktrees(profile);
+      const agentId = `dev-workstation:${profile.id}`;
+      const catalogAgent = catManager.getFlatLists().agents.find((agent) => agent.id === agentId);
+      expect(catalogAgent).toBeDefined();
+      await repos.agents.save(catalogAgent!);
+      const originalCatalog = JSON.stringify(catManager.getActiveCatalog());
+      const model = 'Literal.v1:Org/Model_ID';
+      const created = await sessionManager.createSession({ ...input, agentId, model });
+      expect(created.agentId).toBe(agentId);
+      expect(created.requestedModel).toBe(model);
+      expect((await repos.sessions.findById(created.id))?.requestedModel).toBe(model);
+      const context = await contextStore.load(created.id);
+      expect(context?.harness.command).toBe(command);
+      expect(context?.harness.args).toEqual(['--profile', 'example-profile', '--verbose', flag, model]);
+      expect(mockHost.sessions.has(created.tmuxSessionName)).toBe(true);
+
+      const defaultSession = await sessionManager.createSession({ ...input, agentId });
+      expect(defaultSession.requestedModel).toBeUndefined();
+      expect((await contextStore.load(defaultSession.id))?.harness.args).toEqual(profile.args);
+      expect(JSON.stringify(catManager.getActiveCatalog())).toBe(originalCatalog);
+    });
+
+    it.each(['claude', 'codex', 'hermes', 'agy', 'antigravity', 'opencode', 'shell'])(
+      'preserves omitted/default root creation for %s', async (harness) => {
+        await enableManagedWorktrees();
+        const agentId = `dev-workstation:${harness}`;
+        await repos.agents.save({ id: agentId, name: harness, harness, command: harness === 'shell' ? 'bash' : harness, argsTemplate: ['--fixture-option'] });
+        const created = await sessionManager.createSession({ ...input, agentId });
+        expect(created.requestedModel).toBeUndefined();
+        expect(created.managedWorktree).toBe(true);
+        const context = await contextStore.load(created.id);
+        expect(context?.requestedModel).toBeUndefined();
+        expect(context?.harness.args).toEqual(harness === 'claude' ? [] : ['--fixture-option']);
+      },
+    );
+
+    it('preserves the existing extended AGY child model behavior', async () => {
+      await enableManagedWorktrees();
+      await repos.agents.save({ id: 'dev-workstation:agy', name: 'AGY', harness: 'agy', command: 'agy' });
+      const parent = await sessionManager.createSession({ ...input, useWorktree: false });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id, task: 'Existing child behavior', workspace: 'same-project',
+        agentId: 'dev-workstation:agy', model: 'Child.v1:Exact_ID',
+      });
+      expect(child.parentSessionId).toBe(parent.id);
+      expect((await contextStore.load(child.id))?.harness.args).toEqual(['--model', 'Child.v1:Exact_ID']);
+    });
   });
 
   it('rejects invalid directly supplied profile identities before starting sessions', () => {
@@ -735,6 +862,29 @@ hosts:
     await repos.sessions.delete(session.id);
     const restored = await sessionManager.restoreSessions();
     expect(restored.find((candidate) => candidate.id === session.id)?.name).toBe('Auth follow-up');
+  });
+
+  it.each([undefined, 'Literal.v1:Org/Model_ID'])('preserves requested model %j when restoring a missing database row from context', async (model) => {
+    const created = await sessionManager.createSession({
+      serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude', task: 'Restore model metadata', model,
+    });
+    expect((await contextStore.load(created.id))?.requestedModel).toBe(model);
+    await repos.sessions.delete(created.id);
+    expect(await repos.sessions.findById(created.id)).toBeNull();
+    await sessionManager.dispose();
+    sessionManager = new SessionManager({
+      repositories: repos, catalogManager: catManager, contextStore,
+      ptyBroker: new PtyBroker(), hostAdapterFactory: async () => mockHost,
+    });
+
+    const restored = await sessionManager.restoreSessions();
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toMatchObject({ id: created.id, tmuxSessionName: created.tmuxSessionName });
+    expect(restored[0].requestedModel).toBe(model);
+    expect((await repos.sessions.findById(created.id))?.requestedModel).toBe(model);
+    expect((await contextStore.load(created.id))?.requestedModel).toBe(model);
+    expect(mockHost.sessions.has(created.tmuxSessionName)).toBe(true);
   });
 
   it('rejects blank and oversized session titles without changing persistence', async () => {

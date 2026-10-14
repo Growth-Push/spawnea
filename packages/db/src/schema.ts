@@ -59,6 +59,7 @@ export const sessions = sqliteTable(
     tmuxWindowName: text('tmux_window_name'),
     status: text('status').$type<SessionStatus>().notNull().default('disconnected'),
     creationSource: text('creation_source').$type<SessionCreationSource>().notNull().default('ui'),
+    requestedModel: text('requested_model'),
     parentSessionId: text('parent_session_id'),
     childAlias: text('child_alias'),
     isExternal: integer('is_external', { mode: 'boolean' }).notNull().default(false),

@@ -193,6 +193,7 @@ export class SqliteSessionRepository implements SessionRepository {
         parentSessionId: session.parentSessionId ?? null,
         childAlias: session.childAlias ?? null,
         creationSource: session.creationSource ?? existing.creationSource ?? 'ui',
+        requestedModel: session.requestedModel ?? existing.requestedModel ?? null,
         isExternal: session.isExternal ?? existing.isExternal ?? false,
         savedTopology: session.savedTopology ?? existing.savedTopology ?? null,
         agentSessionId: session.agentSessionId ?? existing.agentSessionId ?? null,
@@ -231,6 +232,7 @@ export class SqliteSessionRepository implements SessionRepository {
       parentSessionId: session.parentSessionId ?? null,
       childAlias: session.childAlias ?? null,
       creationSource: session.creationSource ?? 'ui',
+      requestedModel: session.requestedModel ?? null,
       isExternal: session.isExternal ?? false,
       savedTopology: session.savedTopology ?? null,
       agentSessionId: session.agentSessionId ?? null,
@@ -282,6 +284,7 @@ export class SqliteSessionRepository implements SessionRepository {
     if (updates.parentSessionId !== undefined) setValues.parentSessionId = updates.parentSessionId ?? null;
     if (updates.childAlias !== undefined) setValues.childAlias = updates.childAlias ?? null;
     if (updates.creationSource !== undefined) setValues.creationSource = updates.creationSource;
+    if (updates.requestedModel !== undefined) setValues.requestedModel = updates.requestedModel ?? null;
     if (updates.isExternal !== undefined) setValues.isExternal = updates.isExternal;
     if (updates.savedTopology !== undefined) setValues.savedTopology = updates.savedTopology ?? null;
     if (updates.agentSessionId !== undefined) setValues.agentSessionId = updates.agentSessionId ?? null;

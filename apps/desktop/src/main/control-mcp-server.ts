@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-import { SPAWNEA_CONTROL_API_VERSION } from '@spawnea/domain';
+import { MODEL_ID_PATTERN, SPAWNEA_CONTROL_API_VERSION } from '@spawnea/domain';
 import type {
   AgentControlService,
   BootstrapAgentControlService,
@@ -174,7 +174,7 @@ function registerScopedTools(
         agentId: z.string().min(1).max(240).optional(),
         serverId: z.string().min(1).max(200).optional(),
         projectId: z.string().min(1).max(240).optional(),
-        model: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/).optional(),
+        model: z.string().trim().regex(MODEL_ID_PATTERN).optional(),
         initialPrompt: z.string().min(1).max(32_000).optional(),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -357,6 +357,7 @@ export function createBootstrapSpawneaMcpServer(
         task: z.string().trim().min(1).max(10_000),
         baseBranch: z.string().trim().min(1).max(240).optional(),
         useWorktree: z.boolean().optional(),
+        model: z.string().regex(MODEL_ID_PATTERN).optional(),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
@@ -451,7 +452,7 @@ export function createCliSpawneaMcpServer(
     'spawnea_status',
     {
       title: 'Get session status',
-      description: 'Get detailed session information including worktree and status.',
+      description: 'Get detailed session information including worktree, requested model choice, and status.',
       inputSchema: z.object({ sessionId: z.string().min(1).max(200) }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
@@ -487,6 +488,7 @@ export function createCliSpawneaMcpServer(
         baseBranch: z.string().trim().min(1).max(240).optional(),
         useWorktree: z.boolean().optional(),
         clientRequestId: z.string().min(1).max(120).optional(),
+        model: z.string().regex(MODEL_ID_PATTERN).optional(),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
@@ -534,6 +536,7 @@ export function createCliSpawneaMcpServer(
         task: request.task,
         baseBranch: request.baseBranch,
         useWorktree: request.useWorktree ?? true,
+        model: request.model,
       }, { allowRemoteHost: true });
     })()
   );
@@ -551,7 +554,7 @@ export function createCliSpawneaMcpServer(
         agentId: z.string().min(1).max(240).optional(),
         serverId: z.string().min(1).max(200).optional(),
         projectId: z.string().min(1).max(240).optional(),
-        model: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/).optional(),
+        model: z.string().trim().regex(MODEL_ID_PATTERN).optional(),
         initialPrompt: z.string().min(1).max(32_000).optional(),
         clientRequestId: z.string().min(1).max(120).optional(),
       }),

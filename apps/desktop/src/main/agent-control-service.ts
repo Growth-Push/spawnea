@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import type { Repositories } from '@spawnea/db';
 import {
   SPAWNEA_CONTROL_API_VERSION,
+  getRootModelFlag,
+  MODEL_ID_PATTERN,
+  normalizeHarnessExecutable,
   type ControlBootstrapState,
   type ControlCreateSessionRequest,
   type ControlCreateSessionResult,
@@ -608,6 +611,7 @@ export class AgentControlService {
       tmuxSessionName: session.tmuxSessionName,
       status: session.status,
       creationSource: session.creationSource ?? 'ui',
+      requestedModel: session.requestedModel,
       active,
       activeTab: active ? this.uiState.activeTab : undefined,
       createdAt: toIso(session.createdAt),
@@ -809,6 +813,16 @@ export class AgentControlService {
         throw new Error(`Harness '${request.agentId}' is not available on host '${host.id}'`);
       }
     }
+    if (request.model !== undefined) {
+      if (!MODEL_ID_PATTERN.test(request.model)) {
+        throw new Error('Model must contain only safe model identifier characters and cannot start with a dash');
+      }
+      const command = harness?.command || '';
+      const identity = normalizeHarnessExecutable(command);
+      if (!getRootModelFlag(command)) {
+        throw new Error(`Harness '${identity || request.agentId}' does not support explicit model selection`);
+      }
+    }
   }
 
   async createRootSession(
@@ -822,6 +836,7 @@ export class AgentControlService {
       task: request.task,
       baseBranch: request.baseBranch,
       useWorktree: request.useWorktree,
+      model: request.model,
     });
     const cached = this.rootResults.get(request.clientRequestId);
     if (cached) {
@@ -848,6 +863,7 @@ export class AgentControlService {
           task: request.task,
           baseBranch: request.baseBranch,
           useWorktree: request.useWorktree,
+          model: request.model,
         }, 'mcp');
         const result: ControlCreateSessionResult = {
           apiVersion: SPAWNEA_CONTROL_API_VERSION,
@@ -893,6 +909,7 @@ export class AgentControlService {
           task: item.task,
           baseBranch: item.baseBranch,
           useWorktree: item.useWorktree,
+          model: item.model,
         }, 'mcp');
         results.push({
           clientRequestId: item.clientRequestId,

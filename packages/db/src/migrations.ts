@@ -126,6 +126,12 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE sessions ADD COLUMN agent_session_id TEXT;
     `,
   },
+  {
+    name: '0009_add_requested_model',
+    sql: `
+      ALTER TABLE sessions ADD COLUMN requested_model TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(sqlite: Database.Database, migrations: Migration[] = MIGRATIONS): {
