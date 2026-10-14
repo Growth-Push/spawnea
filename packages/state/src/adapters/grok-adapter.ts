@@ -6,6 +6,11 @@ import type { PatternRule, RuleCategory } from '../rules/types.js';
 
 const COMPLETION_LINE = /^\s*Worked for\s+\d[\d.smh ]*$/i;
 
+function cleanCompletionLine(line: string): string | undefined {
+  const stripped = line.replace(/[\s█]+$/, '').trim();
+  return COMPLETION_LINE.test(stripped) ? stripped : undefined;
+}
+
 /**
  * Blank viewport rows in the Grok TUI often keep a scrollbar block, so they
  * are not empty. They must not hide the turn-completion line above them.
@@ -31,13 +36,19 @@ function isIdleShortcutBar(line: string): boolean {
   return /Shift\+Tab:\s*mode/i.test(line) && /shortcuts/i.test(line);
 }
 
+function isRecapLine(line: string): boolean {
+  const stripped = line.replace(/[\s█]+$/, '').trim();
+  return /^\s*┃/.test(stripped);
+}
+
 function isReadyChrome(line: string): boolean {
   return (
     isScrollbarRow(line) ||
     isBoxChrome(line) ||
     isEmptyComposer(line) ||
     isModelFooter(line) ||
-    isIdleShortcutBar(line)
+    isIdleShortcutBar(line) ||
+    isRecapLine(line)
   );
 }
 
@@ -70,10 +81,13 @@ function isActiveWork(line: string): boolean {
   if (/Waiting on answers\b/i.test(line)) {
     return false;
   }
-  const normalized = line.replace(/^[\s│|]+|[\s│|]+$/g, '');
+  const normalized = line.replace(/^[\s│|┃]+|[\s│|┃]+$/g, '');
+  if (/^\s*[◆◂]?\s*Recap\b/i.test(normalized)) {
+    return false;
+  }
   return (
     /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\s|$)/.test(normalized) ||
-    /^\s*[◆●▶]\s+\S/.test(line) ||
+    /^\s*[◆●▶]\s+\S/.test(normalized) ||
     /\b(?:Running|Responding|Generating)\b/.test(line) ||
     /esc to interrupt|send a message to interrupt/i.test(line)
   );
@@ -225,9 +239,12 @@ export class GrokStatusAdapter implements HarnessStatusAdapter {
     }
 
     let lastCompletion = -1;
+    let completionLine: string | undefined;
     for (let i = 0; i < lines.length; i++) {
-      if (COMPLETION_LINE.test(lines[i].trim())) {
+      const match = cleanCompletionLine(lines[i]);
+      if (match) {
         lastCompletion = i;
+        completionLine = match;
       }
     }
 
@@ -252,7 +269,6 @@ export class GrokStatusAdapter implements HarnessStatusAdapter {
       substantive.every(isWelcomeContent);
     if ((substantive.length === 0 || welcomeScreen) &&
       (lastCompletion >= 0 || afterCompletion.some((line) => isIdleShortcutBar(line) || isEmptyComposer(line)))) {
-      const completionLine = lastCompletion >= 0 ? lines[lastCompletion].trim() : undefined;
       return {
         status: 'idle',
         confidence: completionLine ? 0.96 : 0.9,

@@ -267,4 +267,106 @@ describe('GrokStatusAdapter', () => {
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
   });
+
+  it('detects idle with confidence 0.96 and cleaned prompt from capture with trailing scrollbar', () => {
+    const tailLines: string[] = [
+      '  main ~/workspace/project                                                                                                                                           20K / 256K │ [Dashboard]',
+      '     ❯ quiero probar una cosa de la app donde te estoy corriendo. me podes hacer una pregunta como si necesitaras de mi desicion?                                                    2:54 PM',
+      '     ◆ Thought for 1.6s',
+      '     Voy a hacerte una pregunta con opciones para que veas cómo se presenta la decisión.                                                                                             2:54 PM',
+      '     ◆ Ask Para probar esta función, ¿qué querés que haga después de que elijas?',
+      '     Recibí tu elección: Confirmar y seguir.                                                                                                                                         2:55 PM   █',
+      '     La pregunta con opciones funcionó. La app me devolvió esa respuesta y pude continuar a partir de ella.                                                                                    █',
+      '     Worked for 9.1s                                                                                                                                                                           █',
+      ...Array.from({ length: 42 }, () => '                                                                                                                                                                                                                              █'),
+      '  ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮',
+      '  │ ❯                                                                                                                                                                                                                       │',
+      '  ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (xhigh) · always-approve ─╯',
+      '  Shift+Tab:mode  │  Ctrl+x:shortcuts',
+    ];
+
+    const res = adapter.evaluateStatus(signals(tailLines));
+    expect(res.status).toBe('idle');
+    expect(res.confidence).toBe(0.96);
+    expect(res.detectedPrompt).toBe('Worked for 9.1s');
+    expect(res.reason).toBe('Grok turn finished: Worked for 9.1s');
+  });
+
+  it('detects idle when historical Ask is followed by resolved Worked for with trailing scrollbar', () => {
+    const res = adapter.evaluateStatus(
+      signals([
+        '     ◆ Ask Para probar esta función, ¿qué querés que haga después de que elijas?',
+        '     Recibí tu elección: Confirmar y seguir.                                                                                                                                                                        2:55 PM   █',
+        '     Worked for 9.1s                                                                                                                                                                                                          █',
+        ...readyComposer(),
+      ])
+    );
+    expect(res.status).toBe('idle');
+    expect(res.confidence).toBe(0.96);
+    expect(res.detectedPrompt).toBe('Worked for 9.1s');
+    expect(res.reason).toContain('Grok turn finished: Worked for 9.1s');
+  });
+
+  it('detects working when substantive active work follows Worked for with trailing scrollbar', () => {
+    const res = adapter.evaluateStatus(
+      signals([
+        '     Worked for 9.1s                                                                                                                                                                                                          █',
+        '     ◆ Run pnpm test',
+        ...readyComposer(),
+      ])
+    );
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toContain('◆ Run pnpm test');
+  });
+
+  it('preserves needs_input when an active question card is present after a previous completed turn', () => {
+    const res = adapter.evaluateStatus(
+      signals([
+        '     Worked for 9.1s                                                                                                                                                                                                          █',
+        '   ◆ Waiting on answers for Which action to take?  15s [stop]',
+        '  ┃',
+        '  ┃  Which action to take?',
+        '  ┃  1 (○) Approve (Recommended)',
+        '  ┃  2 (○) Reject',
+        '  ┃  Tab:next answer  │  Esc:scrollback',
+      ])
+    );
+    expect(res.status).toBe('needs_input');
+    expect(res.confidence).toBe(0.97);
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toContain('Waiting on answers');
+    expect(res.reason).toContain('waiting for an answer');
+  });
+
+  it('detects idle when Grok turn completion includes a Recap summary block', () => {
+    const res = adapter.evaluateStatus(
+      signals([
+        '     ◆ Ask Para probar esta función, ¿qué querés que haga después de que elijas?',
+        '     Recibí tu elección: Confirmar y seguir.                                                                                                                                                                        2:55 PM   █',
+        '     Worked for 9.1s                                                                                                                                                                                                          █',
+        '  ┃  ◆ Recap                                                                                                                                                                                                                  █',
+        '  ┃                                                                                                                                                                                                                           █',
+        '  ┃  Pediste comprobar que funciono y que te hiciera una pregunta de decisión: elegiste Confirmar y seguir, la app devolvió esa respuesta y continué.                                                                        █',
+        ...readyComposer(),
+      ])
+    );
+    expect(res.status).toBe('idle');
+    expect(res.confidence).toBe(0.96);
+    expect(res.detectedPrompt).toBe('Worked for 9.1s');
+    expect(res.reason).toContain('Grok turn finished: Worked for 9.1s');
+  });
+
+  it('keeps working when new active work mentioning Recap follows completion', () => {
+    const res = adapter.evaluateStatus(
+      signals([
+        '     Worked for 9.1s                                                                                                                                                                                                          █',
+        '     ◆ Run rg Recap .',
+        ...readyComposer(),
+      ])
+    );
+    expect(res.status).toBe('working');
+    expect(res.source).toBe('terminal_prompt');
+    expect(res.detectedPrompt).toContain('◆ Run rg Recap .');
+  });
 });
