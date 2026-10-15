@@ -878,4 +878,258 @@ describe('CodexStatusAdapter', () => {
     expect(res.status).toBe('idle');
     expect(res.status).not.toBe('needs_input');
   });
+  describe('turn failures', () => {
+    const capacityFailure = '■ Selected model is at capacity. Please try a different model.';
+    const readyPrompt = ['› Ask Codex to do anything', '  gpt-model high · Context 80% left', '  ← for agents · ? for shortcuts'];
+    const evaluate = (tailLines: string[]) => adapter.evaluateStatus({
+      sessionId: 'sess-codex-failure',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines,
+    });
+
+    it('reports the latest failure as ERROR although the ready prompt is redrawn', () => {
+      const res = evaluate([
+        '  Worked for 3m 10s • 10:10 AM',
+        '› Check the release notes',
+        '• Called example.list_items',
+        '  └ Action completed.',
+        capacityFailure,
+        '',
+        ...readyPrompt,
+      ]);
+      expect(res.status).toBe('error');
+      expect(res.source).toBe('terminal_prompt');
+      expect(res.detectedPrompt).toBe('Selected model is at capacity. Please try a different model.');
+      expect(res.reason).toContain('Selected model is at capacity');
+    });
+
+    it('keeps ERROR while a retry is only an unsent draft', () => {
+      const res = evaluate([capacityFailure, '› retry the request', '  ← for agents · ? for shortcuts']);
+      expect(res.status).toBe('error');
+    });
+
+    it('clears a historical failure once the retry produces new activity', () => {
+      const failedThenRetried = [capacityFailure, '› retry', '• Retrying the previous check.'];
+      expect(evaluate([...failedThenRetried, '• Working (4s • esc to interrupt)', ...readyPrompt]).status).toBe('working');
+      expect(evaluate([...failedThenRetried, '• Called example.list_items', '  └ Action completed.', ...readyPrompt]).status).toBe('idle');
+      expect(evaluate([...failedThenRetried, '─ Worked for 12s ─────────', ...readyPrompt]).status).toBe('idle');
+    });
+
+    it('treats a submitted retry as superseding the failure', () => {
+      expect(evaluate([capacityFailure, '› retry', ...readyPrompt]).status).toBe('idle');
+    });
+
+    it('recognizes a new failure after a recovered one', () => {
+      const res = evaluate([
+        capacityFailure,
+        '› retry',
+        '• Retrying the previous check.',
+        '• Called example.list_items',
+        '  └ Action completed.',
+        capacityFailure,
+        ...readyPrompt,
+      ]);
+      expect(res.status).toBe('error');
+      expect(res.reason).toContain('Selected model is at capacity');
+    });
+
+    it.each([
+      ['an active working line', '• Working (4s • esc to interrupt)'],
+      ['an approval prompt', 'Do you want to proceed? [y/N]'],
+    ])('lets the latest failure outrank %s from before it', (_label, olderLine) => {
+      const res = evaluate([olderLine, capacityFailure, ...readyPrompt]);
+      expect(res.status).toBe('error');
+      expect(res.reason).toContain('Selected model is at capacity');
+    });
+
+    it('keeps newer input requests after a submitted retry', () => {
+      const res = evaluate([capacityFailure, '› retry', 'Do you want to proceed? [y/N]', ...readyPrompt]);
+      expect(res.status).toBe('needs_input');
+    });
+
+    it('ignores a failure quoted inside the editable draft', () => {
+      const res = evaluate(['› Explain this message:', `  ${capacityFailure}`, '  gpt-model high · Context 80% left']);
+      expect(res.status).not.toBe('error');
+    });
+
+    it.each([
+      ['an indented bullet', ['› Explain:', '  • Example text']],
+      ['quoted prompt glyphs', ['› Compare these lines:', '  › first quoted prompt', '  › second quoted prompt']],
+    ])('does not treat a draft with %s as recovery', (_label, draft) => {
+      const res = evaluate([capacityFailure, ...draft, '  gpt-model high · Context 80% left']);
+      expect(res.status).toBe('error');
+    });
+
+    it('does not treat an indented square bullet in the transcript as a failure', () => {
+      const res = evaluate(['• The documentation uses the following list:', '  ■ Supported platforms', ...readyPrompt]);
+      expect(res.status).toBe('idle');
+    });
+
+    it('keeps the failure when its wrapped text contains an indented bullet', () => {
+      const res = evaluate([capacityFailure, '  • Please try again later', ...readyPrompt]);
+      expect(res.status).toBe('error');
+    });
+
+    it.each(['› Ask Codex to do anything', '›', '› '])('clears the failure after a submitted retry and the ready prompt %j', (prompt) => {
+      const res = evaluate([capacityFailure, '› retry', prompt]);
+      expect(res.status).toBe('idle');
+    });
+
+    it.each([
+      ['a completion marker', '  Worked for 12s'],
+      ['an active working line', '  • Working (4s • esc to interrupt)'],
+      ['an approval prompt', '  Do you want to proceed? [y/N]'],
+    ])('keeps ERROR when an unsent draft quotes %s', (_label, quoted) => {
+      const res = evaluate([capacityFailure, '› Explain this log:', quoted, '  gpt-model high · Context 80% left']);
+      expect(res.status).toBe('error');
+      expect(res.reason).toContain('Selected model is at capacity');
+    });
+
+    it('keeps ERROR when the first draft line quotes an approval prompt', () => {
+      expect(evaluate([capacityFailure, '› Do you want to proceed? [y/N]']).status).toBe('error');
+    });
+
+    it('still honors an indented completion marker in the transcript', () => {
+      expect(evaluate([capacityFailure, '› retry', '• Done.', '  Worked for 12s • 10:10 AM', ...readyPrompt]).status).toBe('idle');
+      expect(evaluate(['• Working (4s • esc to interrupt)', '  Worked for 3m 10s • 10:10 AM', ...readyPrompt]).status).toBe('idle');
+    });
+
+    it('reports ERROR for a submitted prompt followed by a failure before the composer is redrawn', () => {
+      const res = evaluate(['› run tests', capacityFailure]);
+      expect(res.status).toBe('error');
+      expect(res.reason).toContain('Selected model is at capacity');
+      expect(evaluate(['› run tests', capacityFailure, ...readyPrompt]).status).toBe('error');
+      expect(evaluate(['› run tests', capacityFailure, '› retry the request']).status).toBe('error');
+      expect(evaluate(['› run tests', capacityFailure, '› retry', '• Retrying the check.', ...readyPrompt]).status).toBe('idle');
+      expect(evaluate(['› run tests', '• Ran pnpm test', '  └ ok', ...readyPrompt]).status).toBe('idle');
+    });
+
+    it('does not report an interrupted turn as ERROR', () => {
+      const res = evaluate([
+        '■ Conversation interrupted - tell the model what to do differently.',
+        ...readyPrompt,
+      ]);
+      expect(res.status).toBe('idle');
+    });
+  });
+  describe('quoted tool output', () => {
+    const evaluate = (tailLines: string[]) => adapter.evaluateStatus({
+      sessionId: 'sess-codex-tool-output',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines,
+    });
+    const toolOutput = [
+      '• Ran a status regression probe',
+      '  └ {"name":"draft quoting working","status":"working","reason":"• Working (4s • esc to interrupt)"}',
+      '    {"name":"draft quoting completion","status":"idle","reason":"Worked for 12s"}',
+      '    {"name":"later confirmation","status":"needs_input","reason":"Do you want to proceed? [y/N]"}',
+      '    + 2 lines (^t to expand)',
+      '• The review found one remaining issue.',
+    ];
+    const readyPrompt = [
+      '› Ask Codex to do anything',
+      '  gpt-model xhigh · Context 75% left · example-project',
+      '  ← for agents · ? for shortcuts                ⚠ 1 warning · f2 to view',
+    ];
+
+    it('reports WORKING from the live status line, not quoted input requests', () => {
+      const res = evaluate([...toolOutput, 'Working (1h 06m 15s • esc to interrupt)', '  └ Tip: Use /archive to archive the current session.', ...readyPrompt]);
+      expect(res.status).toBe('working');
+      expect(res.detectedPrompt).toBe('Working (1h 06m 15s • esc to interrupt)');
+    });
+
+    it('reports IDLE once the turn is finished', () => {
+      const res = evaluate([...toolOutput, ...readyPrompt]);
+      expect(res.status).toBe('idle');
+      expect(res.detectedPrompt).toBe('› Ask Codex to do anything');
+    });
+
+    it('keeps a genuine later input request and points at it, not the footer', () => {
+      const res = evaluate([...toolOutput, 'Working (5s • esc to interrupt)', 'Do you want to proceed? [y/N]', ...readyPrompt]);
+      expect(res.status).toBe('needs_input');
+      expect(res.detectedPrompt).toBe('Do you want to proceed? [y/N]');
+    });
+
+    it('keeps an indented approval dialog that follows a submitted prompt', () => {
+      const res = evaluate([
+        '› run tests',
+        '  Would you like to run the following command?',
+        '  $ pnpm test',
+        '  › 1. Yes, proceed (y)',
+        '    2. No, and tell Codex what to do differently (esc)',
+        '  Press enter to confirm',
+      ]);
+      expect(res.status).toBe('needs_input');
+      expect(res.detectedPrompt).toBe('› 1. Yes, proceed (y)');
+    });
+
+    it('treats an approval dialog quoted in a draft above the footer as the draft', () => {
+      const quotedDialog = ['› Explain this dialog:', '  › 1. Yes, proceed (y)', '    2. No', '  Press enter to confirm', ...readyPrompt.slice(1)];
+      expect(evaluate(quotedDialog).status).toBe('idle');
+      expect(evaluate(['■ Selected model is at capacity. Please try a different model.', ...quotedDialog]).status).toBe('error');
+    });
+
+    it.each([2, 35])('keeps a quoted confirmation inside a %i-row tool block quoted', (rows) => {
+      const res = evaluate([
+        '• Ran a diagnostic',
+        '  └ Diagnostic output',
+        ...Array(rows).fill('    Ordinary tool output'),
+        '    Do you want to proceed? [y/N]',
+        'Working (4s • esc to interrupt)',
+        ...readyPrompt,
+      ]);
+      expect(res.status).toBe('working');
+    });
+
+    it('does not treat a quoted confirmation in the tool command as input', () => {
+      const header = ["• Ran printf 'Do you want to proceed? [y/N]'", '  └ Do you want to proceed? [y/N]'];
+      expect(evaluate([...header, 'Working (4s • esc to interrupt)', ...readyPrompt]).status).toBe('working');
+      expect(evaluate([...header, ...readyPrompt]).status).toBe('idle');
+      expect(evaluate(["• Ran printf 'line one", "  │ Do you want to proceed? [y/N]'", '  └ line one', ...readyPrompt]).status).toBe('idle');
+    });
+
+    it.each([
+      '• Running (5s • esc to interrupt)',
+      '• Running pnpm test (5s • esc to interrupt)',
+      "• Running printf 'Do you want to proceed? [y/N]' (5s • esc to interrupt)",
+    ])('keeps the live activity of a running tool: %s', (activity) => {
+      const res = evaluate([activity, ...readyPrompt]);
+      expect(res.status).toBe('working');
+      expect(res.detectedPrompt).toBe('• Running (5s • esc to interrupt)');
+    });
+
+    it('does not treat an interrupt hint quoted inside a command as live activity', () => {
+      expect(evaluate(["• Ran printf '(5s • esc to interrupt)'", ...readyPrompt]).status).toBe('idle');
+      expect(evaluate(["• Ran printf '(5s • esc to interrupt)' && echo done", ...readyPrompt]).status).toBe('idle');
+    });
+
+    it('keeps a genuine input request after a running tool and recovers to idle', () => {
+      const running = '• Running pnpm test (5s • esc to interrupt)';
+      const input = evaluate([running, 'Do you want to proceed? [y/N]', ...readyPrompt]);
+      expect(input.status).toBe('needs_input');
+      expect(input.detectedPrompt).toBe('Do you want to proceed? [y/N]');
+      expect(evaluate(["• Ran pnpm test", '  └ ok', '─ Worked for 12s ─────────', ...readyPrompt]).status).toBe('idle');
+    });
+
+    it('still counts a tool entry as recovery after a failure', () => {
+      const res = evaluate(['■ Selected model is at capacity. Please try a different model.', '› retry', '• Ran pnpm test', '  └ ok', ...readyPrompt]);
+      expect(res.status).toBe('idle');
+      expect(evaluate(['■ Selected model is at capacity. Please try a different model.', '• Ran pnpm test', '  └ ok', ...readyPrompt]).status).toBe('idle');
+    });
+
+    it('keeps a genuine approval menu that replaces the input prompt', () => {
+      const res = evaluate([...toolOutput, 'Approval required: Codex wants to execute the following command:', '  git push origin main', '❯ 1. Allow once', '  2. Deny']);
+      expect(res.status).toBe('needs_input');
+    });
+  });
 });

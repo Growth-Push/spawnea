@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripAnsi, detectPromptInTail } from '../src/prompt-detector.js';
+import { stripAnsi, detectPromptInTail, codexSignalLines } from '../src/prompt-detector.js';
 
 describe('prompt-detector', () => {
   it('strips ANSI color and cursor codes cleanly', () => {
@@ -713,6 +713,58 @@ describe('prompt-detector', () => {
     expect(res.kind).not.toBe('idle_prompt');
   });
 
+  it('rejects transcript output between the input box and a status line', () => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 27s · done 12:16 PM',
+      '────────────────────────',
+      '❯ Review the change',
+      '────────────────────────',
+      '● Read(src/index.ts)',
+      '   user  …/projects/example  main',
+      '⏵⏵ auto mode on (shift+tab to cycle)',
+    ], { harness: 'claude' });
+    expect(res.matchedRuleId).not.toBe('claude-idle-turn-completion');
+  });
+
+  it.each(['·', '✢', '*', '✳', '✶', '✻', '✽'])('detects the %s Claude spinner frame above an empty input box', (glyph) => {
+    const res = detectPromptInTail([
+      `${glyph} Hyperspacing… (53s · ↓ 1.3k tokens)`,
+      '────────────────────────',
+      '❯ ',
+      '────────────────────────',
+      '⏵⏵ auto mode on · ← for agents',
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('working');
+    expect(res.matchedRuleId).toBe('claude-working-spinner');
+  });
+
+  it.each(['  * Loading…', '  · Loading…', '* Loading… is shown while files load'])('does not treat transcript text %j as a Claude spinner', (line) => {
+    const res = detectPromptInTail(['● Example documentation:', line, '❯', '⏵⏵ auto mode on'], { harness: 'claude' });
+    expect(res.kind).toBe('idle_prompt');
+  });
+
+  it.each([
+    ['confirmation', 'Do you want to proceed? [y/N]'],
+    ['error', 'Uncaught Error: Authentication failed'],
+  ])('lets a newer %s below the input box invalidate Claude completion', (kind, line) => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 8s · done 11:35 AM',
+      '────────────────────────',
+      '❯ draft',
+      '────────────────────────',
+      line,
+    ], { harness: 'claude' });
+    expect(res.kind).toBe(kind);
+  });
+
+  it('bounds the Claude status line below the input box', () => {
+    const box = ['✻ Brewed for 8s · done 11:35 AM', '────────────────────────', '❯ draft', '────────────────────────'];
+    expect(detectPromptInTail([...box, 'user main ctx 12%', 'second status row', '⏵⏵ auto mode on'], { harness: 'claude' }).matchedRuleId)
+      .toBe('claude-idle-turn-completion');
+    expect(detectPromptInTail([...box, 'first new line', 'second new line', 'third new line', '⏵⏵ auto mode on'], { harness: 'claude' }).matchedRuleId)
+      .not.toBe('claude-idle-turn-completion');
+  });
+
   it('recognizes the empty modern Claude input prompt', () => {
     expect(detectPromptInTail(['❯\u00a0', '⏵⏵ auto mode on (shift+tab to cycle)'], { harness: 'claude' }).kind).toBe('idle_prompt');
   });
@@ -781,6 +833,50 @@ describe('prompt-detector', () => {
     });
     expect(res.kind).toBe('idle_prompt');
     expect(res.matchedRuleId).toBe('claude-idle-turn-completion');
+  });
+
+  it('keeps only live Codex transcript and UI lines as signals', () => {
+    expect(codexSignalLines([
+      '• Ran a probe',
+      '  └ Do you want to proceed? [y/N]',
+      '    Worked for 12s',
+      '  Worked for 3m 10s • 10:10 AM',
+      '› Explain this log:',
+      '  • Working (4s • esc to interrupt)',
+      '  ← for agents · ? for shortcuts',
+    ])).toEqual(['• Ran', '  Worked for 3m 10s • 10:10 AM', '›']);
+    expect(codexSignalLines(['■ Failure', '› Ask Codex to do anything', '  footer'])).toEqual(['■ Failure', '› Ask Codex to do anything']);
+    expect(codexSignalLines(["• Running printf '[y/N]' (1m 05s • esc to interrupt)", "• Ran printf '(5s • esc to interrupt)'"]))
+      .toEqual(['• Running (1m 05s • esc to interrupt)', '• Ran']);
+    expect(codexSignalLines(['Choose:', '› 1. First', '  2. Second', '  enter to submit'])).toEqual(['Choose:', '› 1. First', '  2. Second', '  enter to submit']);
+  });
+
+  it('keeps a long Codex tool block quoted beyond the inspection window', () => {
+    const res = detectPromptInTail([
+      '• Ran a diagnostic',
+      '  └ Diagnostic output',
+      ...Array(35).fill('    Ordinary tool output'),
+      '    Do you want to proceed? [y/N]',
+      '› Ask Codex to do anything',
+    ], { harness: 'codex', tailLinesCount: 15 });
+    expect(res.kind).not.toBe('confirmation');
+  });
+
+  it('keeps an indented Codex approval dialog after a submitted prompt', () => {
+    const res = detectPromptInTail([
+      '› run tests',
+      '  Would you like to run the following command?',
+      '  › 1. Yes, proceed (y)',
+      '    2. No, and tell Codex what to do differently (esc)',
+      '  Press enter to confirm',
+    ], { harness: 'codex' });
+    expect(res.kind).not.toBe('none');
+    expect(res.kind).not.toBe('idle_prompt');
+  });
+
+  it('does not let a quoted Codex completion in the draft end the turn', () => {
+    const res = detectPromptInTail(['Do you want to proceed? [y/N]', '› Explain this log:', '  Worked for 12s'], { harness: 'codex' });
+    expect(res.kind).toBe('confirmation');
   });
 
   it('returns none for ordinary output', () => {

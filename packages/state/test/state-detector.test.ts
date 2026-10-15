@@ -277,6 +277,74 @@ describe('StateDetector', () => {
     expect(res.source).toBe('terminal_prompt');
   });
 
+  describe('Claude turns with background shells and a status line', () => {
+    const inputBox = (draft = '') => [
+      '────────────────────────',
+      `❯ ${draft}`,
+      '────────────────────────',
+      '   user  …/projects/example  main  model-name  ctx 12%',
+      '  ⏵⏵ auto mode on · 1 shell · ← for agents',
+    ];
+    const detect = (tailLines: string[]) => detector.detectStatus({
+      sessionId: 'sess-claude',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'claude',
+      tailLines,
+    }, 'claude');
+    const resumedAfterBackgroundResult = [
+      '● The full suite is running in the background.',
+      '✻ Baked for 3m 49s · done 11:07 AM · 1 shell still running',
+      '● Background command "pnpm test" completed (exit code 0)',
+      '  Running node scripts/check.mjs… · 41s',
+    ];
+
+    it.each(['·', '✢', '*', '✳', '✶', '✻', '✽'])('detects working on the %s spinner frame after a background result', (glyph) => {
+      const res = detect([
+        ...resumedAfterBackgroundResult,
+        `${glyph} Hyperspacing… (53s · ↓ 1.3k tokens)`,
+        '  ⎿  Tip: Use /btw to ask a quick side question',
+        ...inputBox(),
+      ]);
+      expect(res.status).toBe('working');
+      expect(res.source).toBe('terminal_prompt');
+      expect(res.detectedPrompt).toContain('Hyperspacing');
+    });
+
+    it('detects idle when the turn ends with a background shell, an unsent draft, and a status line', () => {
+      const res = detect([
+        '● Report updated.',
+        '✻ Crunched for 8s · done 11:35 AM · 1 shell still running',
+        ...inputBox('make check'),
+      ]);
+      expect(res.status).toBe('idle');
+      expect(res.source).toBe('terminal_prompt');
+      expect(res.detectedPrompt).toContain('done 11:35 AM');
+    });
+
+    it('does not keep completion evidence after a newer background result', () => {
+      const res = detect([
+        '✻ Crunched for 8s · done 11:35 AM · 1 shell still running',
+        '● Background command "pnpm test" completed (exit code 0)',
+        '· Hyperspacing… (2s)',
+        ...inputBox(),
+      ]);
+      expect(res.status).toBe('working');
+    });
+
+    it('detects working from an interrupt footer below the status line', () => {
+      const res = detect([
+        '✻ Crunched for 8s · done 11:35 AM',
+        ...inputBox().slice(0, 4),
+        '  ⏵⏵ auto mode on · esc to interrupt',
+      ]);
+      expect(res.status).toBe('working');
+    });
+  });
+
   it('detects working when active PTY output was received recently', () => {
     const signals: SessionSignals = {
       sessionId: 'sess-1',

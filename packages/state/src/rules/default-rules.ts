@@ -301,6 +301,18 @@ export const DEFAULT_PATTERN_RULES: PatternRule[] = [
     description: 'Matches Claude Code active interrupt hints, including before the spinner appears',
   },
   {
+    id: 'claude-working-spinner',
+    name: 'Claude Code Working Spinner',
+    category: 'working',
+    harness: 'claude',
+    // Claude Code animates its spinner through all of these glyphs at column 0,
+    // followed by the verb, an ellipsis, and optionally an elapsed-time summary.
+    // Indented transcript and draft lines (e.g. Markdown bullets) are excluded.
+    pattern: /(?:^|\n)[·✢✳✶✻✽*] [A-Za-z][A-Za-z -]*…(?=[ \t]*(?:\(|\n|$))/,
+    confidence: 0.9,
+    description: 'Matches every frame of the Claude Code spinner (e.g. · Hyperspacing… (53s) or ✢ Warping…)',
+  },
+  {
     id: 'claude-tool-permission',
     name: 'Claude Code Tool Permission',
     category: 'confirmation',

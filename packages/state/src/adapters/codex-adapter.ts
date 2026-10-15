@@ -6,7 +6,52 @@ import type {
   HarnessStatusAdapter,
   HarnessStatusAdapterOptions,
 } from './types.js';
-import { detectPromptInTail, stripAnsi } from '../prompt-detector.js';
+import { codexSignalLines, detectPromptInTail, stripAnsi } from '../prompt-detector.js';
+
+// Codex prints transcript entries, turn failures, and submitted prompts at
+// column 0. Wrapped text, quoted content, and draft continuation lines are
+// indented. Interrupt notices share the failure glyph.
+const CODEX_TURN_FAILURE = /^■\s+(\S.*)$/;
+const CODEX_INTERRUPT_NOTICE = /\binterrupted\b/i;
+const CODEX_PROMPT_LINE = /^[›❯>](?:\s|$)/;
+const CODEX_TURN_ACTIVITY = /^(?:•|[›❯>](?:\s|$))/;
+
+interface CodexTurnFailure {
+  index: number;
+  message: string;
+  resolved: boolean;
+}
+
+/**
+ * Finds the latest turn failure in the transcript above the editable prompt.
+ * A later agent entry or submitted prompt resolves it. The bottom prompt line
+ * (placeholder, empty, or unsent draft) and anything below it do not.
+ */
+function findLatestCodexFailure(lines: string[]): CodexTurnFailure | undefined {
+  // Only a bottom prompt with no later column-0 transcript is the editable
+  // composer; an earlier prompt was submitted.
+  let editablePrompt = lines.length;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^\S/.test(lines[i])) {
+      if (CODEX_PROMPT_LINE.test(lines[i])) {
+        editablePrompt = i;
+      }
+      break;
+    }
+  }
+  for (let i = editablePrompt - 1; i >= 0; i--) {
+    const match = lines[i].match(CODEX_TURN_FAILURE);
+    if (!match) {
+      continue;
+    }
+    if (CODEX_INTERRUPT_NOTICE.test(match[1])) {
+      return undefined;
+    }
+    const resolved = lines.slice(i + 1, editablePrompt).some((line) => CODEX_TURN_ACTIVITY.test(line));
+    return { index: i, message: match[1].trim(), resolved };
+  }
+  return undefined;
+}
 
 export class CodexStatusAdapter implements HarnessStatusAdapter {
   readonly harnessId = 'codex';
@@ -69,7 +114,9 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
     if (tailLines.length > 0) {
       const cleaned = tailLines.map((l) => stripAnsi(l).trimEnd());
       const nonEmptyLines = cleaned.filter((l) => l.trim().length > 0);
-      const recentLines = nonEmptyLines.slice(-30);
+      // Every decision below reads live transcript and UI lines only.
+      // Filter before the inspection window so a long tool block keeps its opener.
+      const recentLines = codexSignalLines(nonEmptyLines).slice(-30);
       // Turn completion & active turn slicing:
       // If a completion marker ('Worked for ...') is present, lines prior to it belong to a finished turn.
       // Filter them out so historical prompts (e.g. previous questions, approvals) do not leak into the current turn.
@@ -80,12 +127,16 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
       const activeStatusIndex = lastActiveStatusIndex === -1 ? -1 : recentLines.length - 1 - lastActiveStatusIndex;
       const completionIndex = lastCompletionIndex === -1 ? -1 : recentLines.length - 1 - lastCompletionIndex;
       const hasRecentCompletion = completionIndex >= 0 && completionIndex > activeStatusIndex;
-      const hasInterruptFooter = activeStatusIndex >= 0 && !hasRecentCompletion;
+      // A turn failure also ends the previous turn: only newer lines can show work or input.
+      const failure = findLatestCodexFailure(recentLines.slice(completionIndex + 1));
+      const failureIndex = failure ? completionIndex + 1 + failure.index : -1;
+      const turnStart = Math.max(completionIndex, failureIndex);
+      const hasInterruptFooter = activeStatusIndex >= 0 && activeStatusIndex > turnStart;
 
-      const activeLines = completionIndex >= 0
-        ? (recentLines.slice(completionIndex + 1).length > 0
-            ? recentLines.slice(completionIndex + 1)
-            : [recentLines[completionIndex]])
+      const activeLines = turnStart >= 0
+        ? (recentLines.slice(turnStart + 1).length > 0
+            ? recentLines.slice(turnStart + 1)
+            : [recentLines[turnStart]])
         : recentLines;
       const combinedTail = activeLines.join('\n');
 
@@ -195,7 +246,7 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         (hasInterruptFooter ||
           hasBrailleSpinner ||
           ((!hasCodexIdlePrompt) && (hasWorkingStatus || hasActiveProgressBullets || hasReasoningHeader)));
-      const idlePromptLine = [...nonEmptyLines].reverse().find((line) =>
+      const idlePromptLine = [...recentLines].reverse().find((line) =>
         /(?:^[>›❯]\s*(?:Ask (?:Codex|anything)|Type|Send|What would you like|$)|Ask Codex to do anything)/i.test(line)
       );
 
@@ -208,8 +259,8 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
       ) {
         let promptLine = promptResult.promptLine || 'Working...';
         if (!promptResult.promptLine || promptResult.kind !== 'working') {
-          for (let i = nonEmptyLines.length - 1; i >= 0; i--) {
-            const l = nonEmptyLines[i].trim();
+          for (let i = recentLines.length - 1; i >= 0; i--) {
+            const l = recentLines[i].trim();
             if (
               /Working\b|esc to interrupt|ctrl\+c|Thinking\b|Reasoning\b|Running\b|Searching\b/i.test(l) ||
               /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|[\u2800-\u28FF]/.test(l)
@@ -229,7 +280,19 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         };
       }
 
-      // C. IDLE: Ready prompt (e.g. › Ask Codex to do anything) when NOT working and NOT waiting for queued input
+      // C. ERROR: The redisplayed ready prompt does not resolve the latest turn failure.
+      if (failure && !failure.resolved) {
+        return {
+          status: 'error',
+          confidence: 0.9,
+          source: 'terminal_prompt',
+          detectedPrompt: failure.message,
+          reason: `Codex turn failed: ${failure.message}`,
+          updatedAt: new Date(),
+        };
+      }
+
+      // D. IDLE: Ready prompt (e.g. › Ask Codex to do anything) when NOT working and NOT waiting for queued input
       if (
         !hasQueuedFollowup &&
         !hasActiveWorkingStatus &&
@@ -248,7 +311,7 @@ export class CodexStatusAdapter implements HarnessStatusAdapter {
         };
       }
 
-      // D. ERROR: Fatal execution error
+      // E. ERROR: Fatal execution error
       if (promptResult.kind === 'error') {
         return {
           status: 'error',

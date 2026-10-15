@@ -677,15 +677,62 @@ PTY bytes are forwarded to the renderer for live display and used transiently fo
 ### 9.2 Claude turn completion
 
 Claude's `✻ <verb> for <duration> · done <time>` terminal marker indicates an
-`idle` agent ready for another turn, even while its process remains alive. An
-editable `❯` draft, input separators, and mode footer may follow the marker. Draft
+`idle` agent ready for another turn, even while its process remains alive or the
+marker reports a background shell still running. An
+editable `❯` draft, input separators, up to two configured status-line rows
+directly below the input box, and mode footer may follow the marker. A row there
+that is a transcript entry or matches a built-in prompt, error, or activity rule
+is newer output, not status chrome. An unsent draft is not active work. Draft
 continuation lines inside the input separators also preserve completion evidence.
 An active interrupt hint such as `esc to interrupt` indicates `working`, including
-when it appears in the mode footer before the spinner. Newer output invalidates
+when it appears in the mode footer before the spinner. The working spinner is
+recognized on every animation frame (`·`, `✢`, `*`, `✳`, `✶`, `✻`, `✽`) when it
+starts at column 0 with a verb and ellipsis, optionally followed by an elapsed
+summary, so a capture does not report `idle` merely because it landed on an
+uncommon glyph. Indented transcript or draft lines such as Markdown bullets are
+not spinners. A background-command result or other output after the marker
+begins a newer turn. Newer output invalidates
 the completion evidence; prompts and activity from
 before the marker are historical. `done` remains reserved for session termination
 or a successful process exit. Caller-supplied detection rules still evaluate the
 current-turn lines before the built-in completion fallback.
+
+### 9.3 Codex live signals and turn failures
+
+Codex status is decided only from live transcript and UI lines. Two regions are
+quoted content and carry no completion, working, input-request, failure, or
+recovery signal:
+
+- Tool content: the command text after a `• Ran`, `• Running`, `• Called`, or
+  `• Calling` header (the header verb, and a running tool's trailing live
+  `(<elapsed> • esc to interrupt)` suffix, remain an agent entry), `│` command
+  continuation lines, and an indented `└` output block with the deeper-indented
+  (four or more spaces) lines that continue it, such as results that quote a
+  prompt, a status line, or a `Worked for` marker. The filter runs over the whole
+  captured tail before the inspection window is taken, so a long block keeps its
+  `└` opener; a capture that already starts inside an unmarked continuation
+  cannot be recognized as tool output.
+- The editable input: when the last column-0 line is the `›` prompt (not a
+  numbered `› 1.` menu selector), its draft text, its indented draft lines, and
+  the footer below it. Placeholder, empty, and draft prompts are equivalent
+  ready prompts. A menu or approval that replaces the input prompt is still
+  evaluated, including an indented dialog with a numbered selector below a
+  submitted prompt when no composer footer (`? for shortcuts`) follows the
+  selector. A quoted dialog inside a draft keeps the footer below it and stays
+  draft text.
+
+Agent prose continuation (two-space indent) is not quoted content, so an
+indented `Worked for` completion marker in the transcript still ends a turn.
+
+Codex prints a failed turn as a column-0 `■ <message>` line, such as a model
+capacity failure, and then redraws its ready prompt. The failure ends the
+previous turn, so working or approval evidence from before it is historical.
+The latest unresolved failure reports `error` with the message as its reason.
+A later column-0 agent entry (`•`), a submitted prompt (an earlier column-0 `›`
+line), or a `Worked for` completion marker resolves it, and newer work or input
+is then reported normally. Indented lines are wrapped, quoted, or draft content
+and count as neither a failure nor a recovery. Interrupt notices that share the
+glyph are not failures.
 
 ---
 
