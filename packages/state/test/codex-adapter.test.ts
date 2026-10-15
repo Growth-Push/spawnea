@@ -999,6 +999,16 @@ describe('CodexStatusAdapter', () => {
       expect(evaluate(['• Working (4s • esc to interrupt)', '  Worked for 3m 10s • 10:10 AM', ...readyPrompt]).status).toBe('idle');
     });
 
+    it('reports ERROR for a submitted prompt followed by a failure before the composer is redrawn', () => {
+      const res = evaluate(['› run tests', capacityFailure]);
+      expect(res.status).toBe('error');
+      expect(res.reason).toContain('Selected model is at capacity');
+      expect(evaluate(['› run tests', capacityFailure, ...readyPrompt]).status).toBe('error');
+      expect(evaluate(['› run tests', capacityFailure, '› retry the request']).status).toBe('error');
+      expect(evaluate(['› run tests', capacityFailure, '› retry', '• Retrying the check.', ...readyPrompt]).status).toBe('idle');
+      expect(evaluate(['› run tests', '• Ran pnpm test', '  └ ok', ...readyPrompt]).status).toBe('idle');
+    });
+
     it('does not report an interrupted turn as ERROR', () => {
       const res = evaluate([
         '■ Conversation interrupted - tell the model what to do differently.',

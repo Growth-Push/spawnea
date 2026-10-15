@@ -28,10 +28,14 @@ interface CodexTurnFailure {
  * (placeholder, empty, or unsent draft) and anything below it do not.
  */
 function findLatestCodexFailure(lines: string[]): CodexTurnFailure | undefined {
+  // Only a bottom prompt with no later column-0 transcript is the editable
+  // composer; an earlier prompt was submitted.
   let editablePrompt = lines.length;
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (CODEX_PROMPT_LINE.test(lines[i])) {
-      editablePrompt = i;
+    if (/^\S/.test(lines[i])) {
+      if (CODEX_PROMPT_LINE.test(lines[i])) {
+        editablePrompt = i;
+      }
       break;
     }
   }
