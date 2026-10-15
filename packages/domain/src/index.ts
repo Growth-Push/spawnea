@@ -92,7 +92,7 @@ export interface StateFeedbackResult {
 
 export type ArtifactDirection = 'input' | 'output';
 
-export type SessionCreationSource = 'ui' | 'mcp';
+export type SessionCreationSource = 'ui' | 'control';
 
 export interface Server {
   id: string;

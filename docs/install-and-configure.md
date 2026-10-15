@@ -207,66 +207,17 @@ Spawnea includes an explicit, read-only discovery tool:
 3. The scan makes no network connections and runs no commands.
 4. You review a preview of proposed changes and confirm before Spawnea writes to `config.yaml`.
 
-### Configuring the local MCP bridge
+### Using the control CLI
 
-Locally packaged macOS and Linux applications include a stdio MCP helper. Configure
-the package-specific command as described in the [Local Control API and MCP
-contract](control-api-mcp.md). Spawnea must be running; the helper connects to
-the owner-only local Unix socket and opens no network port.
+Locally packaged macOS and Linux applications include the `spawnea` CLI helper
+(`resources/spawnea`; for a Linux AppImage, pass `--spawnea-cli` as its first
+argument). Spawnea must be running; the CLI connects to the owner-only local Unix
+socket and opens no network port. See the [CLI reference](cli.md) and the
+[control API contract](control-api.md).
 
-For an MCP client launched inside a Spawnea root harness, Spawnea injects
-`SPAWNEA_SESSION_ID`; the connection attaches to that root and its direct
-children. Prompt delivery is restricted to direct children so the harness cannot
-write input into its own tmux pane while executing the MCP tool call. Do not
-hard-code another session's ID in shared configuration.
-
-The same helper can start without `SPAWNEA_SESSION_ID`. That connection receives
-only bootstrap discovery and `spawnea_create_session`. After creating one
-independent root, the connection is pinned to it and its direct children. The
-creation tool then accepts only an exact replay of the request that established
-that scope.
-
-For a macOS application bundle or a directory-style package, configure the
-absolute `resources/spawnea-mcp` helper path with no arguments and no session
-environment override:
-
-```json
-{
-  "mcpServers": {
-    "spawnea": {
-      "command": "/Applications/Spawnea.app/Contents/Resources/spawnea-mcp",
-      "args": []
-    }
-  }
-}
-```
-
-For a directory-style Linux package, use
-`/absolute/path/to/package/resources/spawnea-mcp` as `command`; `args` remains
-`[]`.
-
-For a Linux AppImage, use the absolute AppImage path and pass
-`--spawnea-mcp` as its only initial argument:
-
-```json
-{
-  "mcpServers": {
-    "spawnea": {
-      "command": "/absolute/path/to/Spawnea-0.1.0-linux-x86_64.AppImage",
-      "args": ["--spawnea-mcp"]
-    }
-  }
-}
-```
-
-Discover eligible catalog IDs with `spawnea_get_state`, call
-`spawnea_create_session` with a stable `clientRequestId`, retain the returned
-root ID, and use `spawnea_send_prompt` plus `spawnea_get_turn` for the root or a
-direct child on that bootstrap-bound connection. If the creation response is
-lost, launch a replacement helper without `SPAWNEA_SESSION_ID` and repeat the
-identical request while the same desktop process remains active. Its in-memory
-replay binds that connection to the original root. Restarting Spawnea clears the
-bootstrap retry record.
+Spawnea injects `SPAWNEA_SESSION_ID` into harnesses started from a root session,
+so the CLI called from inside that harness attaches to that root and its direct
+children. Do not hard-code another session's ID in shared configuration.
 
 ---
 

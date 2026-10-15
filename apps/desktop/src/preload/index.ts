@@ -133,8 +133,8 @@ export const api = {
   resurrectSession: (sessionId: string): Promise<Session> =>
     ipcRenderer.invoke('sessions:resurrect', sessionId),
 
-  // Explicit local MCP control. The bridge never exposes an approval method to
-  // MCP; only this trusted renderer preload can resolve pending requests.
+  // Explicit local agent control. The bridge never exposes an approval method to
+  // agents; only this trusted renderer preload can resolve pending requests.
   syncControlUiState: (state: ControlUiState): void => {
     ipcRenderer.send('control:setUiState', state);
   },

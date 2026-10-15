@@ -29,7 +29,7 @@ let windowsInstallerAttempted = false;
 let appExecutable;
 let smokeSession;
 let artifactRoot;
-let mcpHelper;
+let cliHelper;
 
 function logResult(name, status, detail = '') {
   console.log(`RESULT ${name}=${status}${detail ? ` (${detail})` : ''}`);
@@ -68,20 +68,6 @@ async function waitFor(check, description, timeoutMs = 30_000) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
   }
   throw new Error(`Timed out waiting for ${description}${lastError ? `: ${lastError.message}` : ''}`);
-}
-
-async function withTimeout(promise, description, timeoutMs = 15_000) {
-  let timer;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${description}`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 async function freePort() {
@@ -330,7 +316,7 @@ async function findAppExecutable() {
     assert.ok(appName, 'The DMG must contain the Spawnea application');
     const appBundle = join(mountedDmg, appName);
     appExecutable = join(appBundle, 'Contents', 'MacOS', 'Spawnea');
-    mcpHelper = join(appBundle, 'Contents', 'Resources', 'spawnea-mcp');
+    cliHelper = join(appBundle, 'Contents', 'Resources', 'spawnea');
     return;
   }
 
@@ -475,43 +461,19 @@ async function attachAndExerciseSession(client, sessionId, marker) {
   logResult(`session-terminal-${marker}`, 'passed');
 }
 
-async function checkMcpHelper(env) {
+async function checkCliHelper(env) {
   if (platform === 'win32') {
-    logResult('packaged-mcp-helper', 'unsupported', 'Windows MCP transport is not implemented');
+    logResult('packaged-cli-helper', 'unsupported', 'Windows control transport is not implemented');
     return;
   }
-  const helperPath = process.env.SPAWNEA_RELEASE_MCP_HELPER || mcpHelper || join(artifactRoot, 'resources', 'spawnea-mcp');
+  const helperPath = process.env.SPAWNEA_RELEASE_CLI_HELPER || cliHelper || join(artifactRoot, 'resources', 'spawnea');
   const helper = await readFile(helperPath);
-  assert.ok(helper.length > 0, 'The packaged MCP helper must be present and non-empty');
-  const [{ Client }, { StdioClientTransport }] = await Promise.all([
-    import('@modelcontextprotocol/client'),
-    import('@modelcontextprotocol/client/stdio'),
-  ]);
-  const transport = new StdioClientTransport({
-    command: helperPath,
-    args: ['--runtime-file', controlRuntimeFile],
-    env: Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'SPAWNEA_SESSION_ID')),
-    stderr: 'pipe',
-  });
-  const client = new Client({ name: 'spawnea-release-smoke', version: '1.0.0' });
-  let helperOutput = '';
-  transport.stderr?.on('data', (chunk) => { helperOutput = `${helperOutput}${chunk}`.slice(-2_000); });
-  try {
-    console.log('Starting packaged MCP helper connection');
-    await withTimeout(client.connect(transport), 'packaged MCP helper initialization').catch((error) => {
-      throw new Error(`${error.message}${helperOutput ? `; helper output: ${helperOutput.trim()}` : ''}`);
-    });
-    logResult('packaged-mcp-helper-initialize', 'passed');
-    const { tools } = await withTimeout(client.listTools(), 'packaged MCP helper tool discovery');
-    assert.ok(tools.some((tool) => tool.name === 'spawnea_get_state'), 'The packaged MCP helper must expose the authenticated Spawnea gateway');
-    logResult('packaged-mcp-helper-tools', 'passed');
-    const state = await withTimeout(client.callTool({ name: 'spawnea_get_state', arguments: {} }), 'packaged MCP helper tool call');
-    assert.ok(!state.isError, 'The packaged MCP helper should complete a gateway tool call');
-    logResult('packaged-mcp-helper-state-call', 'passed');
-  } finally {
-    await withTimeout(client.close(), 'packaged MCP helper client close', 5_000).catch(() => undefined);
-    await withTimeout(transport.close(), 'packaged MCP helper process close', 5_000).catch(() => undefined);
-  }
+  assert.ok(helper.length > 0, 'The packaged CLI helper must be present and non-empty');
+  const childEnv = Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'SPAWNEA_SESSION_ID'));
+  const output = run(helperPath, ['--runtime-file', controlRuntimeFile, 'list', '--json'], { env: childEnv });
+  const parsed = JSON.parse(output || '{}');
+  assert.ok(Array.isArray(parsed.sessions), 'The packaged CLI helper must list sessions through the authenticated gateway');
+  logResult('packaged-cli-helper-list', 'passed');
 }
 
 async function cleanup() {
@@ -573,7 +535,7 @@ try {
     logResult('local-tmux-session-lifecycle', 'unsupported', 'Windows local session adapter is Unix-only');
   }
 
-  await checkMcpHelper(env);
+  await checkCliHelper(env);
 
   await closeApp();
   console.log('Verifying the disposable tmux session survived application exit');

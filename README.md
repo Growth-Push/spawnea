@@ -44,7 +44,7 @@ Its philosophy is deliberately simple:
 - Collect explicit input/output artifacts.
 - Surface normalized states such as working, needs input, idle, done, and error.
 - Coordinate multiple sessions from one searchable desktop interface.
-- Expose an explicit local MCP control surface for approved automation.
+- Expose an explicit local control CLI for approved automation.
 
 ## Remote hosts and terminal data
 
@@ -89,7 +89,7 @@ Spawnea is early-stage and under active development. Interfaces and runtime beha
 - [Installation and Configuration](docs/install-and-configure.md)
 - [Vision](docs/vision.md)
 - [Architecture](docs/architecture.md)
-- [Local control API and MCP](docs/control-api-mcp.md)
+- [Local control API](docs/control-api.md)
 - [Public-source privacy boundary](docs/public-source-privacy.md)
 
 ## Development

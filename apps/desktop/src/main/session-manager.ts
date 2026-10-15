@@ -710,7 +710,7 @@ export class SessionManager {
       const projectName = catProject?.name || dbProject?.name || 'Project';
       const gitUrl = catProject?.git_url || dbProject?.repoUrl || undefined;
       const configuredBaseBranch = catProject?.base_branch?.trim() || dbProject?.baseBranch?.trim() || undefined;
-      const effectiveBaseBranch = options.creationSource === 'mcp'
+      const effectiveBaseBranch = options.creationSource === 'control'
         ? options.baseBranch?.trim() || configuredBaseBranch || undefined
         : configuredBaseBranch || options.baseBranch?.trim() || undefined;
 
@@ -823,7 +823,7 @@ export class SessionManager {
         const effectiveStatus: SessionStatus = options.initialStatus || 'working';
         const creationSource: SessionCreationSource = options.creationSource || 'ui';
 
-        // 4. Persist the session identity before launching the harness. Scoped MCP
+        // 4. Persist the session identity before launching the harness. Scoped control
         // authentication can then resolve SPAWNEA_SESSION_ID as soon as Codex starts.
         const contextFile: SessionContextFile = {
           version: 1,
@@ -1109,7 +1109,7 @@ export class SessionManager {
         initialStatus: 'starting',
         creationSource,
         model: input.model,
-        baseBranch: creationSource === 'mcp' && childServerId === parent.serverId && childProjectId === parent.projectId
+        baseBranch: creationSource === 'control' && childServerId === parent.serverId && childProjectId === parent.projectId
           ? parent.branch : undefined,
       });
     } finally {
@@ -1658,8 +1658,8 @@ export class SessionManager {
     origin: FinishSessionOrigin = 'ui'
   ): Promise<FinishSessionResult> {
     this.logger.info('Finishing managed worktree session', { sessionId, action, origin });
-    if (origin === 'mcp-validated' && action !== 'close') {
-      throw new Error("The 'mcp-validated' finalization origin is only valid for close requests");
+    if (origin === 'agent-validated' && action !== 'close') {
+      throw new Error("The 'agent-validated' finalization origin is only valid for close requests");
     }
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) {
@@ -1798,9 +1798,9 @@ export class SessionManager {
           // 2. Verify termination before changing any files.
           await this.stopSession(sessionId);
 
-          // MCP-validated closes that discard changes (stashChanges: false) never discard work:
+          // agent-validated closes that discard changes (stashChanges: false) never discard work:
           // with the runtime stopped, require a verified clean worktree so late writes or an unreadable status cannot be lost.
-          if (origin === 'mcp-validated' && !options.stashChanges) {
+          if (origin === 'agent-validated' && !options.stashChanges) {
             const postStopStatus = await this.getGitStatus(sessionId).catch(() => null);
             if (!postStopStatus || postStopStatus.unavailable) {
               throw new Error(`Session '${sessionId}' worktree status could not be verified; aborting close to prevent data loss`);

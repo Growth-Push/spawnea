@@ -42,8 +42,6 @@ mac:
     - dmg
   category: public.app-category.developer-tools
   extraResources:
-    - from: build/spawnea-mcp
-      to: spawnea-mcp
     - from: build/spawnea
       to: spawnea
 win:
@@ -60,7 +58,5 @@ linux:
   synopsis: Operate AI coding agents from a local desktop workspace
   description: A local-first desktop workspace for operating AI coding agents.
   extraResources:
-    - from: build/spawnea-mcp
-      to: spawnea-mcp
     - from: build/spawnea
       to: spawnea

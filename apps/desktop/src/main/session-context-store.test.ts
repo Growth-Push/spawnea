@@ -51,7 +51,7 @@ describe('SessionContextStore', () => {
       hostId: 'dev-workstation',
     },
     status: 'working',
-    creationSource: 'mcp',
+    creationSource: 'control',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -64,7 +64,7 @@ describe('SessionContextStore', () => {
     expect(loaded).not.toBeNull();
     expect(loaded?.sessionId).toBe('sess-abc-123');
     expect(loaded?.task).toBe('Test Task');
-    expect(loaded?.creationSource).toBe('mcp');
+    expect(loaded?.creationSource).toBe('control');
   });
 
   it('lists all saved session context files', async () => {

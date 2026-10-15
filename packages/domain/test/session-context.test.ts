@@ -51,7 +51,7 @@ describe('SessionContextFile', () => {
       hostId: 'dev-workstation',
     },
     status: 'working',
-    creationSource: 'mcp',
+    creationSource: 'control',
     createdAt: '2026-08-23T10:00:00.000Z',
     updatedAt: '2026-08-23T10:00:00.000Z',
   };
@@ -66,7 +66,7 @@ describe('SessionContextFile', () => {
       expect(result.context.worktree?.baseBranch).toBe('main');
       expect(result.context.worktree?.baseCommit).toBe('0123456789abcdef0123456789abcdef01234567');
       expect(result.context.persistentSession.name).toBe('spawnea-auth-flow');
-      expect(result.context.creationSource).toBe('mcp');
+      expect(result.context.creationSource).toBe('control');
     }
   });
 
@@ -75,6 +75,13 @@ describe('SessionContextFile', () => {
     delete legacyContext.worktree?.baseCommit;
 
     expect(validateSessionContext(legacyContext).success).toBe(true);
+  });
+
+  it("reads a legacy persisted 'mcp' creation source as 'control'", () => {
+    const legacy = { ...structuredClone(validContext), creationSource: 'mcp' };
+    const result = validateSessionContext(legacy);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.context.creationSource).toBe('control');
   });
 
   it('accepts legacy contexts without a creation source', () => {

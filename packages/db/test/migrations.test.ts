@@ -95,4 +95,29 @@ describe('Database Migrations', () => {
     ).map((r) => r.name);
     expect(tables).toContain('test_items');
   });
+
+  it('rewrites legacy mcp creation sources to control without touching other rows', () => {
+    sqlite = new Database(':memory:');
+    const before = MIGRATIONS.filter((migration) => migration.name < '0010_rename_mcp_creation_source');
+    runMigrations(sqlite, before);
+    sqlite.exec(`
+      INSERT INTO servers (id, name, host, created_at) VALUES ('srv', 'Srv', 'localhost', 0);
+      INSERT INTO projects (id, server_id, name, root_path, created_at) VALUES ('proj', 'srv', 'Proj', '/p', 0);
+      INSERT INTO agents (id, name, harness, command, created_at) VALUES ('agent', 'A', 'codex', 'codex', 0);
+    `);
+    const insert = sqlite.prepare(
+      `INSERT INTO sessions (id, name, server_id, project_id, agent_id, task, worktree_path, branch, tmux_session_name, status, creation_source, created_at, last_activity_at)
+       VALUES (?, 'Name', 'srv', 'proj', 'agent', 'task', '/p', 'main', ?, 'idle', ?, 0, 0)`,
+    );
+    insert.run('legacy', 'tmux-legacy', 'mcp');
+    insert.run('ui', 'tmux-ui', 'ui');
+
+    const result = runMigrations(sqlite);
+    expect(result.appliedNames).toEqual(['0010_rename_mcp_creation_source']);
+    const rows = sqlite.prepare('SELECT id, creation_source FROM sessions ORDER BY id').all();
+    expect(rows).toEqual([
+      { id: 'legacy', creation_source: 'control' },
+      { id: 'ui', creation_source: 'ui' },
+    ]);
+  });
 });

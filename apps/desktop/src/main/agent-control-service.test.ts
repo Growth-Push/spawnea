@@ -207,7 +207,7 @@ describe('AgentControlService', () => {
     await expect(service.createScopedControl('child')).rejects.toThrow('not an active local root');
   });
 
-  it('revokes an existing MCP connection when its root is no longer active', async () => {
+  it('revokes an existing control connection when its root is no longer active', async () => {
     await repositories.servers.save({ id: 'host-1', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
     const scoped = await service.createScopedControl('existing');
     await repositories.sessions.save(session('existing', { status: 'done' }));
@@ -412,7 +412,7 @@ describe('AgentControlService', () => {
     expect(sessionManager.createSession).toHaveBeenCalledWith({
       serverId: 'local-1', projectId: 'local-project', agentId: 'agent-1', task: 'Independent task',
       baseBranch: undefined, useWorktree: true,
-    }, 'mcp');
+    }, 'control');
     await expect(bootstrap.createSession({ ...request, task: 'Different task' })).rejects.toThrow('different root request');
     const independentBootstrap = service.createBootstrapControl();
     await expect(independentBootstrap.createSession(request)).resolves.toMatchObject({
@@ -495,7 +495,7 @@ describe('AgentControlService', () => {
       });
     }
     expect(sessionManager.createSession).toHaveBeenCalledOnce();
-    expect(sessionManager.createSession).toHaveBeenCalledWith(expect.objectContaining({ model: initialModel }), 'mcp');
+    expect(sessionManager.createSession).toHaveBeenCalledWith(expect.objectContaining({ model: initialModel }), 'control');
     expect(createdCount).toBe(1);
   });
 
@@ -527,7 +527,7 @@ describe('AgentControlService', () => {
     const creation = service.createRootSession(request, { allowRemoteHost: true });
     if (supported) {
       await expect(creation).resolves.toMatchObject({ sessionCreated: true });
-      expect(sessionManager.createSession).toHaveBeenCalledWith(expect.objectContaining({ model: request.model }), 'mcp');
+      expect(sessionManager.createSession).toHaveBeenCalledWith(expect.objectContaining({ model: request.model }), 'control');
     } else {
       await expect(creation).rejects.toThrow('does not support explicit model selection');
       expect(sessionManager.createSession).not.toHaveBeenCalled();
@@ -582,8 +582,8 @@ describe('AgentControlService', () => {
     ]);
     expect(replay.replayed).toBe(true);
     expect(sessionManager.createSession).toHaveBeenCalledTimes(2);
-    expect(sessionManager.createSession.mock.calls[0][1]).toBe('mcp');
-    expect(sessionManager.createSession.mock.calls[1][1]).toBe('mcp');
+    expect(sessionManager.createSession.mock.calls[0][1]).toBe('control');
+    expect(sessionManager.createSession.mock.calls[1][1]).toBe('control');
     await expect(service.createSessions({ ...request, sessions: [request.sessions[0]] }))
       .rejects.toThrow('different payload');
   });
@@ -651,7 +651,7 @@ describe('AgentControlService', () => {
     await expect(service.resolveFinalizationRequest(pending.id, 'approve')).rejects.toThrow('already completed');
   });
 
-  it('executes an explicitly LLM-validated MCP close without notifying the renderer', async () => {
+  it('executes an explicitly LLM-validated close without notifying the renderer', async () => {
     const notifyFinalizationRequested = vi.fn();
     const notifyDataChanged = vi.fn();
     sessionManager.finishSession.mockResolvedValueOnce({ action: 'close', removed: true });
@@ -672,7 +672,7 @@ describe('AgentControlService', () => {
     });
 
     expect(result).toMatchObject({
-      mode: 'mcp-validated',
+      mode: 'agent-validated',
       status: 'completed',
       result: { action: 'close', removed: true },
     });
@@ -680,7 +680,7 @@ describe('AgentControlService', () => {
       'existing',
       'close',
       { stashChanges: true },
-      'mcp-validated'
+      'agent-validated'
     );
     expect(notifyFinalizationRequested).not.toHaveBeenCalled();
     expect(notifyDataChanged).toHaveBeenCalledOnce();
@@ -690,7 +690,7 @@ describe('AgentControlService', () => {
     'Managed worktree is not checked out on recorded branch',
     'Cannot finalize session: worktree is still in use by another session. Close that session first.',
     'Failed to verify termination of persistent session. Execution may still be active.',
-  ])('keeps MCP validation failures truthful: %s', async (message) => {
+  ])('keeps control validation failures truthful: %s', async (message) => {
     const guardError = new Error(message);
     sessionManager.finishSession.mockRejectedValueOnce(guardError);
     service = new AgentControlService({
@@ -708,7 +708,7 @@ describe('AgentControlService', () => {
     });
 
     expect(result).toMatchObject({
-      mode: 'mcp-validated',
+      mode: 'agent-validated',
       status: 'failed',
       error: guardError.message,
     });
@@ -757,7 +757,7 @@ describe('AgentControlService', () => {
           projectId: undefined,
           model: undefined,
         },
-        'mcp'
+        'control'
       );
     });
 
@@ -1599,7 +1599,7 @@ describe('AgentControlService', () => {
           'close-child',
           'close',
           { stashChanges: false },
-          'mcp-validated'
+          'agent-validated'
         );
         expect(sessionManager.deleteSession).not.toHaveBeenCalledWith('close-child', expect.anything());
       });
@@ -1641,7 +1641,7 @@ describe('AgentControlService', () => {
           'dirty-child',
           'close',
           { stashChanges: false },
-          'mcp-validated'
+          'agent-validated'
         );
         expect(sessionManager.stopSession).not.toHaveBeenCalledWith('dirty-child');
       });
@@ -1694,7 +1694,7 @@ describe('AgentControlService', () => {
 
         // Without allowChildSession, it must reject child session identity
         await expect(service.createScopedControl('child-terminal')).rejects.toThrow(
-          'MCP session identity is not an active local root'
+          'Session identity is not an active local root'
         );
 
         // With allowChildSession, it succeeds and scopes to the child's family
@@ -1720,18 +1720,18 @@ describe('AgentControlService', () => {
         expect(createdSubChild.sessionId).toBeDefined();
         expect(sessionManager.createChildSession).toHaveBeenCalledWith(
           expect.objectContaining({ parentSessionId: 'root-parent' }),
-          'mcp'
+          'control'
         );
 
         // Cannot prompt itself (reentrant self-prompt)
         await expect(
           childScoped.sendPrompt({ target: 'child-terminal', prompt: 'Self hello', clientRequestId: 'self-1' })
-        ).rejects.toThrow('outside the authenticated MCP scope');
+        ).rejects.toThrow('outside the authenticated control scope');
 
         // Cannot prompt root
         await expect(
           childScoped.sendPrompt({ target: 'root-parent', prompt: 'Root hello', clientRequestId: 'root-1' })
-        ).rejects.toThrow('outside the authenticated MCP scope');
+        ).rejects.toThrow('outside the authenticated control scope');
 
         // Can prompt sibling
         await repositories.sessions.save(
@@ -1778,7 +1778,7 @@ describe('AgentControlService', () => {
           'dirty-unscoped-sess',
           'close',
           { stashChanges: false },
-          'mcp-validated'
+          'agent-validated'
         );
         expect(sessionManager.stopSession).not.toHaveBeenCalledWith('dirty-unscoped-sess');
       });
@@ -1811,12 +1811,12 @@ describe('AgentControlService', () => {
           'unverified-sess',
           'close',
           { stashChanges: false },
-          'mcp-validated'
+          'agent-validated'
         );
         expect(sessionManager.stopSession).not.toHaveBeenCalledWith('unverified-sess');
       });
 
-      it('delegates managed worktree closing directly to finishSession with mcp-validated origin', async () => {
+      it('delegates managed worktree closing directly to finishSession with agent-validated origin', async () => {
         await repositories.servers.save({
           id: 'local-unscoped-working',
           name: 'Local Host',
@@ -1839,7 +1839,7 @@ describe('AgentControlService', () => {
           'working-clean-sess',
           'close',
           { stashChanges: false },
-          'mcp-validated'
+          'agent-validated'
         );
       });
 
@@ -1870,7 +1870,7 @@ describe('AgentControlService', () => {
           'clean-unscoped-sess',
           'close',
           { stashChanges: false },
-          'mcp-validated'
+          'agent-validated'
         );
         expect(sessionManager.deleteSession).not.toHaveBeenCalledWith('clean-unscoped-sess', expect.anything());
       });
@@ -1899,7 +1899,7 @@ describe('AgentControlService', () => {
           'retry-sess',
           'close',
           { stashChanges: false },
-          'mcp-validated'
+          'agent-validated'
         );
       });
 

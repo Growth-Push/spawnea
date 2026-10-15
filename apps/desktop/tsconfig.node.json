@@ -9,7 +9,6 @@
     "electron.vite.config.ts",
     "vitest.config.ts",
     "src/main/**/*",
-    "src/mcp/**/*",
     "src/cli/**/*",
     "src/preload/**/*"
   ]

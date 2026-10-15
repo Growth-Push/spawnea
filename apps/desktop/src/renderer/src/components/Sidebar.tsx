@@ -14,7 +14,6 @@ import {
 } from './StatusBadge';
 import { OsIcon } from './OsIcon';
 import { AgentIcon } from './AgentIcon';
-import { SessionSourceBadge } from './SessionSourceBadge';
 import {
   Plus,
   RefreshCw,
@@ -956,7 +955,6 @@ export function Sidebar({
             EXT
           </span>
         )}
-        <SessionSourceBadge session={session} />
       </div>
     );
 
@@ -1162,7 +1160,6 @@ export function Sidebar({
               {session.isExternal && (
                 <span className="text-[8px] font-bold text-cyan-300">EXT</span>
               )}
-              <SessionSourceBadge session={session} compact />
             </span>
             {shouldShowStatusBadge(session) && (
               <StatusBadge
@@ -1517,7 +1514,6 @@ export function Sidebar({
                 EXT
               </span>
             )}
-            <SessionSourceBadge session={session} />
           </div>
 
           {/* Row 3: Path + tmux session */}
