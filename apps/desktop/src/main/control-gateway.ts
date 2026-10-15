@@ -22,6 +22,8 @@ const AUTH_TIMEOUT_MS = 3_000;
 const AUTH_SCOPE_RETRY_INTERVAL_MS = 50;
 const MAX_AUTH_BYTES = 4_096;
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
+// Above the CLI's longest request timeout (root/child creation, 120 s).
+const REJECTED_DRAIN_TIMEOUT_MS = 150_000;
 
 export interface ControlGatewayOptions {
   control: AgentControlService;
@@ -250,10 +252,22 @@ export class ControlGateway {
     const respond = (payload: Record<string, unknown>) => {
       if (!socket.destroyed) socket.write(`${JSON.stringify(payload)}\n`);
     };
+    // Requests dispatched before an oversized frame still get their replies; the socket is
+    // ended only after every in-flight handler has settled.
+    let inFlight = 0;
+    let rejected = false;
+    const endWhenIdle = () => {
+      if (rejected && inFlight === 0 && !socket.destroyed) socket.end();
+    };
     const reject = () => {
       buffered = '';
+      rejected = true;
       respond({ id: null, error: { code: 'invalid_request', message: 'Request exceeds the maximum size' } });
-      socket.destroy();
+      // Bound the wait for in-flight handlers so a stuck operation cannot hold the socket open.
+      const deadline = setTimeout(() => socket.destroy(), REJECTED_DRAIN_TIMEOUT_MS);
+      deadline.unref();
+      socket.once('close', () => clearTimeout(deadline));
+      endWhenIdle();
     };
     const handleLine = async (line: string) => {
       let request: { id?: unknown; method?: unknown; params?: unknown } | null;
@@ -285,14 +299,23 @@ export class ControlGateway {
         const line = buffered.slice(0, newline).trim();
         buffered = buffered.slice(newline + 1);
         if (Buffer.byteLength(line) > MAX_REQUEST_BYTES) return reject();
-        if (line) void handleLine(line).catch((error) => {
-          this.logger.warn('Spawnea control request failed', { error: error instanceof Error ? error.message : String(error) });
-        });
+        if (line) {
+          inFlight += 1;
+          void handleLine(line)
+            .catch((error) => {
+              this.logger.warn('Spawnea control request failed', { error: error instanceof Error ? error.message : String(error) });
+            })
+            .finally(() => {
+              inFlight -= 1;
+              endWhenIdle();
+            });
+        }
         newline = buffered.indexOf('\n');
       }
       if (Buffer.byteLength(buffered) > MAX_REQUEST_BYTES) reject();
     };
     socket.on('data', (chunk: Buffer | string) => {
+      if (rejected) return;
       buffered += typeof chunk === 'string' ? chunk : decoder.write(chunk);
       drain();
     });

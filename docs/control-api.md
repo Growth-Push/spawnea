@@ -8,6 +8,18 @@ describes the contract behind it.
 There is no MCP server, stdio bridge, or network listener. The CLI talks to the
 running desktop app over an owner-only Unix-domain socket.
 
+## Compatibility
+
+- MCP clients that used the removed `spawnea-mcp` helper cannot connect; use the
+  `spawnea` CLI instead.
+- The wire protocol is not backward compatible with the earlier MCP-based
+  gateway. The CLI and the desktop app must come from the same build; restart the
+  app after updating. `apiVersion: "v1"` names the result schema, not the
+  transport.
+- The persisted session creation source `mcp` is rewritten to `control` by
+  migration `0010_rename_mcp_creation_source`. There is no reverse migration, so
+  returning to an older build requires restoring a database backup.
+
 ## Runtime discovery and profiles
 
 The desktop app writes a protected runtime descriptor and opens the socket under
@@ -41,7 +53,10 @@ JSON requests. Each request is answered by one JSON line with the same `id`.
 Error codes are `not_found`, `unauthorized`, `conflict`, `needs_human`,
 `invalid_request`, and `operation_failed`. Requests are validated against strict
 schemas before the control service can touch a host adapter, tmux, or Git, and a
-request line is limited to 2 MiB. All structured results include
+request line is limited to 2 MiB. A line above the limit is answered with
+`invalid_request` and `id: null`; requests already dispatched on that connection
+still receive their replies (for up to 150 seconds), requests after the oversized
+line are ignored, and the connection is then closed. All structured results include
 `apiVersion: "v1"`.
 
 ## Connection scope
@@ -79,7 +94,9 @@ Available to every connection:
 | `spawnea_close_session` | Close a session; scoped connections close children. |
 | `spawnea_get_state` | Full state: sessions, hosts, projects, harnesses, recent errors. |
 
-Available only to session-scoped connections:
+Available only to session-scoped connections. These operations are part of the
+socket contract but have no `spawnea` subcommands yet; they are reachable only
+by a client that speaks the protocol above:
 
 | Operation | Purpose |
 | --- | --- |

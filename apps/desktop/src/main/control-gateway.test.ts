@@ -224,6 +224,42 @@ describe('ControlGateway security boundary', () => {
     expect(sendPrompt).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'café' }));
   });
 
+  it('still answers a valid request dispatched before an oversized frame', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const getState = vi.fn().mockImplementation(async () => {
+      await gate;
+      return { apiVersion: 'v1', sessions: [{ id: 'root-1' }], hosts: [], projects: [], harnesses: [] };
+    });
+    const { descriptor } = await startGateway({ getState });
+    const oversized = JSON.stringify({ id: 2, method: 'spawnea_get_state', params: { pad: 'x'.repeat(2 * 1024 * 1024 + 10) } });
+    const frame = `${JSON.stringify({ type: 'spawnea-auth', token: descriptor.token })}\n` +
+      `${JSON.stringify({ id: 1, method: 'spawnea_list_sessions', params: {} })}\n${oversized}\n`;
+    const replies: any[] = [];
+    const closed = new Promise<void>((resolve, reject) => {
+      const socket = createConnection(descriptor.socketPath);
+      let buffer = '';
+      socket.setEncoding('utf8');
+      socket.once('error', reject);
+      socket.on('data', (data: string) => {
+        buffer += data;
+        let newline = buffer.indexOf('\n');
+        while (newline !== -1) {
+          replies.push(JSON.parse(buffer.slice(0, newline)));
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf('\n');
+        }
+        // Release the pending handler only after the size rejection has been delivered.
+        if (replies.some((reply) => reply.error?.code === 'invalid_request')) release();
+      });
+      socket.once('close', () => resolve());
+      socket.once('connect', () => socket.write(frame));
+    });
+    await closed;
+    expect(replies.find((reply) => reply.id === 1)?.result).toMatchObject({ sessions: [{ id: 'root-1' }] });
+    expect(replies.some((reply) => reply.error?.code === 'invalid_request')).toBe(true);
+  });
+
   it('answers a non-object request with a typed error instead of dropping it', async () => {
     const { descriptor } = await startGateway({ getState: vi.fn() });
     const frame = Buffer.from(`${JSON.stringify({ type: 'spawnea-auth', token: descriptor.token })}\nnull\n`);
