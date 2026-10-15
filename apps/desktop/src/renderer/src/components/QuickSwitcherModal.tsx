@@ -181,7 +181,7 @@ export function QuickSwitcherModal({
       {
         id: 'agent-context',
         title: 'Switch to Agent Context',
-        subtitle: 'Inspect bounded volatile MCP orchestration context',
+        subtitle: 'Inspect bounded volatile agent orchestration context',
         shortcut: 'Alt+6',
         icon: Network,
       },

@@ -13,7 +13,7 @@ export function ControlFinalizationModal({
   onDecision,
   onDismiss,
 }: ControlFinalizationModalProps): React.JSX.Element | null {
-  // A validated MCP close executes in Main and must never fall through to a
+  // A validated agent close executes in Main and must never fall through to a
   // renderer confirmation surface, even if a stale event is delivered.
   if (!request || request.mode !== 'ui-confirmation') return null;
 
@@ -42,7 +42,7 @@ export function ControlFinalizationModal({
           </div>
           <div>
             <h2 id="control-finalization-title" className="font-semibold text-slate-100">
-              External MCP request — confirmation required
+              External agent request — confirmation required
             </h2>
             <p className="mt-1 text-xs text-amber-200/80">
               Nothing has been executed. Spawnea will only continue if you confirm here.

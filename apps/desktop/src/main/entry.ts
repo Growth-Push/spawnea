@@ -1,4 +1,4 @@
-import { shouldRunCli, shouldRunMcpBridge } from './entry-mode.js';
+import { shouldRunCli } from './entry-mode.js';
 
 if (shouldRunCli(process.argv)) {
   const { runCli } = await import('../cli/index.js');
@@ -12,8 +12,6 @@ if (shouldRunCli(process.argv)) {
     console.error(`spawnea error: ${message}`);
     process.exit(1);
   }
-} else if (shouldRunMcpBridge(process.argv)) {
-  await import('../mcp/index.js');
 } else {
   await import('./index.js');
 }

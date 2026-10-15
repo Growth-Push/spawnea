@@ -24,7 +24,6 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { AgentIcon } from './AgentIcon';
-import { SessionSourceBadge } from './SessionSourceBadge';
 
 interface ContextBarProps {
   session: Session | null;
@@ -240,7 +239,6 @@ export function ContextBar({
                 EXT
               </span>
             )}
-            <SessionSourceBadge session={session} />
             {session.agentSessionId && (
               <button
                 type="button"

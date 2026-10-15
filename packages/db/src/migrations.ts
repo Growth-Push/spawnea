@@ -132,6 +132,12 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE sessions ADD COLUMN requested_model TEXT;
     `,
   },
+  {
+    name: '0010_rename_mcp_creation_source',
+    sql: `
+      UPDATE sessions SET creation_source = 'control' WHERE creation_source = 'mcp';
+    `,
+  },
 ];
 
 export function runMigrations(sqlite: Database.Database, migrations: Migration[] = MIGRATIONS): {

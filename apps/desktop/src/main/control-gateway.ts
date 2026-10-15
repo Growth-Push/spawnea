@@ -4,7 +4,7 @@ import { createServer, createConnection, type Server as NetServer, type Socket }
 import { chmod, lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { StdioServerTransport, serveStdio, type StdioServerHandle } from '@modelcontextprotocol/server/stdio';
+import { StringDecoder } from 'node:string_decoder';
 import {
   SPAWNEA_CONTROL_API_VERSION,
   type ControlRuntimeDescriptor,
@@ -12,17 +12,20 @@ import {
 } from '@spawnea/domain';
 import type { AgentControlService } from './agent-control-service.js';
 import {
-  createBootstrapSpawneaMcpServer,
-  createCliSpawneaMcpServer,
-  createSpawneaMcpServer,
-} from './control-mcp-server.js';
+  controlErrorEnvelope,
+  createControlOperations,
+  type ControlOperations,
+} from './control-operations.js';
 import { resolveControlRuntimeFile, resolveControlSocketPath } from './control-runtime.js';
 
 const AUTH_TIMEOUT_MS = 3_000;
 const AUTH_SCOPE_RETRY_INTERVAL_MS = 50;
 const MAX_AUTH_BYTES = 4_096;
+const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
+// Above the CLI's longest request timeout (root/child creation, 120 s).
+const REJECTED_DRAIN_TIMEOUT_MS = 150_000;
 
-export interface ControlMcpGatewayOptions {
+export interface ControlGatewayOptions {
   control: AgentControlService;
   logger: Logger;
   profile?: string;
@@ -68,19 +71,18 @@ async function processIsAlive(pid: number): Promise<boolean> {
   }
 }
 
-export class ControlMcpGateway {
+export class ControlGateway {
   readonly runtimeFilePath: string;
   readonly socketPath: string;
   private readonly control: AgentControlService;
   private readonly logger: Logger;
   private readonly token = randomBytes(32).toString('hex');
-  private readonly handles = new Set<StdioServerHandle>();
   private readonly sockets = new Set<Socket>();
   private server: NetServer | null = null;
   private ownsSocketPath = false;
   private ownsRuntimeFilePath = false;
 
-  constructor(options: ControlMcpGatewayOptions) {
+  constructor(options: ControlGatewayOptions) {
     this.control = options.control;
     this.logger = options.logger;
     this.runtimeFilePath = options.runtimeFilePath ?? resolveControlRuntimeFile(process.env, options.profile);
@@ -91,7 +93,7 @@ export class ControlMcpGateway {
   private startCleanupWatchdog(): void {
     if (!process.versions.electron) return;
 
-    const watchdogPath = fileURLToPath(new URL('./spawnea-mcp-watchdog.js', import.meta.url));
+    const watchdogPath = fileURLToPath(new URL('./spawnea-control-watchdog.js', import.meta.url));
     const watchdog = spawn(
       process.execPath,
       [watchdogPath, String(process.pid), this.runtimeFilePath, this.socketPath],
@@ -102,7 +104,7 @@ export class ControlMcpGateway {
       }
     );
     watchdog.once('error', (error) => {
-      this.logger.warn('Failed to start Spawnea MCP runtime cleanup watchdog', { error: error.message });
+      this.logger.warn('Failed to start Spawnea control runtime cleanup watchdog', { error: error.message });
     });
     watchdog.unref();
   }
@@ -164,11 +166,16 @@ export class ControlMcpGateway {
     };
     const tempPath = `${this.runtimeFilePath}.${process.pid}.tmp`;
     await writeFile(tempPath, `${JSON.stringify(descriptor)}\n`, { encoding: 'utf8', mode: 0o600 });
-    await rename(tempPath, this.runtimeFilePath);
+    try {
+      await rename(tempPath, this.runtimeFilePath);
+    } catch (error) {
+      await unlink(tempPath).catch(() => undefined);
+      throw error;
+    }
     this.ownsRuntimeFilePath = true;
     await chmod(this.runtimeFilePath, 0o600);
     this.startCleanupWatchdog();
-    this.logger.info('Spawnea MCP control gateway enabled', {
+    this.logger.info('Spawnea control gateway enabled', {
       runtimeFilePath: this.runtimeFilePath,
       socketPath: this.socketPath,
     });
@@ -184,16 +191,17 @@ export class ControlMcpGateway {
       clearTimeout(timeout);
       socket.removeListener('data', onData);
       socket.destroy();
-      this.logger.warn('Rejected unauthorized Spawnea MCP socket connection');
+      this.logger.warn('Rejected unauthorized Spawnea control socket connection');
     };
-    const onData = async (chunk: Buffer) => {
+    const handleChunk = async (chunk: Buffer) => {
       if (authenticating) return;
       buffered = Buffer.concat([buffered, chunk]);
-      if (buffered.length > MAX_AUTH_BYTES) return fail();
       const newline = buffered.indexOf(0x0a);
+      // Only the authentication line is bounded here; bytes after it belong to the first request.
+      if (newline === -1 ? buffered.length > MAX_AUTH_BYTES : newline > MAX_AUTH_BYTES) return fail();
       if (newline === -1) return;
 
-      let auth: { type?: unknown; token?: unknown; sessionId?: unknown; mode?: unknown };
+      let auth: { type?: unknown; token?: unknown; sessionId?: unknown };
       try {
         auth = JSON.parse(buffered.subarray(0, newline).toString('utf8'));
       } catch {
@@ -204,58 +212,119 @@ export class ControlMcpGateway {
       authenticating = true;
       socket.pause();
       socket.removeListener('data', onData);
-      let createServer: () => ReturnType<typeof createSpawneaMcpServer>;
+      let operations: ControlOperations;
       if (typeof auth.sessionId === 'string') {
         let scopedControl: Awaited<ReturnType<AgentControlService['createScopedControl']>>;
         const deadline = Date.now() + AUTH_TIMEOUT_MS;
-        const scopedOptions = auth.mode === 'cli' ? { allowChildSession: true } : undefined;
         while (true) {
           try {
-            scopedControl = scopedOptions
-              ? await this.control.createScopedControl(auth.sessionId, scopedOptions)
-              : await this.control.createScopedControl(auth.sessionId);
+            scopedControl = await this.control.createScopedControl(auth.sessionId, { allowChildSession: true });
             break;
           } catch {
             if (socket.destroyed || Date.now() >= deadline) return fail();
             await new Promise((resolve) => setTimeout(resolve, AUTH_SCOPE_RETRY_INTERVAL_MS));
           }
         }
-        createServer = auth.mode === 'cli'
-          ? () => createCliSpawneaMcpServer(scopedControl, { isScoped: true })
-          : () => createSpawneaMcpServer(scopedControl);
-      } else if (auth.mode === 'cli') {
-        createServer = () => createCliSpawneaMcpServer(this.control, { isScoped: false });
+        operations = createControlOperations(scopedControl, { isScoped: true });
       } else {
-        const bootstrapControl = this.control.createBootstrapControl();
-        createServer = () => createBootstrapSpawneaMcpServer(
-          bootstrapControl,
-          (rootSessionId) => this.control.createScopedControl(rootSessionId, { allowRootPrompts: true }),
-        );
+        operations = createControlOperations(this.control, { isScoped: false });
       }
 
       if (socket.destroyed) return fail();
 
       clearTimeout(timeout);
       const remainder = buffered.subarray(newline + 1);
-      if (remainder.length > 0) socket.unshift(remainder);
-      const transport = new StdioServerTransport(socket, socket, { maxBufferSize: 2 * 1024 * 1024 });
-      const handle = serveStdio(createServer, {
-        transport,
-        onerror: (error) => this.logger.warn('Spawnea MCP transport error', { error: error.message }),
-      });
-      this.handles.add(handle);
-      socket.once('close', () => this.handles.delete(handle));
-      socket.resume();
+      this.serveOperations(socket, operations, remainder);
+    };
+    const onData = (chunk: Buffer) => {
+      handleChunk(chunk).catch(() => fail());
     };
     socket.on('data', onData);
     socket.once('error', () => clearTimeout(timeout));
     socket.resume();
   }
 
+  private serveOperations(socket: Socket, operations: ControlOperations, initial: Buffer): void {
+    // One decoder for the remainder of the authentication chunk and every later chunk, so a
+    // multibyte character split across chunks is not corrupted.
+    const decoder = new StringDecoder('utf8');
+    let buffered = decoder.write(initial);
+    const respond = (payload: Record<string, unknown>) => {
+      if (!socket.destroyed) socket.write(`${JSON.stringify(payload)}\n`);
+    };
+    // Requests dispatched before an oversized frame still get their replies; the socket is
+    // ended only after every in-flight handler has settled.
+    let inFlight = 0;
+    let rejected = false;
+    const endWhenIdle = () => {
+      if (rejected && inFlight === 0 && !socket.destroyed) socket.end();
+    };
+    const reject = () => {
+      buffered = '';
+      rejected = true;
+      respond({ id: null, error: { code: 'invalid_request', message: 'Request exceeds the maximum size' } });
+      // Bound the wait for in-flight handlers so a stuck operation cannot hold the socket open.
+      const deadline = setTimeout(() => socket.destroy(), REJECTED_DRAIN_TIMEOUT_MS);
+      deadline.unref();
+      socket.once('close', () => clearTimeout(deadline));
+      endWhenIdle();
+    };
+    const handleLine = async (line: string) => {
+      let request: { id?: unknown; method?: unknown; params?: unknown } | null;
+      try {
+        request = JSON.parse(line);
+      } catch {
+        respond({ id: null, error: { code: 'invalid_request', message: 'Malformed JSON request' } });
+        return;
+      }
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        respond({ id: null, error: { code: 'invalid_request', message: 'Request must be a JSON object' } });
+        return;
+      }
+      const id = typeof request.id === 'number' || typeof request.id === 'string' ? request.id : null;
+      if (typeof request.method !== 'string') {
+        respond({ id, error: { code: 'invalid_request', message: 'Request is missing a method' } });
+        return;
+      }
+      const result = await operations.call(request.method, request.params);
+      if (result.ok) {
+        respond({ id, result: result.value });
+      } else {
+        respond({ id, error: result.error, details: controlErrorEnvelope(result.error) });
+      }
+    };
+    const drain = () => {
+      let newline = buffered.indexOf('\n');
+      while (newline !== -1) {
+        const line = buffered.slice(0, newline).trim();
+        buffered = buffered.slice(newline + 1);
+        if (Buffer.byteLength(line) > MAX_REQUEST_BYTES) return reject();
+        if (line) {
+          inFlight += 1;
+          void handleLine(line)
+            .catch((error) => {
+              this.logger.warn('Spawnea control request failed', { error: error instanceof Error ? error.message : String(error) });
+            })
+            .finally(() => {
+              inFlight -= 1;
+              endWhenIdle();
+            });
+        }
+        newline = buffered.indexOf('\n');
+      }
+      if (Buffer.byteLength(buffered) > MAX_REQUEST_BYTES) reject();
+    };
+    socket.on('data', (chunk: Buffer | string) => {
+      if (rejected) return;
+      buffered += typeof chunk === 'string' ? chunk : decoder.write(chunk);
+      drain();
+    });
+    socket.on('error', () => undefined);
+    drain();
+    socket.resume();
+  }
+
   async close(): Promise<void> {
-    const handles = Array.from(this.handles);
-    this.handles.clear();
-    await Promise.allSettled(handles.map((handle) => handle.close()));
     for (const socket of this.sockets) {
       socket.destroy();
     }

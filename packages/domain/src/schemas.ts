@@ -10,7 +10,11 @@ export const SessionStatusSchema = z.enum([
   'disconnected',
 ]);
 
-export const SessionCreationSourceSchema = z.enum(['ui', 'mcp']);
+// Records written before the MCP transport was removed persist 'mcp'; read them as 'control'.
+export const SessionCreationSourceSchema = z.preprocess(
+  (value) => (value === 'mcp' ? 'control' : value),
+  z.enum(['ui', 'control']),
+);
 
 export const StatusSourceSchema = z.enum([
   'tmux',

@@ -14,7 +14,6 @@
     "third-party-notices": "node ../../scripts/generate-third-party-notices.mjs",
     "package": "pnpm third-party-notices && pnpm build && electron-builder --config electron-builder.yml --publish never",
     "package:host": "pnpm package",
-    "mcp": "node out/main/spawnea-mcp.js",
     "cli": "node out/main/spawnea-cli.js",
     "smoke": "electron-rebuild -f --only better-sqlite3,node-pty && electron-vite build && SPAWNEA_SMOKE_TEST=1 ./node_modules/.bin/electron --no-sandbox --ozone-platform-hint=auto --headless --disable-gpu out/main/index.js --smoke-test",
     "smoke:release": "node scripts/desktop-release-smoke.mjs",
@@ -23,7 +22,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.3.0",
     "@spawnea/db": "workspace:*",
     "@spawnea/domain": "workspace:*",
     "@spawnea/hosts": "workspace:*",
@@ -32,32 +30,31 @@
     "@xterm/xterm": "^6.0.0",
     "better-sqlite3": "^13.0.3",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.51.0",
+    "lucide-react": "^1.55.0",
     "node-pty": "^1.1.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "ssh2": "^1.17.0",
     "tailwind-merge": "^3.7.0",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.2.0",
-    "@modelcontextprotocol/client": "2.3.0",
+    "@electron/rebuild": "^4.2.1",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@types/ssh2": "^1.15.6",
-    "@vitejs/plugin-react": "^6.1.1",
-    "electron": "^44.5.1",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^44.7.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
-    "jsdom": "^30.1.1",
+    "jsdom": "^30.1.2",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.3.2",
-    "vitest": "^5.0.3"
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
   }
 }

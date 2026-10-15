@@ -2,7 +2,7 @@
 
 The `spawnea` CLI is a fast, standalone command-line tool that communicates directly with Spawnea's local control domain socket. It enables operators and terminal AI agents (Codex, Hermes, Claude Code, AGY) to orchestrate sessions, create child sub-agents, submit prompts, and wait for results with atomic execution and standard UNIX exit codes.
 
-Unlike complex persistent MCP stdio bridges that can drop connections unexpectedly, the `spawnea` CLI is atomic per command: connect, request, output response, and exit.
+The `spawnea` CLI is atomic per command: connect, request, output response, and exit.
 
 ## Prerequisites
 

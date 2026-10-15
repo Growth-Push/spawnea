@@ -11,8 +11,7 @@ export default defineConfig({
         external: ['electron', 'better-sqlite3', 'ssh2', 'cpu-features', 'node-pty'],
         input: {
           index: resolve(__dirname, 'src/main/entry.ts'),
-          'spawnea-mcp': resolve(__dirname, 'src/mcp/index.ts'),
-          'spawnea-mcp-watchdog': resolve(__dirname, 'src/mcp/watchdog.ts'),
+          'spawnea-control-watchdog': resolve(__dirname, 'src/main/control-watchdog-entry.ts'),
           'spawnea-cli': resolve(__dirname, 'src/cli/index.ts'),
         },
       },

@@ -20,10 +20,10 @@ const request: ControlFinalizationRequest = {
 };
 
 describe('ControlFinalizationModal', () => {
-  it('does not render for a validated MCP close', () => {
+  it('does not render for a validated agent close', () => {
     const { container } = render(
       <ControlFinalizationModal
-        request={{ ...request, mode: 'mcp-validated', status: 'completed' }}
+        request={{ ...request, mode: 'agent-validated', status: 'completed' }}
         onDecision={vi.fn()}
         onDismiss={vi.fn()}
       />
