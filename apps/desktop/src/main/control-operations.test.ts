@@ -124,6 +124,21 @@ describe('Spawnea control operations contract', () => {
     expect(names.every((name) => name.startsWith('spawnea_'))).toBe(true);
   });
 
+  it('creates a child when a discovered harness entry lacks optional name fields', async () => {
+    const createChildSession = vi.fn().mockResolvedValue({ apiVersion: 'v1', sessionId: 'child-1' });
+    const getState = vi.fn().mockResolvedValue({
+      apiVersion: 'v1', sessions: [{ id: 'root-1', host: { id: 'local' } }],
+      harnesses: [{ id: 'local:sparse' }, { id: 'local:codex', name: 'Codex', harness: 'codex', kind: 'codex' }],
+    });
+    const client = await connect({ getState, createChildSession } as Partial<AgentControlService>);
+    const result = await client.callTool({
+      name: 'spawnea_create_child_session',
+      arguments: { parentSession: 'root-1', task: 'Child', agentId: 'codex' },
+    });
+    expect(result.isError).toBe(false);
+    expect(createChildSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'local:codex' }));
+  });
+
   it('exposes only operator operations on an unscoped connection', async () => {
     const operations = createControlOperations({ createRootSession: vi.fn(), getState: vi.fn() } as unknown as AgentControlService);
     expect(operations.names()).toEqual([

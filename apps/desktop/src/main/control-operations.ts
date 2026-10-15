@@ -341,9 +341,9 @@ export function createControlOperations(
           const availableHarnesses = state.harnesses.filter((h) => !h.id.includes(':') || h.id.startsWith(`${serverId}:`));
           const match = availableHarnesses.find(
             (h) => h.id === agentId ||
-                   h.name.toLowerCase() === agentId?.toLowerCase() ||
-                   h.harness.toLowerCase() === agentId?.toLowerCase() ||
-                   h.kind.toLowerCase() === agentId?.toLowerCase() ||
+                   h.name?.toLowerCase() === agentId?.toLowerCase() ||
+                   h.harness?.toLowerCase() === agentId?.toLowerCase() ||
+                   h.kind?.toLowerCase() === agentId?.toLowerCase() ||
                    h.id.endsWith(`:${agentId}`),
           );
           if (match) agentId = match.id;

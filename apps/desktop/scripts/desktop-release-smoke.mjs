@@ -471,8 +471,8 @@ async function checkCliHelper(env) {
   assert.ok(helper.length > 0, 'The packaged CLI helper must be present and non-empty');
   const childEnv = Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'SPAWNEA_SESSION_ID'));
   const output = run(helperPath, ['--runtime-file', controlRuntimeFile, 'list', '--json'], { env: childEnv });
-  const parsed = JSON.parse(output || '{}');
-  assert.ok(Array.isArray(parsed.sessions), 'The packaged CLI helper must list sessions through the authenticated gateway');
+  const parsed = JSON.parse(output || 'null');
+  assert.ok(Array.isArray(parsed), 'The packaged CLI helper must list sessions through the authenticated gateway');
   logResult('packaged-cli-helper-list', 'passed');
 }
 

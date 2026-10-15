@@ -172,6 +172,75 @@ describe('ControlGateway security boundary', () => {
     }
   });
 
+  /** Writes raw chunks to an authenticated socket and collects the first reply line. */
+  async function rawExchange(socketPath: string, chunks: Buffer[]): Promise<{ reply: any; closed: boolean }> {
+    return new Promise((resolve, reject) => {
+      const socket = createConnection(socketPath);
+      let buffer = '';
+      socket.setEncoding('utf8');
+      socket.once('error', reject);
+      socket.on('data', (data: string) => {
+        buffer += data;
+        const newline = buffer.indexOf('\n');
+        if (newline !== -1) {
+          const reply = JSON.parse(buffer.slice(0, newline));
+          socket.destroy();
+          resolve({ reply, closed: false });
+        }
+      });
+      socket.once('close', () => resolve({ reply: undefined, closed: true }));
+      socket.once('connect', async () => {
+        for (const chunk of chunks) {
+          socket.write(chunk);
+          await new Promise((done) => setTimeout(done, 20));
+        }
+      });
+    });
+  }
+
+  it('accepts a first request larger than the authentication limit in the same chunk', async () => {
+    const sendPrompt = vi.fn().mockResolvedValue({ apiVersion: 'v1', turnId: '3d47ca17-70c0-43ac-96e9-464ddc1f28a4' });
+    const { descriptor } = await startGateway({ sendPrompt, getState: vi.fn() });
+    const prompt = 'p'.repeat(10_000);
+    const frame = Buffer.from(
+      `${JSON.stringify({ type: 'spawnea-auth', token: descriptor.token })}\n` +
+      `${JSON.stringify({ id: 1, method: 'spawnea_send_prompt', params: { target: 'child', prompt } })}\n`,
+    );
+    const { reply } = await rawExchange(descriptor.socketPath, [frame]);
+    expect(reply.error).toBeUndefined();
+    expect(sendPrompt).toHaveBeenCalledWith(expect.objectContaining({ prompt }));
+  });
+
+  it('preserves a multibyte character split across the authentication chunk', async () => {
+    const sendPrompt = vi.fn().mockResolvedValue({ apiVersion: 'v1', turnId: '3d47ca17-70c0-43ac-96e9-464ddc1f28a4' });
+    const { descriptor } = await startGateway({ sendPrompt, getState: vi.fn() });
+    const frame = Buffer.from(
+      `${JSON.stringify({ type: 'spawnea-auth', token: descriptor.token })}\n` +
+      `${JSON.stringify({ id: 1, method: 'spawnea_send_prompt', params: { target: 'child', prompt: 'café' } })}\n`,
+    );
+    const split = frame.indexOf(Buffer.from('é')) + 1;
+    const { reply } = await rawExchange(descriptor.socketPath, [frame.subarray(0, split), frame.subarray(split)]);
+    expect(reply.error).toBeUndefined();
+    expect(sendPrompt).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'café' }));
+  });
+
+  it('answers a non-object request with a typed error instead of dropping it', async () => {
+    const { descriptor } = await startGateway({ getState: vi.fn() });
+    const frame = Buffer.from(`${JSON.stringify({ type: 'spawnea-auth', token: descriptor.token })}\nnull\n`);
+    const { reply } = await rawExchange(descriptor.socketPath, [frame]);
+    expect(reply?.error).toMatchObject({ code: 'invalid_request' });
+  });
+
+  it('rejects a complete request line above the size limit without dispatching it', async () => {
+    const getState = vi.fn();
+    const { descriptor } = await startGateway({ getState });
+    const oversized = JSON.stringify({ id: 1, method: 'spawnea_get_state', params: { pad: 'x'.repeat(2 * 1024 * 1024 + 10) } });
+    const frame = Buffer.from(`${JSON.stringify({ type: 'spawnea-auth', token: descriptor.token })}\n${oversized}\n`);
+    const { reply } = await rawExchange(descriptor.socketPath, [frame]);
+    expect(reply?.error).toMatchObject({ code: 'invalid_request' });
+    expect(getState).not.toHaveBeenCalled();
+  });
+
   it('reports typed errors for malformed arguments and unknown operations', async () => {
     const { descriptor } = await startGateway({ getState: vi.fn() });
     const client = new TestControlClient(descriptor.socketPath, descriptor.token, null);

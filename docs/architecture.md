@@ -13,8 +13,8 @@ The product treats **persistent `tmux` sessions** as the execution surface, whil
 4. **Strict Process & Layer Isolation:** The Electron renderer is pure presentation (React UI). All filesystem, SSH, SQLite, PTY, and child process logic lives exclusively in the Electron Main process behind typed IPC boundaries.
 5. **Multi-Agent TDD Baseline:** Because the codebase is developed by AI coding agents, all domain logic, state machines, database models, and adapter contracts are covered by automated unit/contract tests to prevent regressions.
 
-Per-root model selection remains a harness-neutral creation concern. The UI, CLI,
-and the control CLI pass an optional exact `model` value to the main
+Per-root model selection remains a harness-neutral creation concern. The UI and the control
+CLI pass an optional exact `model` value to the main
 process; `SessionManager` persists it as `requestedModel` and the
 `HarnessLaunchRegistry` maps it to native flags (`-m` for Hermes/Codex or
 `--model` for Claude). Supported executables determine model capability even when
@@ -302,7 +302,7 @@ The local control gateway remains a main-process adapter, not a renderer or host
 
 Root and child prompt orchestration is tracked as bounded, volatile turns in Main. Connections scoped to a root through its injected `SPAWNEA_SESSION_ID` are child-only for prompt delivery, because allowing them to write into their own tmux pane would create reentrant terminal input. Known interactive editors receive bracketed paste followed by a separate delayed Enter through PTY or tmux; callers never need a second submission key. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. Completed turns stop capturing later terminal activity. Bounded long polling wakes on output or state changes. Turns and captured output are not persisted across application restarts.
 
-When a connection carries `SPAWNEA_SESSION_ID`, including an empty value, the gateway performs bounded rechecks within the authentication timeout and requires that identity to resolve to an enabled, active local root before exposing scoped operations. Spawnea persists a root session's identity before launching its harness; if tmux startup fails, session and context persistence are rolled back.
+When a connection carries a `SPAWNEA_SESSION_ID`, the gateway performs bounded rechecks within the authentication timeout and requires that identity to resolve to an enabled, active local root (or a child session acting on itself) before exposing scoped operations. An empty identity is rejected immediately during authentication. Spawnea persists a root session's identity before launching its harness; if tmux startup fails, session and context persistence are rolled back.
 
 Destructive operations use an explicit finalization mode. Integration and scoped discard require trusted renderer approval. A preserving close may carry `confirmation: "llm-validated"`; Main delegates to `SessionManager.finishSession` with its existing lifecycle guards. Same-project children have a separate close operation that preserves shared files. Integration preflight uses Git merge-tree to report conflicts before stopping a child or merging its branch. The contract and threat model are documented in [`control-api.md`](control-api.md).
 

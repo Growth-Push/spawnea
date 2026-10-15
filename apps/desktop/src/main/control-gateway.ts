@@ -4,6 +4,7 @@ import { createServer, createConnection, type Server as NetServer, type Socket }
 import { chmod, lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { StringDecoder } from 'node:string_decoder';
 import {
   SPAWNEA_CONTROL_API_VERSION,
   type ControlRuntimeDescriptor,
@@ -163,7 +164,12 @@ export class ControlGateway {
     };
     const tempPath = `${this.runtimeFilePath}.${process.pid}.tmp`;
     await writeFile(tempPath, `${JSON.stringify(descriptor)}\n`, { encoding: 'utf8', mode: 0o600 });
-    await rename(tempPath, this.runtimeFilePath);
+    try {
+      await rename(tempPath, this.runtimeFilePath);
+    } catch (error) {
+      await unlink(tempPath).catch(() => undefined);
+      throw error;
+    }
     this.ownsRuntimeFilePath = true;
     await chmod(this.runtimeFilePath, 0o600);
     this.startCleanupWatchdog();
@@ -185,14 +191,15 @@ export class ControlGateway {
       socket.destroy();
       this.logger.warn('Rejected unauthorized Spawnea control socket connection');
     };
-    const onData = async (chunk: Buffer) => {
+    const handleChunk = async (chunk: Buffer) => {
       if (authenticating) return;
       buffered = Buffer.concat([buffered, chunk]);
-      if (buffered.length > MAX_AUTH_BYTES) return fail();
       const newline = buffered.indexOf(0x0a);
+      // Only the authentication line is bounded here; bytes after it belong to the first request.
+      if (newline === -1 ? buffered.length > MAX_AUTH_BYTES : newline > MAX_AUTH_BYTES) return fail();
       if (newline === -1) return;
 
-      let auth: { type?: unknown; token?: unknown; sessionId?: unknown; mode?: unknown };
+      let auth: { type?: unknown; token?: unknown; sessionId?: unknown };
       try {
         auth = JSON.parse(buffered.subarray(0, newline).toString('utf8'));
       } catch {
@@ -227,22 +234,37 @@ export class ControlGateway {
       const remainder = buffered.subarray(newline + 1);
       this.serveOperations(socket, operations, remainder);
     };
+    const onData = (chunk: Buffer) => {
+      handleChunk(chunk).catch(() => fail());
+    };
     socket.on('data', onData);
     socket.once('error', () => clearTimeout(timeout));
     socket.resume();
   }
 
   private serveOperations(socket: Socket, operations: ControlOperations, initial: Buffer): void {
-    let buffered = initial.toString('utf8');
+    // One decoder for the remainder of the authentication chunk and every later chunk, so a
+    // multibyte character split across chunks is not corrupted.
+    const decoder = new StringDecoder('utf8');
+    let buffered = decoder.write(initial);
     const respond = (payload: Record<string, unknown>) => {
       if (!socket.destroyed) socket.write(`${JSON.stringify(payload)}\n`);
     };
+    const reject = () => {
+      buffered = '';
+      respond({ id: null, error: { code: 'invalid_request', message: 'Request exceeds the maximum size' } });
+      socket.destroy();
+    };
     const handleLine = async (line: string) => {
-      let request: { id?: unknown; method?: unknown; params?: unknown };
+      let request: { id?: unknown; method?: unknown; params?: unknown } | null;
       try {
         request = JSON.parse(line);
       } catch {
         respond({ id: null, error: { code: 'invalid_request', message: 'Malformed JSON request' } });
+        return;
+      }
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        respond({ id: null, error: { code: 'invalid_request', message: 'Request must be a JSON object' } });
         return;
       }
       const id = typeof request.id === 'number' || typeof request.id === 'string' ? request.id : null;
@@ -262,20 +284,16 @@ export class ControlGateway {
       while (newline !== -1) {
         const line = buffered.slice(0, newline).trim();
         buffered = buffered.slice(newline + 1);
+        if (Buffer.byteLength(line) > MAX_REQUEST_BYTES) return reject();
         if (line) void handleLine(line).catch((error) => {
           this.logger.warn('Spawnea control request failed', { error: error instanceof Error ? error.message : String(error) });
         });
         newline = buffered.indexOf('\n');
       }
-      if (Buffer.byteLength(buffered) > MAX_REQUEST_BYTES) {
-        buffered = '';
-        respond({ id: null, error: { code: 'invalid_request', message: 'Request exceeds the maximum size' } });
-        socket.destroy();
-      }
+      if (Buffer.byteLength(buffered) > MAX_REQUEST_BYTES) reject();
     };
-    socket.setEncoding('utf8');
-    socket.on('data', (chunk: string) => {
-      buffered += chunk;
+    socket.on('data', (chunk: Buffer | string) => {
+      buffered += typeof chunk === 'string' ? chunk : decoder.write(chunk);
       drain();
     });
     socket.on('error', () => undefined);
