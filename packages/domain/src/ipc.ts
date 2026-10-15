@@ -121,7 +121,7 @@ export interface LocalDiscoveryApplyResult extends CatalogReloadResult {
 export type FinishSessionAction = 'integrate' | 'ignore' | 'close';
 
 /** Identifies who authorized the finalization invocation inside Main. */
-export type FinishSessionOrigin = 'ui' | 'mcp-validated';
+export type FinishSessionOrigin = 'ui' | 'agent-validated';
 
 export interface FinishSessionOptions {
   /** Preserve dirty worktree contents in a named Git stash before closing. */
@@ -205,9 +205,9 @@ export interface IpcChannels {
   'sessions:saveLayout': (sessionId: string) => Promise<import('./index.js').SessionTopologySnapshot>;
   'sessions:resurrect': (sessionId: string) => Promise<Session>;
 
-  // Local MCP control requests. Pending destructive actions are resolved here
+  // Local agent control requests. Pending destructive actions are resolved here
   // from the trusted renderer after an explicit user decision. An explicitly
-  // LLM-validated MCP close is executed in Main through its separate mode.
+  // LLM-validated agent close is executed in Main through its separate mode.
   'control:listFinalizationRequests': (includeResolved?: boolean) => Promise<ControlFinalizationRequest[]>;
   'control:resolveFinalizationRequest': (
     requestId: string,

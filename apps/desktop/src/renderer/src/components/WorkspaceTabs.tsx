@@ -20,7 +20,6 @@ import { ArtifactPreviewModal } from './ArtifactPreviewModal';
 import { DetectedOutputBanner } from './DetectedOutputBanner';
 import { ToastNotification, type ToastAction } from './ToastNotification';
 import { OsIcon } from './OsIcon';
-import { SessionSourceBadge } from './SessionSourceBadge';
 import {
   Terminal,
   FolderTree,
@@ -575,7 +574,6 @@ export function WorkspaceTabs({
         </div>
 
         <div className="flex items-center gap-2 text-[11px] text-zinc-500 font-mono">
-          <SessionSourceBadge session={session} />
           {session.managedWorktree && (
             <span
               data-testid="workspace-worktree-badge"

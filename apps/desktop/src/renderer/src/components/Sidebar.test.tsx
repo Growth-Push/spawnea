@@ -491,32 +491,6 @@ describe('Sidebar dense session layout', () => {
   });
 });
 
-describe('Sidebar MCP source badge', () => {
-  it('shows the source badge for MCP-created sessions and not UI-created sessions', () => {
-    const mcpSession = {
-      ...mockSessions[0],
-      id: 'sess-mcp',
-      name: 'MCP session',
-      creationSource: 'mcp' as const,
-    };
-    const uiSession = {
-      ...mockSessions[0],
-      id: 'sess-ui',
-      name: 'UI session',
-      creationSource: 'ui' as const,
-    };
-
-    renderSidebar([mcpSession, uiSession]);
-
-    expect(
-      screen.getByTestId('session-item-sess-mcp').querySelector('[data-testid="mcp-session-badge"]')
-    ).not.toBeNull();
-    expect(
-      screen.getByTestId('session-item-sess-ui').querySelector('[data-testid="mcp-session-badge"]')
-    ).toBeNull();
-  });
-});
-
 describe('Sidebar session hierarchy', () => {
   const rootParentSession: Session = {
     id: 'parent-root',

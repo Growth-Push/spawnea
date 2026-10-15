@@ -33,7 +33,7 @@ export interface ControlSessionView {
   };
   tmuxSessionName: string;
   status: SessionStatus;
-  creationSource: 'ui' | 'mcp';
+  creationSource: 'ui' | 'control';
   requestedModel?: string;
   active: boolean;
   activeTab?: ControlWorkspaceTab;
@@ -118,7 +118,7 @@ export interface ControlCreateSessionsResult {
 export type ControlFinalizationAction = 'integrate' | 'close';
 export type ControlDirtyChangesPolicy = 'stash' | 'discard';
 export type ControlFinalizationStatus = 'pending' | 'executing' | 'completed' | 'rejected' | 'failed';
-export type ControlFinalizationMode = 'ui-confirmation' | 'mcp-validated';
+export type ControlFinalizationMode = 'ui-confirmation' | 'agent-validated';
 export type ControlFinalizationConfirmation = 'llm-validated';
 
 export interface ControlFinalizationRequest {
@@ -132,7 +132,7 @@ export interface ControlFinalizationRequest {
   action: ControlFinalizationAction;
   dirtyChanges?: ControlDirtyChangesPolicy;
   force?: boolean;
-  /** Explicit protocol signal for a close already approved by the MCP caller's LLM. */
+  /** Explicit protocol signal for a close already approved by the calling agent's LLM. */
   mode: ControlFinalizationMode;
   status: ControlFinalizationStatus;
   createdAt: string;

@@ -4,7 +4,7 @@ import {
   SPAWNEA_CONTROL_API_VERSION,
   type ControlRuntimeDescriptor,
 } from '@spawnea/domain';
-import { runtimeFilesFromArgs } from '../mcp/runtime-args.js';
+import { runtimeFilesFromArgs } from './runtime-args.js';
 
 export interface ControlCliClientOptions {
   profile?: string;
@@ -115,7 +115,6 @@ export class ControlCliClient {
         const auth = {
           type: 'spawnea-auth',
           token: this.descriptor.token,
-          mode: 'cli',
           sessionId: this.sessionId !== undefined ? this.sessionId : undefined,
         };
         socket.write(`${JSON.stringify(auth)}\n`);
@@ -123,14 +122,7 @@ export class ControlCliClient {
       });
     });
 
-    // Complete MCP handshake
-    await this.sendRequest('initialize', {
-      protocolVersion: '2024-11-05',
-      capabilities: {},
-      clientInfo: { name: 'spawnea-cli', version: '1.0.0' },
-    });
-
-    this.sendNotification('notifications/initialized');
+    // The gateway authenticates the frame above and then serves requests directly.
     initialized = true;
   }
 
@@ -147,7 +139,7 @@ export class ControlCliClient {
             const { resolve, reject } = this.pending.get(msg.id)!;
             this.pending.delete(msg.id);
             if (msg.error) {
-              reject(new Error(msg.error.message || `RPC Error ${msg.error.code}`));
+              reject(new Error(msg.error.message || `Control error ${msg.error.code}`));
             } else {
               resolve(msg.result);
             }
@@ -183,15 +175,9 @@ export class ControlCliClient {
           reject(err);
         },
       });
-      const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params });
+      const payload = JSON.stringify({ id, method, params });
       this.socket.write(`${payload}\n`);
     });
-  }
-
-  private sendNotification(method: string, params: Record<string, unknown> = {}): void {
-    if (!this.socket || this.socket.destroyed || this.closeReason) return;
-    const payload = JSON.stringify({ jsonrpc: '2.0', method, params });
-    this.socket.write(`${payload}\n`);
   }
 
   async callTool<T = any>(
@@ -204,14 +190,7 @@ export class ControlCliClient {
         ? 120_000
         : 30_000;
     const effectiveTimeout = timeoutMs ?? defaultTimeoutMs;
-    const result = await this.sendRequest('tools/call', { name, arguments: args }, effectiveTimeout);
-    if (result?.isError) {
-      const msg = result.structuredContent?.error?.message ||
-                  result.content?.map((c: any) => c.text).join('\n') ||
-                  'Operation failed';
-      throw new Error(msg);
-    }
-    return (result?.structuredContent ?? result) as T;
+    return (await this.sendRequest(name, args, effectiveTimeout)) as T;
   }
 
   close(): void {

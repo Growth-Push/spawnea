@@ -1,10 +1,10 @@
 /**
- * MCP control is part of the normal desktop runtime on Unix-like systems. It
+ * Local control is part of the normal desktop runtime on Unix-like systems. It
  * can be disabled for diagnostics or environments that intentionally do not
  * want a local socket. Windows remains disabled until named-pipe transport is
  * implemented.
  */
-export function isControlMcpEnabled(
+export function isControlEnabled(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): boolean {

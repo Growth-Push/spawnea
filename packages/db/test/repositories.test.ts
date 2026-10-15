@@ -269,7 +269,7 @@ describe('Domain Repositories & Logging Integration', () => {
         tmuxSessionName: 'spawnea-task-1',
         tmuxWindowName: 'editor',
         status: 'starting',
-        creationSource: 'mcp',
+        creationSource: 'control',
         createdAt: now,
         lastActivityAt: now,
       };
@@ -281,7 +281,7 @@ describe('Domain Repositories & Logging Integration', () => {
       expect(created.baseBranch).toBe('main');
       expect(created.baseCommit).toBe('0123456789abcdef0123456789abcdef01234567');
       expect(created.managedWorktree).toBe(true);
-      expect(created.creationSource).toBe('mcp');
+      expect(created.creationSource).toBe('control');
 
       // 2. Filters
       const byServer = await repos.sessions.findByServerId('srv-1');

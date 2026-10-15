@@ -248,7 +248,7 @@ ${profile ? `      ${profile.id}:
 
     it('closes a same-project child without removing shared files and injects its own identity', async () => {
       await createPromptSession();
-      const child = await sessionManager.createChildSession({ parentSessionId: 'sess-prompt', task: 'Shared child', workspace: 'same-project' }, 'mcp');
+      const child = await sessionManager.createChildSession({ parentSessionId: 'sess-prompt', task: 'Shared child', workspace: 'same-project' }, 'control');
       const launch = mockHost.executedCommands.find(({ command }) => command.includes('SPAWNEA_SESSION_ID=') && command.includes(child.id));
       expect(launch).toBeDefined();
       await expect(sessionManager.closeSharedChildSession(child.id)).rejects.toThrow('force=true');
@@ -525,23 +525,23 @@ ${profile ? `      ${profile.id}:
       serverId: 'dev-workstation',
       projectId: 'dev-workstation:spawnea',
       agentId: 'dev-workstation:claude',
-      task: 'Authenticate MCP on startup',
+      task: 'Authenticate control on startup',
     });
 
     expect(persistedBeforeTmux).toBe(true);
   });
 
-  it('persists the MCP creation source when the control path creates a session', async () => {
+  it('persists the control creation source when the control path creates a session', async () => {
     const session = await sessionManager.createSession({
       serverId: 'dev-workstation',
       projectId: 'dev-workstation:spawnea',
       agentId: 'dev-workstation:claude',
-      task: 'MCP-created session',
-    }, 'mcp');
+      task: 'control-created session',
+    }, 'control');
 
-    expect(session.creationSource).toBe('mcp');
-    expect((await repos.sessions.findById(session.id))?.creationSource).toBe('mcp');
-    expect((await contextStore.load(session.id))?.creationSource).toBe('mcp');
+    expect(session.creationSource).toBe('control');
+    expect((await repos.sessions.findById(session.id))?.creationSource).toBe('control');
+    expect((await contextStore.load(session.id))?.creationSource).toBe('control');
   });
 
   it('resolves a credential-backed project only for runtime and persists safe locators', async () => {
@@ -967,7 +967,7 @@ hosts:
     expect(session.branch).not.toContain('explicit-worktree-task');
   });
 
-  it('honors an explicit MCP root base branch without changing UI precedence', async () => {
+  it('honors an explicit control root base branch without changing UI precedence', async () => {
     await repos.projects.save({
       id: 'dev-workstation:spawnea',
       serverId: 'dev-workstation',
@@ -981,13 +981,13 @@ hosts:
       response: { stdout: '', stderr: '', exitCode: 0 },
     });
 
-    const mcpSession = await sessionManager.createSession({
+    const controlSession = await sessionManager.createSession({
       serverId: 'dev-workstation',
       projectId: 'dev-workstation:spawnea',
       agentId: 'dev-workstation:claude',
-      task: 'MCP release task',
+      task: 'control release task',
       baseBranch: 'release',
-    }, 'mcp');
+    }, 'control');
     const uiSession = await sessionManager.createSession({
       serverId: 'dev-workstation',
       projectId: 'dev-workstation:spawnea',
@@ -996,7 +996,7 @@ hosts:
       baseBranch: 'release',
     });
 
-    expect(mcpSession.baseBranch).toBe('release');
+    expect(controlSession.baseBranch).toBe('release');
     expect(uiSession.baseBranch).toBe('main');
   });
 
@@ -1912,16 +1912,16 @@ up 1 day, 5 hours
   });
 
   describe('finishSession (Task 6.2.1)', () => {
-    it('accepts the MCP-validated origin only for close requests', async () => {
+    it('accepts the agent-validated origin only for close requests', async () => {
       await expect(sessionManager.finishSession(
         'missing-session',
         'integrate',
         {},
-        'mcp-validated'
-      )).rejects.toThrow("'mcp-validated' finalization origin is only valid for close requests");
+        'agent-validated'
+      )).rejects.toThrow("'agent-validated' finalization origin is only valid for close requests");
     });
 
-    it('allows MCP-validated close with stashChanges: true on a dirty worktree', async () => {
+    it('allows agent-validated close with stashChanges: true on a dirty worktree', async () => {
       await enableManagedWorktrees();
       const session = await sessionManager.createSession({
         serverId: 'dev-workstation',
@@ -1939,12 +1939,12 @@ up 1 day, 5 hours
         session.id,
         'close',
         { stashChanges: true },
-        'mcp-validated'
+        'agent-validated'
       );
       expect(result).toEqual({ action: 'close', removed: true });
     });
 
-    it('rejects MCP-validated close with stashChanges: false on a dirty worktree', async () => {
+    it('rejects agent-validated close with stashChanges: false on a dirty worktree', async () => {
       await enableManagedWorktrees();
       const session = await sessionManager.createSession({
         serverId: 'dev-workstation',
@@ -1970,7 +1970,7 @@ up 1 day, 5 hours
           session.id,
           'close',
           { stashChanges: false },
-          'mcp-validated'
+          'agent-validated'
         )
       ).rejects.toThrow(
         `Session '${session.id}' has uncommitted changes in managed worktree; finalize or stash changes before closing`
@@ -1979,7 +1979,7 @@ up 1 day, 5 hours
       expect(await repos.sessions.findById(session.id)).toBeDefined();
     });
 
-    it('rejects MCP-validated close with stashChanges: false when worktree contains ignored files', async () => {
+    it('rejects agent-validated close with stashChanges: false when worktree contains ignored files', async () => {
       await enableManagedWorktrees();
       const session = await sessionManager.createSession({
         serverId: 'dev-workstation',
@@ -2009,7 +2009,7 @@ up 1 day, 5 hours
           session.id,
           'close',
           { stashChanges: false },
-          'mcp-validated'
+          'agent-validated'
         )
       ).rejects.toThrow(
         `Session '${session.id}' has ignored files in managed worktree; finalize or stash changes before closing`

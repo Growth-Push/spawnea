@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { runtimeFilesFromArgs } from './runtime-args.js';
 
-describe('MCP runtimeFilesFromArgs', () => {
+describe('runtimeFilesFromArgs', () => {
   it('returns explicit --runtime-file when specified', () => {
     expect(runtimeFilesFromArgs(['--runtime-file', '/tmp/custom-runtime.json']))
       .toEqual(['/tmp/custom-runtime.json']);

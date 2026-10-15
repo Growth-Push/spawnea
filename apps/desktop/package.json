@@ -14,7 +14,6 @@
     "third-party-notices": "node ../../scripts/generate-third-party-notices.mjs",
     "package": "pnpm third-party-notices && pnpm build && electron-builder --config electron-builder.yml --publish never",
     "package:host": "pnpm package",
-    "mcp": "node out/main/spawnea-mcp.js",
     "cli": "node out/main/spawnea-cli.js",
     "smoke": "electron-rebuild -f --only better-sqlite3,node-pty && electron-vite build && SPAWNEA_SMOKE_TEST=1 ./node_modules/.bin/electron --no-sandbox --ozone-platform-hint=auto --headless --disable-gpu out/main/index.js --smoke-test",
     "smoke:release": "node scripts/desktop-release-smoke.mjs",
@@ -23,7 +22,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.3.0",
     "@spawnea/db": "workspace:*",
     "@spawnea/domain": "workspace:*",
     "@spawnea/hosts": "workspace:*",
@@ -42,7 +40,6 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
-    "@modelcontextprotocol/client": "2.3.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",

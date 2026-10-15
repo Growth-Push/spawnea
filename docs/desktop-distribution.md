@@ -55,9 +55,9 @@ before `electron-builder` runs.
 
 `pnpm smoke` is a bootstrap-only check. It initializes main-process services and exits before creating a window, so it does not prove that the renderer or preload works.
 
-`pnpm --filter @spawnea/desktop smoke:release` runs against the platform package in `release/` with a private temporary catalog, user-data directory, logs, MCP runtime, project repository, and tmux socket. It launches the packaged app, verifies the renderer/preload IPC round trip, creates and attaches a disposable local session, sends bounded terminal input and checks its output, closes and restarts Spawnea, and reattaches to the surviving tmux session. On Linux and macOS it also launches the packaged MCP helper and calls the bootstrap state tool. Windows reports the local tmux adapter and MCP transport as unsupported.
+`pnpm --filter @spawnea/desktop smoke:release` runs against the platform package in `release/` with a private temporary catalog, user-data directory, logs, control runtime, project repository, and tmux socket. It launches the packaged app, verifies the renderer/preload IPC round trip, creates and attaches a disposable local session, sends bounded terminal input and checks its output, closes and restarts Spawnea, and reattaches to the surviving tmux session. On Linux and macOS it also runs the packaged `spawnea` CLI helper against the control socket and lists sessions. Windows reports the local tmux adapter and control transport as unsupported.
 
-Pull request CI packages and launches the Linux x64 AppImage in a virtual X display, including the local session lifecycle and packaged MCP helper checks. Tag release jobs repeat the package launch smoke on each native artifact runner before checksums or draft-release upload. The Linux CI smoke does not claim Wayland-specific validation; run the desktop through the local project Electron binary with native Wayland flags for that check. Platform results are emitted as `RESULT` lines so passed, failed, and explicitly unsupported checks are visible in workflow logs.
+Pull request CI packages and launches the Linux x64 AppImage in a virtual X display, including the local session lifecycle and packaged CLI helper checks. Tag release jobs repeat the package launch smoke on each native artifact runner before checksums or draft-release upload. The Linux CI smoke does not claim Wayland-specific validation; run the desktop through the local project Electron binary with native Wayland flags for that check. Platform results are emitted as `RESULT` lines so passed, failed, and explicitly unsupported checks are visible in workflow logs.
 
 The smoke script only cleans its generated temporary directories and uniquely named tmux server. It never reads the user's catalog or user-data directory.
 
@@ -75,5 +75,5 @@ The first technical builds are unsigned and are not notarized. macOS, Windows, o
 
 Remote hosts still require no Spawnea installation. They need standard SSH access, `tmux`, and the configured agent command and dependencies managed by the user. Automatic updates, npm launchers, code signing, and notarization implementation are separate work.
 
-The packaged MCP bridge is supported on macOS and Linux. Windows MCP control is
+The packaged CLI helper is supported on macOS and Linux. Windows control is
 deferred until named-pipe transport is implemented.

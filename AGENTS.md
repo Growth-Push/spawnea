@@ -6,7 +6,7 @@ This repository is designed to be developed heavily with coding agents.
 
 1. Read `docs/vision.md`.
 2. Read `docs/architecture.md`.
-3. Read `docs/control-api-mcp.md` when working on the local control API.
+3. Read `docs/control-api.md` when working on the local control API.
 
 ## Working rules
 

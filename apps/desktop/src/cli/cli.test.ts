@@ -3,14 +3,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLogger, getAgentSkillPrompt } from '@spawnea/domain';
-import { ControlMcpGateway } from '../main/control-mcp-gateway.js';
+import { ControlGateway } from '../main/control-gateway.js';
 import type { AgentControlService as AgentControlServiceType } from '../main/agent-control-service.js';
 import { ControlCliClient } from './client.js';
 import { parseArgs, runCli } from './index.js';
 import { createSession, createChild, getSessionStatus, pollTurn, sendPrompt, sendAndWaitPrompt, showSkillPrompt, waitTurn } from './commands.js';
 
 describe('Spawnea Control CLI', () => {
-  const gateways: ControlMcpGateway[] = [];
+  const gateways: ControlGateway[] = [];
   const directories: string[] = [];
   const clients: ControlCliClient[] = [];
 
@@ -638,7 +638,7 @@ describe('Spawnea Control CLI', () => {
         removed: true,
       });
 
-      const gateway = new ControlMcpGateway({
+      const gateway = new ControlGateway({
         control: {
           getState,
           createRootSession,
@@ -710,7 +710,7 @@ describe('Spawnea Control CLI', () => {
         directories.push(directory);
         const runtimeFile = join(directory, 'control-runtime.json');
 
-      const gateway = new ControlMcpGateway({
+      const gateway = new ControlGateway({
         control: {
           getState: vi.fn().mockResolvedValue({
             apiVersion: 'v1',

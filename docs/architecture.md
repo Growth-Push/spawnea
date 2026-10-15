@@ -13,8 +13,8 @@ The product treats **persistent `tmux` sessions** as the execution surface, whil
 4. **Strict Process & Layer Isolation:** The Electron renderer is pure presentation (React UI). All filesystem, SSH, SQLite, PTY, and child process logic lives exclusively in the Electron Main process behind typed IPC boundaries.
 5. **Multi-Agent TDD Baseline:** Because the codebase is developed by AI coding agents, all domain logic, state machines, database models, and adapter contracts are covered by automated unit/contract tests to prevent regressions.
 
-Per-root model selection remains a harness-neutral creation concern. The UI, CLI,
-and operator/bootstrap MCP pass an optional exact `model` value to the main
+Per-root model selection remains a harness-neutral creation concern. The UI and the control
+CLI pass an optional exact `model` value to the main
 process; `SessionManager` persists it as `requestedModel` and the
 `HarnessLaunchRegistry` maps it to native flags (`-m` for Hermes/Codex or
 `--model` for Claude). Supported executables determine model capability even when
@@ -284,9 +284,9 @@ export interface Artifact {
 ### Named profile storage
 
 Named desktop profiles use trimmed, lowercase identities so case variants select
-the same user-data directory, MCP runtime paths, and session prefix. Windows
+the same user-data directory, control runtime paths, and session prefix. Windows
 reserved device names are rejected on Windows. Existing directories are not
-automatically migrated. Profiles select separate user-data directories, MCP
+automatically migrated. Profiles select separate user-data directories, control
 runtime paths, and tmux session name prefixes. Harness environments inherit the profile selector.
 A missing profile-specific catalog is initialized once from the default catalog
 using a private copy published atomically without overwriting an existing catalog.
@@ -294,17 +294,17 @@ Each profile owns subsequent catalog writes. An explicit user-data directory
 disables default-catalog copying; without a default catalog, normal catalog
 creation uses the profile path. Database and session context remain profile-specific.
 
-### Local MCP control boundary
+### Local control boundary
 
-The configurable MCP integration remains a main-process adapter, not a renderer or host concern. It is enabled by default on Unix-like systems and can be disabled explicitly for diagnostics or environments that do not want a local control socket; Windows remains disabled until named-pipe transport is implemented. A dedicated stdio bridge authenticates to an owner-only Unix-domain socket and delegates typed operations to `SessionApplicationService` (exported from the existing control-service module). Overlapping renderer file, Git, and artifact reads use the same boundary. Read DTOs are deliberately narrower than persisted host records and omit connection targets and credentials.
+The local control gateway remains a main-process adapter, not a renderer or host concern. It is enabled by default on Unix-like systems and can be disabled explicitly for diagnostics or environments that do not want a local control socket; Windows remains disabled until named-pipe transport is implemented. The `spawnea` CLI authenticates to an owner-only Unix-domain socket and sends named operations that the gateway validates and delegates to `SessionApplicationService` (exported from the existing control-service module). Overlapping renderer file, Git, and artifact reads use the same boundary. Read DTOs are deliberately narrower than persisted host records and omit connection targets and credentials.
 
-`SessionApplicationService` also retains a bounded, in-memory record of scoped MCP calls for the read-only Agent Context tab. Requests and responses are recursively bounded and secret-shaped fields are redacted. This context is deliberately lost on restart; the UI reports that loss instead of reconstructing a transcript.
+`SessionApplicationService` also retains a bounded, in-memory record of scoped control calls for the read-only Agent Context tab. Requests and responses are recursively bounded and secret-shaped fields are redacted. This context is deliberately lost on restart; the UI reports that loss instead of reconstructing a transcript.
 
-Root and child prompt orchestration is tracked as bounded, volatile turns in Main. Root prompts are available only to connections that began in token-only bootstrap mode and then bound that root; injected root identities remain child-only because allowing them to write into their own tmux pane would create reentrant terminal input. Known interactive editors receive bracketed paste followed by a separate delayed Enter through PTY or tmux; the MCP caller never needs a second submission key. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. Completed turns stop capturing later terminal activity. Bounded long polling wakes on output or state changes. Raw output is opt-in in MCP and Agent Context. Turns and captured output are not persisted across application restarts.
+Root and child prompt orchestration is tracked as bounded, volatile turns in Main. Connections scoped to a root through its injected `SPAWNEA_SESSION_ID` are child-only for prompt delivery, because allowing them to write into their own tmux pane would create reentrant terminal input. Known interactive editors receive bracketed paste followed by a separate delayed Enter through PTY or tmux; callers never need a second submission key. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. Completed turns stop capturing later terminal activity. Bounded long polling wakes on output or state changes. Turns and captured output are not persisted across application restarts.
 
-When the bridge has `SPAWNEA_SESSION_ID`, including an empty value, the gateway performs bounded rechecks within the authentication timeout and requires that identity to resolve to an enabled, active local root before exposing scoped tools. Only an absent environment variable enables token-only bootstrap authentication. Bootstrap discovery and root creation use the active catalog as the source of truth for enabled projects and harnesses while retaining unprefixed seed records as fallbacks. The running control service owns root-creation results for its full lifetime, so an exact replay from a replacement bootstrap connection binds the original root after transport loss even after many other successful requests. Each connection binds permanently to one root before gaining scoped tools. Spawnea persists a root session's identity before launching its harness; if tmux startup fails, session and context persistence are rolled back.
+When a connection carries a `SPAWNEA_SESSION_ID`, the gateway performs bounded rechecks within the authentication timeout and requires that identity to resolve to an enabled, active local root (or a child session acting on itself) before exposing scoped operations. An empty identity is rejected immediately during authentication. Spawnea persists a root session's identity before launching its harness; if tmux startup fails, session and context persistence are rolled back.
 
-Destructive operations use an explicit finalization mode. Integration and scoped discard require trusted renderer approval. A preserving close may carry `confirmation: "llm-validated"`; Main delegates to `SessionManager.finishSession` with its existing lifecycle guards. Same-project children have a separate close operation that preserves shared files. Integration preflight uses Git merge-tree to report conflicts before stopping a child or merging its branch. The contract and threat model are documented in [`control-api-mcp.md`](control-api-mcp.md).
+Destructive operations use an explicit finalization mode. Integration and scoped discard require trusted renderer approval. A preserving close may carry `confirmation: "llm-validated"`; Main delegates to `SessionManager.finishSession` with its existing lifecycle guards. Same-project children have a separate close operation that preserves shared files. Integration preflight uses Git merge-tree to report conflicts before stopping a child or merging its branch. Some scoped operations (finalization, child file/Git/artifact inspection, rename, activate) exist on the socket without CLI subcommands. The contract and threat model are documented in [`control-api.md`](control-api.md).
 
 ---
 

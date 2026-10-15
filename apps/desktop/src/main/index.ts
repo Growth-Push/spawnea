@@ -28,8 +28,8 @@ import { NotificationBroker } from './notification-broker.js';
 import { ArtifactManager } from './artifact-manager.js';
 import { LocalDiscoveryService } from './local-discovery-service.js';
 import { AgentControlService } from './agent-control-service.js';
-import { ControlMcpGateway } from './control-mcp-gateway.js';
-import { isControlMcpEnabled } from './control-config.js';
+import { ControlGateway } from './control-gateway.js';
+import { isControlEnabled } from './control-config.js';
 import { getOriginalProcessPath, initializeProcessPath } from './process-path.js';
 import { getCliPathStatus, installCliInPath } from './cli-path-installer.js';
 import { parseProfileFromArgs, initializeActiveCatalogPath, resolveSpawneaUserDataPath } from './product-paths.js';
@@ -114,7 +114,7 @@ let sessionSupervisor: SessionSupervisor | null = null;
 let notificationBroker: NotificationBroker | null = null;
 let localDiscoveryService: LocalDiscoveryService | null = null;
 let agentControlService: AgentControlService | null = null;
-let controlMcpGateway: ControlMcpGateway | null = null;
+let controlGateway: ControlGateway | null = null;
 let mainWindowRef: BrowserWindow | null = null;
 let shutdownPromise: Promise<void> | null = null;
 let shutdownComplete = false;
@@ -140,11 +140,11 @@ async function shutdownApplication(): Promise<void> {
   // Stop delivering background updates before asynchronous cleanup begins.
   mainWindowRef = null;
   shutdownPromise = (async () => {
-    if (controlMcpGateway) {
-      await controlMcpGateway.close().catch((err) => {
-        logger.error('Error closing Spawnea MCP control gateway', { error: err });
+    if (controlGateway) {
+      await controlGateway.close().catch((err) => {
+        logger.error('Error closing Spawnea control gateway', { error: err });
       });
-      controlMcpGateway = null;
+      controlGateway = null;
     }
     if (sessionSupervisor) {
       sessionSupervisor.stopPolling();
@@ -185,7 +185,7 @@ async function handleTerminationSignal(signal: 'SIGINT' | 'SIGTERM'): Promise<vo
   app.exit(signal === 'SIGINT' ? 130 : 143);
 }
 
-// Best-effort graceful signal cleanup. The MCP gateway also starts a detached
+// Best-effort graceful signal cleanup. The control gateway also starts a detached
 // watchdog because Chromium may terminate before these async handlers complete.
 process.on('SIGINT', () => {
   void handleTerminationSignal('SIGINT');
@@ -1178,15 +1178,15 @@ app.whenReady().then(async () => {
     }
 
     createWindow();
-    if (isControlMcpEnabled()) {
-      controlMcpGateway = new ControlMcpGateway({
+    if (isControlEnabled()) {
+      controlGateway = new ControlGateway({
         control: agentControlService,
-        logger: logger.child('control-mcp'),
+        logger: logger.child('control'),
         profile: activeProfile,
       });
-      await controlMcpGateway.start();
+      await controlGateway.start();
     } else {
-      logger.info('Spawnea MCP control gateway is disabled by SPAWNEA_CONTROL_ENABLED');
+      logger.info('Spawnea control gateway is disabled by SPAWNEA_CONTROL_ENABLED');
     }
   } catch (error) {
     console.error('[Spawnea Bootstrap Error]:', error);

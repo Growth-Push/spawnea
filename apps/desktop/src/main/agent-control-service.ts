@@ -233,7 +233,7 @@ export class AgentControlService {
         sessionId,
         'close',
         { stashChanges: false },
-        'mcp-validated'
+        'agent-validated'
       );
       this.notifyDataChanged?.();
       return { apiVersion: SPAWNEA_CONTROL_API_VERSION, sessionId, removed: result.removed };
@@ -264,18 +264,18 @@ export class AgentControlService {
 
     const caller = await this.repos.sessions.findById(sessionOrRootId);
     if (!caller) {
-      throw new Error('MCP session identity is not an active local root');
+      throw new Error('Session identity is not an active local root');
     }
     const isChild = Boolean(caller.parentSessionId);
     if (isChild && !allowChildSession) {
-      throw new Error('MCP session identity is not an active local root');
+      throw new Error('Session identity is not an active local root');
     }
 
     let root = caller;
     while (root.parentSessionId) {
       const parent = await this.repos.sessions.findById(root.parentSessionId);
       if (!parent) {
-        throw new Error('MCP session identity is not an active local root');
+        throw new Error('Session identity is not an active local root');
       }
       root = parent;
     }
@@ -284,13 +284,13 @@ export class AgentControlService {
     const validateRoot = async () => {
       const currentCaller = await this.repos.sessions.findById(sessionOrRootId);
       if (!currentCaller || ['done', 'error', 'disconnected'].includes(currentCaller.status)) {
-        throw new Error('MCP session identity is not an active local root');
+        throw new Error('Session identity is not an active local root');
       }
       const currentRoot = await this.repos.sessions.findById(rootSessionId);
       const server = currentRoot ? await this.repos.servers.findById(currentRoot.serverId) : null;
       if (!currentRoot || !server?.enabled || !isLocalControlHost(server) ||
           ['done', 'error', 'disconnected'].includes(currentRoot.status)) {
-        throw new Error('MCP session identity is not an active local root');
+        throw new Error('Session identity is not an active local root');
       }
       return currentRoot;
     };
@@ -298,17 +298,17 @@ export class AgentControlService {
       const currentRoot = await validateRoot();
       const session = await this.repos.sessions.findById(sessionId);
       if (!session) {
-        throw new Error('Session is outside the authenticated MCP scope');
+        throw new Error('Session is outside the authenticated control scope');
       }
       const isRoot = session.id === currentRoot.id;
       const isCaller = session.id === sessionOrRootId;
       const isRootChildOrSibling = session.parentSessionId === currentRoot.id;
       const isCallerChild = session.parentSessionId === sessionOrRootId;
       if (!isRoot && !isCaller && !isRootChildOrSibling && !isCallerChild) {
-        throw new Error('Session is outside the authenticated MCP scope');
+        throw new Error('Session is outside the authenticated control scope');
       }
       if (!allowRoot && isRoot) {
-        throw new Error('Session is outside the authenticated MCP scope');
+        throw new Error('Session is outside the authenticated control scope');
       }
       return session;
     };
@@ -318,7 +318,7 @@ export class AgentControlService {
     const rootActive = !['done', 'error', 'disconnected'].includes(root.status);
     const callerActive = !['done', 'error', 'disconnected'].includes(caller.status);
     if (!rootServer?.enabled || !localHost || !rootActive || !callerActive) {
-      throw new Error('MCP session identity is not an active local root');
+      throw new Error('Session identity is not an active local root');
     }
 
     const scoped: ScopedAgentControlService = {
@@ -367,7 +367,7 @@ export class AgentControlService {
         };
       },
       createSessions: async () => {
-        throw new Error('Batch session creation is not available through scoped MCP');
+        throw new Error('Batch session creation is not available through scoped control');
       },
       inspectWorktree: async (sessionId) => {
         await resolveInScope(sessionId, true);
@@ -403,16 +403,16 @@ export class AgentControlService {
       sendPrompt: async (request) => {
         let target = await this.repos.sessions.findById(request.target);
         if (request.parentSession && request.parentSession !== rootSessionId && request.parentSession !== sessionOrRootId) {
-          throw new Error('Session is outside the authenticated MCP scope');
+          throw new Error('Session is outside the authenticated control scope');
         }
         if (!target) target = await this.repos.sessions.findByParentAndAlias(rootSessionId, request.target);
         if (!target && isChild) target = await this.repos.sessions.findByParentAndAlias(sessionOrRootId, request.target);
-        if (!target) throw new Error('Session is outside the authenticated MCP scope');
+        if (!target) throw new Error('Session is outside the authenticated control scope');
         if (target.id === sessionOrRootId && (isChild || !allowRootPrompts)) {
-          throw new Error('Session is outside the authenticated MCP scope');
+          throw new Error('Session is outside the authenticated control scope');
         }
         if (target.id === rootSessionId && !allowRootPrompts) {
-          throw new Error('Session is outside the authenticated MCP scope');
+          throw new Error('Session is outside the authenticated control scope');
         }
         await resolveInScope(target.id, allowRootPrompts);
         return this.sendPrompt({ ...request, target: target.id });
@@ -446,7 +446,7 @@ export class AgentControlService {
       navigate: async (request) => {
         let target = await this.repos.sessions.findById(request.sessionId);
         if (!target && request.parentSessionId) target = await this.repos.sessions.findByParentAndAlias(request.parentSessionId, request.sessionId);
-        if (!target) throw new Error('Session is outside the authenticated MCP scope');
+        if (!target) throw new Error('Session is outside the authenticated control scope');
         await resolveInScope(target.id, true);
         return this.navigate({ ...request, sessionId: target.id });
       },
@@ -549,7 +549,7 @@ export class AgentControlService {
       available: Boolean(calls),
       volatileNotice: calls
         ? 'Context is volatile and remains available only until Spawnea restarts.'
-        : 'Prior volatile MCP context is unavailable. Spawnea does not persist orchestration transcripts.',
+        : 'Prior volatile agent context is unavailable. Spawnea does not persist orchestration transcripts.',
       calls: calls?.map((call) => ({ ...call })) ?? [],
     };
   }
@@ -864,7 +864,7 @@ export class AgentControlService {
           baseBranch: request.baseBranch,
           useWorktree: request.useWorktree,
           model: request.model,
-        }, 'mcp');
+        }, 'control');
         const result: ControlCreateSessionResult = {
           apiVersion: SPAWNEA_CONTROL_API_VERSION,
           sessionCreated: true,
@@ -910,7 +910,7 @@ export class AgentControlService {
           baseBranch: item.baseBranch,
           useWorktree: item.useWorktree,
           model: item.model,
-        }, 'mcp');
+        }, 'control');
         results.push({
           clientRequestId: item.clientRequestId,
           success: true,
@@ -1004,7 +1004,7 @@ export class AgentControlService {
           projectId: request.projectId,
           model: request.model,
         },
-        'mcp',
+        'control',
       );
 
       this.notifyDataChanged?.();
@@ -1565,7 +1565,7 @@ export class AgentControlService {
       const options = request.action === 'close'
         ? { stashChanges: request.dirtyChanges === 'stash' }
         : undefined;
-      request.result = origin === 'mcp-validated'
+      request.result = origin === 'agent-validated'
         ? await this.sessionManager.finishSession(request.sessionId, request.action, options, origin)
         : await this.sessionManager.finishSession(request.sessionId, request.action, options);
       request.status = 'completed';
@@ -1591,7 +1591,7 @@ export class AgentControlService {
     }
 
     const mode: ControlFinalizationMode = input.confirmation === 'llm-validated'
-      ? 'mcp-validated'
+      ? 'agent-validated'
       : 'ui-confirmation';
 
     const fingerprint = JSON.stringify({
@@ -1643,8 +1643,8 @@ export class AgentControlService {
     };
     this.finalizationRequests.set(request.id, request);
     this.finalizationRequestIds.set(requestKey, { fingerprint, requestId: request.id });
-    if (mode === 'mcp-validated') {
-      await this.executeFinalizationRequest(request, 'mcp-validated');
+    if (mode === 'agent-validated') {
+      await this.executeFinalizationRequest(request, 'agent-validated');
     } else {
       this.notifyFinalizationRequested?.({ ...request });
     }

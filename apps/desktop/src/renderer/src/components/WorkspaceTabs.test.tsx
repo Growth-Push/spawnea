@@ -222,31 +222,6 @@ describe('WorkspaceTabs Component', () => {
     expect(screen.getByTestId('workspace-worktree-badge')).toBeDefined();
   });
 
-  it('shows the MCP source badge from session metadata', () => {
-    render(
-      <WorkspaceTabs
-        session={{ ...mockSession, creationSource: 'mcp' }}
-        activeTab="terminal"
-        onTabChange={vi.fn()}
-      />
-    );
-
-    expect(screen.getByTestId('mcp-session-badge').textContent).toBe('MCP');
-    expect(screen.getByRole('img', { name: 'Created through Spawnea MCP' })).toBeDefined();
-  });
-
-  it('does not show an MCP badge for a UI-created session', () => {
-    render(
-      <WorkspaceTabs
-        session={{ ...mockSession, creationSource: 'ui' }}
-        activeTab="terminal"
-        onTabChange={vi.fn()}
-      />
-    );
-
-    expect(screen.queryByTestId('mcp-session-badge')).toBeNull();
-  });
-
   it('marks a managed worktree when it has uncommitted Git changes', () => {
     render(
       <WorkspaceTabs
