@@ -308,6 +308,19 @@ export const api = {
     ipcRenderer.on('session:statusChanged', handler);
     return () => ipcRenderer.removeListener('session:statusChanged', handler);
   },
+  onCheckStateChanged: (
+    callback: (sessionId: string, checking: boolean) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      sessionId: string,
+      checking: boolean
+    ) => {
+      callback(sessionId, checking);
+    };
+    ipcRenderer.on('session:checkStateChanged', handler);
+    return () => ipcRenderer.removeListener('session:checkStateChanged', handler);
+  },
   onHostConnectionStateChanged: (callback: (state: HostConnectionState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: HostConnectionState) => {
       callback(state);

@@ -160,21 +160,99 @@ describe('SessionSupervisor', () => {
       mockWebContents
     );
 
-    // Send data
-    dataCb('Transpiling packages/state...\n');
+    // Send data after the attach redraw window has passed
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 5000);
+      dataCb('Transpiling packages/state...\n');
 
-    mockHost.customRules.push({
-      pattern: 'tmux list-panes -t',
-      response: {
-        stdout: '9999:::claude:::0\n',
-        stderr: '',
-        exitCode: 0,
-      },
+      mockHost.customRules.push({
+        pattern: 'tmux list-panes -t',
+        response: {
+          stdout: '9999:::claude:::0\n',
+          stderr: '',
+          exitCode: 0,
+        },
+      });
+
+      const result = await supervisor.checkSession(session.id);
+      expect(result.status).toBe('working');
+      expect(result.source).toBe('pty_activity');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not report working from the tmux repaint that follows attaching the renderer', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Build project',
     });
 
-    const result = await supervisor.checkSession(session.id);
-    expect(result.status).toBe('working');
-    expect(result.source).toBe('pty_activity');
+    // Freeze the clock so the redraw window cannot expire on a slow machine.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let dataCb: (d: string) => void = () => {};
+      ptyBroker.registerPty(
+        `pty-${session.id}`,
+        {
+          id: `pty-${session.id}`,
+          onData: (cb) => {
+            dataCb = cb;
+            return () => {};
+          },
+          onExit: () => () => {},
+          write: vi.fn(),
+          resize: vi.fn(),
+          close: vi.fn(),
+        },
+        mockWebContents
+      );
+
+      // tmux repaints the whole screen as soon as the renderer attaches, even for an idle agent.
+      dataCb('previous screen contents\n');
+
+      mockHost.customRules.push({
+        pattern: 'tmux list-panes -t',
+        response: { stdout: '9999:::claude:::0\n', stderr: '', exitCode: 0 },
+      });
+
+      const result = await supervisor.checkSession(session.id);
+      expect(result.source).not.toBe('pty_activity');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('notifies the renderer when a status inspection starts and ends', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Build project',
+    });
+    supervisor.setWebContentsGetter(() => mockWebContents);
+
+    await supervisor.checkSession(session.id);
+
+    const calls = (mockWebContents.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call) => call[0] === 'session:checkStateChanged'
+    );
+    expect(calls.map((call) => call[2])).toEqual([true, false]);
+    expect(calls[0][1]).toBe(session.id);
+  });
+
+  it('emits checking=false even when the inspection throws', async () => {
+    supervisor.setWebContentsGetter(() => mockWebContents);
+
+    await expect(supervisor.checkSession('missing-session')).rejects.toThrow();
+
+    const calls = (mockWebContents.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call) => call[0] === 'session:checkStateChanged'
+    );
+    expect(calls.map((call) => call[2])).toEqual([true, false]);
   });
 
   it('supports configurable periodic check interval (defaults to 10s)', () => {

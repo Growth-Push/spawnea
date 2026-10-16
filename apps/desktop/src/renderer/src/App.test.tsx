@@ -392,6 +392,7 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       maxAttempts: 5,
     }),
     onHostConnectionStateChanged: vi.fn().mockReturnValue(() => {}),
+    onCheckStateChanged: vi.fn().mockReturnValue(() => {}),
     onSessionReconnected: vi.fn().mockReturnValue(() => {}),
     onSessionActivate: vi.fn().mockReturnValue(() => {}),
     getHostHealth: vi.fn().mockResolvedValue({}),

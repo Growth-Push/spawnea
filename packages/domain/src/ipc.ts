@@ -268,6 +268,7 @@ export interface IpcChannels {
 
   // Attention & Status Events
   'session:statusChanged': (callback: (sessionId: string, status: SessionStatus) => void) => () => void;
+  'session:checkStateChanged': (callback: (sessionId: string, checking: boolean) => void) => () => void;
   'session:artifactCreated': (callback: (sessionId: string, artifact: Artifact) => void) => () => void;
   'session:getStateSnapshot': (sessionId: string) => Promise<StateFeedbackSnapshot>;
   'session:submitStateFeedback': (report: StateFeedbackReport) => Promise<StateFeedbackResult>;

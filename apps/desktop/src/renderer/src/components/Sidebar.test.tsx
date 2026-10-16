@@ -3,6 +3,7 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { act, render, screen, fireEvent } from '@testing-library/react';
 import {
   Sidebar,
+  summarizeChildStatuses,
   DENSE_SESSION_THRESHOLD,
   formatSessionPath,
   HostHealthDot,
@@ -89,6 +90,7 @@ const renderSidebar = (
     isCollapsed?: boolean;
     onOpenCreateChildModal?: (parentSessionId?: string) => void;
     onOpenAgentSetup?: () => void;
+    refreshingSessionIds?: ReadonlySet<string>;
   } = {}
 ) => render(
   <Sidebar
@@ -105,6 +107,7 @@ const renderSidebar = (
     onOpenAgentSetup={options.onOpenAgentSetup}
     onRefresh={vi.fn()}
     isCollapsed={options.isCollapsed}
+    refreshingSessionIds={options.refreshingSessionIds}
   />
 );
 
@@ -593,7 +596,7 @@ describe('Sidebar session hierarchy', () => {
     expect(parentButton.className).toContain('border-purple-500');
 
     const badge = screen.getByTestId('session-compact-child-count-parent-root');
-    expect(badge.className).toContain('bg-purple-500');
+    expect(badge.className).toContain('ring-purple-400/40');
   });
 
   it('renders dense subgrid in Grid/Dense view', () => {
@@ -885,5 +888,235 @@ describe('Sidebar session hierarchy', () => {
     expect(agyIcon).not.toBeNull();
     expect(childItem.contains(childAlias)).toBe(true);
     expect(childItem.contains(agyIcon!)).toBe(true);
+  });
+});
+
+describe('Sidebar child summary, refresh border and Needs Input emphasis', () => {
+  const parent: Session = {
+    ...mockSessions[0],
+    id: 'p',
+    name: 'Coordinator',
+    status: 'idle',
+  };
+  const child = (id: string, status: Session['status']): Session => ({
+    ...mockSessions[0],
+    id,
+    parentSessionId: 'p',
+    childAlias: id,
+    name: `Child ${id}`,
+    status,
+  });
+
+  it('summarizes only working (incl. starting) and needs-input direct children', () => {
+    expect(
+      summarizeChildStatuses([
+        child('a', 'working'),
+        child('b', 'starting'),
+        child('c', 'needs_input'),
+        child('d', 'error'),
+        child('e', 'idle'),
+        child('f', 'disconnected'),
+      ])
+    ).toEqual({ working: 2, needsInput: 1 });
+  });
+
+  it('shows the mixed summary under the parent badge with the list collapsed and expanded', () => {
+    renderSidebar([parent, child('a', 'working'), child('b', 'needs_input'), child('c', 'needs_input'), child('d', 'error')], {
+      activeSessionId: 'p',
+    });
+    expect(screen.getByTestId('session-children-working-p').textContent).toContain('1');
+    expect(screen.getByTestId('session-children-needs-input-p').textContent).toContain('2');
+    expect(screen.queryByTestId('session-child-list-p')).toBeNull();
+    // The parent keeps its own status.
+    expect(screen.getByTestId('status-badge-idle')).toBeDefined();
+
+    fireEvent.click(screen.getByTestId('session-toggle-children-p'));
+    expect(screen.getByTestId('session-child-list-p')).toBeDefined();
+    expect(screen.getByTestId('session-children-working-p')).toBeDefined();
+    expect(screen.getByTestId('session-children-needs-input-p')).toBeDefined();
+  });
+
+  it('hides zero counts and the whole summary when no child works or waits', () => {
+    renderSidebar([parent, child('a', 'working'), child('b', 'error')], { activeSessionId: 'p' });
+    expect(screen.getByTestId('session-children-working-p')).toBeDefined();
+    expect(screen.queryByTestId('session-children-needs-input-p')).toBeNull();
+  });
+
+  it('omits the summary when children are only idle or errored', () => {
+    renderSidebar([parent, child('a', 'idle'), child('b', 'error')], { activeSessionId: 'p' });
+    expect(screen.queryByTestId('session-children-summary-p')).toBeNull();
+  });
+
+  it('draws a refresh border while keeping the status icon', () => {
+    renderSidebar([{ ...parent, status: 'working' }], {
+      activeSessionId: 'p',
+      refreshingSessionIds: new Set(['p']),
+    });
+    expect(screen.getByTestId('status-refresh-working')).toBeDefined();
+    expect(screen.getByTestId('status-badge-working')).toBeDefined();
+  });
+
+  it('draws no refresh border when the session is not refreshing', () => {
+    renderSidebar([{ ...parent, status: 'working' }], { activeSessionId: 'p' });
+    expect(screen.queryByTestId('status-refresh-working')).toBeNull();
+  });
+
+  it('marks Needs Input cards and child rows with a solid violet badge and left edge', () => {
+    renderSidebar([{ ...parent, status: 'needs_input' }, child('a', 'needs_input')], {
+      activeSessionId: 'other',
+    });
+    fireEvent.click(screen.getByTestId('session-toggle-children-p'));
+    for (const id of ['p', 'a']) {
+      const item = screen.getByTestId(`session-item-${id}`);
+      const edged = item.className.includes('border-l-violet-500') || item.parentElement?.className.includes('border-l-violet-500');
+      expect(edged).toBe(true);
+    }
+    for (const badge of screen.getAllByTestId('status-badge-needs_input')) {
+      expect(badge.className).toContain('bg-violet-600');
+      expect(badge.className).toContain('text-white');
+    }
+  });
+
+  it('draws the refresh border in the dense layout for parents and children', () => {
+    localStorage.setItem(STORAGE_KEY_SESSION_LAYOUT, 'dense');
+    renderSidebar([{ ...parent, status: 'working' }, child('a', 'needs_input')], {
+      activeSessionId: 'p',
+      refreshingSessionIds: new Set(['p', 'a']),
+    });
+    expect(screen.getByTestId('session-list').getAttribute('data-layout')).toBe('dense');
+    const dense = screen.getByTestId('session-dense-item-p');
+    expect(dense.querySelector('[data-testid="status-refresh-working"]')).not.toBeNull();
+    const subgrid = screen.getByTestId('session-dense-subgrid-p');
+    expect(subgrid.querySelector('[data-testid="status-refresh-needs_input"]')).not.toBeNull();
+  });
+
+  it('draws the refresh border in the auto dense layout from the session threshold', () => {
+    const many = makeSessions(DENSE_SESSION_THRESHOLD);
+    renderSidebar(many, { refreshingSessionIds: new Set([many[0].id]) });
+    expect(screen.getByTestId('session-list').getAttribute('data-layout')).toBe('dense');
+    const item = screen.getByTestId(`session-dense-item-${many[0].id}`);
+    expect(item.querySelector('[data-testid="status-refresh-working"]')).not.toBeNull();
+    expect(screen.getAllByTestId('status-refresh-working')).toHaveLength(1);
+  });
+
+  it('draws the refresh border on the compact popup badges only, not on the status dot', () => {
+    renderSidebar([{ ...parent, status: 'working' }, child('a', 'needs_input')], {
+      isCollapsed: true,
+      activeSessionId: 'p',
+      refreshingSessionIds: new Set(['p', 'a']),
+    });
+    const popup = screen.getByTestId('session-popup-p');
+    expect(popup.querySelector('[data-testid="status-refresh-working"]')).not.toBeNull();
+    expect(popup.querySelector('[data-testid="status-refresh-needs_input"]')).not.toBeNull();
+    const dot = screen.getByTestId('session-compact-status-p');
+    expect(dot.querySelector('svg')).toBeNull();
+    expect(dot.className).toContain('bg-amber-400');
+  });
+
+  it('draws no refresh border in dense or compact views when nothing is refreshing', () => {
+    localStorage.setItem(STORAGE_KEY_SESSION_LAYOUT, 'dense');
+    const { unmount } = renderSidebar([{ ...parent, status: 'working' }, child('a', 'working')]);
+    expect(screen.queryByTestId('status-refresh-working')).toBeNull();
+    unmount();
+    localStorage.clear();
+    renderSidebar([{ ...parent, status: 'working' }, child('a', 'working')], { isCollapsed: true });
+    expect(screen.queryByTestId('status-refresh-working')).toBeNull();
+  });
+
+  it('applies the solid violet Needs Input badge and left edge in the dense layout', () => {
+    localStorage.setItem(STORAGE_KEY_SESSION_LAYOUT, 'dense');
+    renderSidebar([{ ...parent, status: 'needs_input' }, child('a', 'needs_input'), child('b', 'working')], {
+      activeSessionId: 'other',
+    });
+    for (const id of ['p', 'a']) {
+      expect(screen.getByTestId(`session-item-${id}`).className).toContain('border-l-violet-500');
+    }
+    expect(screen.getByTestId('session-item-b').className).not.toContain('border-l-violet-500');
+    const dense = screen.getByTestId('session-dense-item-p');
+    const subgrid = screen.getByTestId('session-dense-subgrid-p');
+    for (const badge of [
+      ...dense.querySelectorAll('[data-testid="status-badge-needs_input"]'),
+      ...subgrid.querySelectorAll('[data-testid="status-badge-needs_input"]'),
+    ]) {
+      expect(badge.className).toContain('bg-violet-600');
+      expect(badge.className).toContain('text-white');
+    }
+    expect(dense.querySelector('[data-testid="status-badge-needs_input"]')).not.toBeNull();
+    expect(subgrid.querySelector('[data-testid="status-badge-needs_input"]')).not.toBeNull();
+  });
+
+  it('applies the solid violet Needs Input badge in the compact popup without touching the status dot', () => {
+    renderSidebar([{ ...parent, status: 'needs_input' }, child('a', 'needs_input'), child('b', 'idle')], {
+      isCollapsed: true,
+      activeSessionId: 'other',
+    });
+    const popup = screen.getByTestId('session-popup-p');
+    const badges = popup.querySelectorAll('[data-testid="status-badge-needs_input"]');
+    expect(badges).toHaveLength(2);
+    for (const badge of badges) {
+      expect(badge.className).toContain('bg-violet-600');
+      expect(badge.className).toContain('text-white');
+    }
+    expect(screen.getByTestId('session-compact-child-item-a').className).toContain('border-l-violet-500');
+    expect(screen.getByTestId('session-compact-child-item-b').className).not.toContain('border-l-violet-500');
+    const dot = screen.getByTestId('session-compact-status-p');
+    expect(dot.className).toContain('bg-purple-400');
+    expect(dot.className).not.toContain('bg-violet-600');
+  });
+
+  it('keeps the violet edge on hover for Needs Input cards and rows in every view', () => {
+    const edge = (item: HTMLElement) => {
+      // A parent's card is the wrapper around its select button.
+      const el = item.className.includes('border-l-violet-500') ? item : (item.parentElement as HTMLElement);
+      expect(el.className).toContain('border-l-violet-500');
+      expect(el.className).toContain('hover:border-l-violet-500');
+    };
+    const { unmount } = renderSidebar([{ ...parent, status: 'needs_input' }, child('a', 'needs_input')], {
+      activeSessionId: 'other',
+    });
+    fireEvent.click(screen.getByTestId('session-toggle-children-p'));
+    edge(screen.getByTestId('session-item-p'));
+    edge(screen.getByTestId('session-item-a'));
+    unmount();
+    localStorage.setItem(STORAGE_KEY_SESSION_LAYOUT, 'dense');
+    const dense = renderSidebar([{ ...parent, status: 'needs_input' }, child('a', 'needs_input')], {
+      activeSessionId: 'other',
+    });
+    edge(screen.getByTestId('session-item-p'));
+    edge(screen.getByTestId('session-item-a'));
+    dense.unmount();
+    localStorage.clear();
+    renderSidebar([parent, child('a', 'needs_input')], { isCollapsed: true, activeSessionId: 'other' });
+    edge(screen.getByTestId('session-compact-child-item-a'));
+  });
+
+  it('right-aligns the status icon column so the icon matches cards without children', () => {
+    renderSidebar([parent, child('a', 'working')], { activeSessionId: 'p' });
+    const summary = screen.getByTestId('session-children-summary-p');
+    expect(summary.parentElement?.className).toContain('items-end');
+    expect(summary.parentElement?.className).not.toContain('items-center');
+  });
+
+  it('colors the compact child count by urgency: Needs Input, then Working', () => {
+    const { unmount } = renderSidebar([parent, child('a', 'working'), child('b', 'needs_input')], {
+      isCollapsed: true,
+      activeSessionId: 'p',
+    });
+    expect(screen.getByTestId('session-compact-child-count-p').getAttribute('data-urgency')).toBe('needs_input');
+    unmount();
+    const { unmount: unmount2 } = renderSidebar([parent, child('a', 'working'), child('b', 'idle')], { isCollapsed: true, activeSessionId: 'p' });
+    expect(screen.getByTestId('session-compact-child-count-p').getAttribute('data-urgency')).toBe('working');
+    unmount2();
+    const neutral = renderSidebar([parent, child('a', 'idle'), child('b', 'error')], { isCollapsed: true, activeSessionId: 'p' });
+    const bubble = screen.getByTestId('session-compact-child-count-p');
+    expect(bubble.getAttribute('data-urgency')).toBe('none');
+    expect(bubble.className).toContain('bg-zinc-600');
+    expect(bubble.className).not.toContain('purple');
+    expect(bubble.className).not.toContain('violet');
+    neutral.unmount();
+    renderSidebar([parent, child('a', 'idle')], { isCollapsed: true, activeSessionId: 'a' });
+    const active = screen.getByTestId('session-compact-child-count-p');
+    expect(active.className).toContain('bg-zinc-600');
+    expect(active.className).toContain('ring-purple-400/40');
   });
 });
