@@ -48,6 +48,25 @@ export interface PtyBrokerOptions {
   redrawMaxMs?: number;
 }
 
+// OSC, DCS/APC/PM/SOS strings, CSI sequences, then any stray ESC.
+const ESC = String.fromCharCode(0x1b);
+const BEL = String.fromCharCode(0x07);
+const OSC_PATTERN = new RegExp(`${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)`, 'gu');
+const STRING_PATTERN = new RegExp(`${ESC}[P^_X][\\s\\S]*?${ESC}\\\\`, 'gu');
+const CSI_PATTERN = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, 'gu');
+const ESC_PATTERN = new RegExp(ESC, 'gu');
+
+/** True when the data holds something the user typed, not only automatic terminal replies. */
+function hasUserInput(data: string): boolean {
+  return (
+    data
+      .replace(OSC_PATTERN, '')
+      .replace(STRING_PATTERN, '')
+      .replace(CSI_PATTERN, '')
+      .replace(ESC_PATTERN, '').length > 0
+  );
+}
+
 export class PtyBroker {
   private readonly logger: Logger;
   private readonly channels: Map<string, ManagedPty> = new Map();
@@ -286,9 +305,12 @@ export class PtyBroker {
     if (managed) {
       managed.metrics.lastInputAt = new Date();
       // Output that follows user input is a response, not an attach or resize repaint.
-      managed.redrawUntil = 0;
-      managed.burstStart = undefined;
-      managed.lastChunkAt = undefined;
+      // Automatic terminal replies (device attributes, focus events) are not user input.
+      if (hasUserInput(data)) {
+        managed.redrawUntil = 0;
+        managed.burstStart = undefined;
+        managed.lastChunkAt = undefined;
+      }
       for (const listener of this.activityListeners) {
         try {
           listener(channelId, 'input', data.length);

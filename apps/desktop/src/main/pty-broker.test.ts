@@ -163,6 +163,43 @@ describe('PtyBroker', () => {
       }
     });
 
+    it('keeps discarding the repaint when the terminal only sends automatic replies', () => {
+      const { broker, emit } = setup();
+      try {
+        for (const reply of [
+          '\x1b[?62;4c', // DA1
+          '\x1b[>0;276;0c', // DA2
+          '\x1b[?2026;2$y', // DECRPM
+          '\x1bP>|xterm.js(5.5.0)\x1b\\', // XTVERSION (DCS)
+          '\x1b]11;rgb:0000/0000/0000\x07', // OSC color reply
+          '\x1b[I', // focus in
+          '\x1b[O', // focus out
+          '\x1b[12;40R', // CPR
+        ]) {
+          broker.write('pty-b', reply);
+        }
+        emit('attach repaint');
+        expect(bytes(broker)).toBe(0);
+        expect(broker.getMetrics('pty-b')?.lastOutputAt).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('counts a short response after typed text with Enter or Ctrl-C', () => {
+      for (const typed of ['ls\r', '\x03', 'a\x1b[I']) {
+        const { broker, emit } = setup();
+        try {
+          broker.write('pty-b', '\x1b[?62;4c');
+          broker.write('pty-b', typed);
+          emit('short reply');
+          expect(bytes(broker)).toBe('short reply'.length);
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    });
+
     it('opens a new window for a resize that follows user input', () => {
       const { broker, emit } = setup();
       try {
