@@ -191,33 +191,39 @@ describe('SessionSupervisor', () => {
       task: 'Build project',
     });
 
-    let dataCb: (d: string) => void = () => {};
-    ptyBroker.registerPty(
-      `pty-${session.id}`,
-      {
-        id: `pty-${session.id}`,
-        onData: (cb) => {
-          dataCb = cb;
-          return () => {};
+    // Freeze the clock so the redraw window cannot expire on a slow machine.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let dataCb: (d: string) => void = () => {};
+      ptyBroker.registerPty(
+        `pty-${session.id}`,
+        {
+          id: `pty-${session.id}`,
+          onData: (cb) => {
+            dataCb = cb;
+            return () => {};
+          },
+          onExit: () => () => {},
+          write: vi.fn(),
+          resize: vi.fn(),
+          close: vi.fn(),
         },
-        onExit: () => () => {},
-        write: vi.fn(),
-        resize: vi.fn(),
-        close: vi.fn(),
-      },
-      mockWebContents
-    );
+        mockWebContents
+      );
 
-    // tmux repaints the whole screen as soon as the renderer attaches, even for an idle agent.
-    dataCb('previous screen contents\n');
+      // tmux repaints the whole screen as soon as the renderer attaches, even for an idle agent.
+      dataCb('previous screen contents\n');
 
-    mockHost.customRules.push({
-      pattern: 'tmux list-panes -t',
-      response: { stdout: '9999:::claude:::0\n', stderr: '', exitCode: 0 },
-    });
+      mockHost.customRules.push({
+        pattern: 'tmux list-panes -t',
+        response: { stdout: '9999:::claude:::0\n', stderr: '', exitCode: 0 },
+      });
 
-    const result = await supervisor.checkSession(session.id);
-    expect(result.source).not.toBe('pty_activity');
+      const result = await supervisor.checkSession(session.id);
+      expect(result.source).not.toBe('pty_activity');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('notifies the renderer when a status inspection starts and ends', async () => {
