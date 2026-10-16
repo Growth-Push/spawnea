@@ -147,6 +147,35 @@ describe('PtyBroker', () => {
       }
     });
 
+    it('counts a short response to user input sent inside the window', () => {
+      const { broker, emit } = setup();
+      try {
+        emit('attach repaint');
+        expect(bytes(broker)).toBe(0);
+        vi.advanceTimersByTime(100);
+        broker.write('pty-b', 'ls\n');
+        vi.advanceTimersByTime(50);
+        emit('file-a file-b');
+        expect(bytes(broker)).toBe('file-a file-b'.length);
+        expect(broker.getMetrics('pty-b')?.lastOutputAt).toBeDefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('opens a new window for a resize that follows user input', () => {
+      const { broker, emit } = setup();
+      try {
+        broker.write('pty-b', 'x');
+        vi.advanceTimersByTime(10);
+        broker.resize('pty-b', 120, 40);
+        emit('resize repaint');
+        expect(bytes(broker)).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('counts output arriving exactly when the window expires', () => {
       const { broker, emit } = setup();
       try {

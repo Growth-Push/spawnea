@@ -285,6 +285,10 @@ export class PtyBroker {
     const managed = this.channels.get(channelId);
     if (managed) {
       managed.metrics.lastInputAt = new Date();
+      // Output that follows user input is a response, not an attach or resize repaint.
+      managed.redrawUntil = 0;
+      managed.burstStart = undefined;
+      managed.lastChunkAt = undefined;
       for (const listener of this.activityListeners) {
         try {
           listener(channelId, 'input', data.length);
