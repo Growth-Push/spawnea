@@ -4,8 +4,166 @@ import type { PtyStream } from '@spawnea/domain';
 import type { WebContents } from 'electron';
 
 describe('PtyBroker', () => {
+  it('does not count tmux redraw output after attach or resize as agent activity', () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new PtyBroker(undefined, { redrawWindowMs: 1000, redrawSustainedMs: 400, redrawMaxMs: 3000 });
+      let dataCb: (d: string) => void = () => {};
+      const stream: PtyStream = {
+        id: 'pty-r',
+        onData: (cb) => {
+          dataCb = cb;
+          return () => {};
+        },
+        onExit: () => () => {},
+        write: vi.fn(),
+        resize: vi.fn(),
+        close: vi.fn(),
+      };
+      const webContents = {
+        isDestroyed: () => false,
+        send: vi.fn(),
+        on: vi.fn(),
+        removeListener: vi.fn(),
+      } as unknown as WebContents;
+
+      broker.registerPty('pty-r', stream, webContents);
+      broker.ready('pty-r');
+
+      // Initial repaint on attach is still forwarded to the terminal but is not activity.
+      dataCb('screen repaint');
+      expect(webContents.send).toHaveBeenCalledWith('pty:data', 'pty-r', 'screen repaint');
+      expect(broker.getMetrics('pty-r')?.lastOutputAt).toBeUndefined();
+      expect(broker.getMetrics('pty-r')?.recentOutputBytes).toBe(0);
+
+      // Real output after the redraw window counts.
+      vi.advanceTimersByTime(1500);
+      dataCb('agent output');
+      expect(broker.getMetrics('pty-r')?.lastOutputAt).toBeDefined();
+      expect(broker.getMetrics('pty-r')?.recentOutputBytes).toBe('agent output'.length);
+
+      // A resize repaints again and opens a new window.
+      const before = broker.getMetrics('pty-r')?.lastOutputAt;
+      vi.advanceTimersByTime(5000);
+      broker.resize('pty-r', 120, 40);
+      dataCb('resize repaint');
+      expect(broker.getMetrics('pty-r')?.lastOutputAt).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe('redraw window bounds', () => {
+    const setup = () => {
+      vi.useFakeTimers();
+      const broker = new PtyBroker(undefined, {
+        redrawWindowMs: 1000,
+        redrawSustainedMs: 400,
+        redrawMaxMs: 3000,
+      });
+      let dataCb: (d: string) => void = () => {};
+      const stream: PtyStream = {
+        id: 'pty-b',
+        onData: (cb) => {
+          dataCb = cb;
+          return () => {};
+        },
+        onExit: () => () => {},
+        write: vi.fn(),
+        resize: vi.fn(),
+        close: vi.fn(),
+      };
+      const webContents = {
+        isDestroyed: () => false,
+        send: vi.fn(),
+        on: vi.fn(),
+        removeListener: vi.fn(),
+      } as unknown as WebContents;
+      broker.registerPty('pty-b', stream, webContents);
+      broker.ready('pty-b');
+      return { broker, emit: (d: string) => dataCb(d) };
+    };
+    const bytes = (b: PtyBroker) => b.getMetrics('pty-b')?.recentOutputBytes ?? 0;
+
+    it('does not extend the window without bound while resizes keep renewing it', () => {
+      const { broker, emit } = setup();
+      try {
+        // Resize every 500ms for 6s: the window is renewed each time.
+        for (let i = 0; i < 12; i += 1) {
+          vi.advanceTimersByTime(500);
+          broker.resize('pty-b', 100 + i, 30);
+        }
+        // 6s after the first trigger the series cap (3s) has long passed, so output counts.
+        emit('agent output');
+        expect(bytes(broker)).toBe('agent output'.length);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('still discards a short repaint burst after each resize in a series', () => {
+      const { broker, emit } = setup();
+      try {
+        vi.advanceTimersByTime(1200);
+        broker.resize('pty-b', 120, 40);
+        vi.advanceTimersByTime(300);
+        broker.resize('pty-b', 121, 40);
+        emit('repaint');
+        expect(bytes(broker)).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('counts sustained agent output that starts inside the window', () => {
+      const { broker, emit } = setup();
+      try {
+        vi.advanceTimersByTime(100);
+        broker.resize('pty-b', 120, 40);
+        emit('chunk-1');
+        expect(bytes(broker)).toBe(0);
+        for (let i = 0; i < 4; i += 1) {
+          vi.advanceTimersByTime(120);
+          emit('chunk');
+        }
+        // 480ms of back-to-back output inside the window is real work.
+        expect(bytes(broker)).toBeGreaterThan(0);
+        expect(broker.getMetrics('pty-b')?.lastOutputAt).toBeDefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('counts continuing output after the window expires', () => {
+      const { broker, emit } = setup();
+      try {
+        emit('repaint');
+        expect(bytes(broker)).toBe(0);
+        vi.advanceTimersByTime(1100);
+        emit('more');
+        expect(bytes(broker)).toBe('more'.length);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('counts output arriving exactly when the window expires', () => {
+      const { broker, emit } = setup();
+      try {
+        vi.advanceTimersByTime(999);
+        emit('late');
+        expect(bytes(broker)).toBe(0);
+        vi.advanceTimersByTime(1);
+        emit('on-time');
+        expect(bytes(broker)).toBe('on-time'.length);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('tracks lastOutputAt, lastInputAt, and recentOutputBytes accurately', () => {
-    const broker = new PtyBroker();
+    const broker = new PtyBroker(undefined, { redrawWindowMs: 0 });
 
     let dataCb: (d: string) => void = () => {};
     let _exitCb: (c: number) => void = () => {};

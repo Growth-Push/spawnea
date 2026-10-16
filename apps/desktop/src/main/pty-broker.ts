@@ -19,6 +19,14 @@ interface ManagedPty {
   isReady: boolean;
   pendingData: string[];
   pendingBytes: number;
+  /** Output before this timestamp may be a tmux redraw caused by attach or resize. */
+  redrawUntil: number;
+  /** Start of the current series of back-to-back attach/resize triggers; bounds how far resizes extend the window. */
+  redrawSeriesStart: number;
+  redrawLastTriggerAt: number;
+  /** Start and last chunk time of the continuous output burst seen inside the window. */
+  burstStart?: number;
+  lastChunkAt?: number;
 }
 
 export type PtyActivityListener = (
@@ -32,6 +40,12 @@ export interface PtyBrokerOptions {
   highWaterMarkBytes?: number;
   /** In-flight output byte threshold below which a paused PTY stream is resumed (default: 16KB) */
   lowWaterMarkBytes?: number;
+  /** Window after attach or resize in which a short output burst is treated as a tmux redraw, not agent activity (default: 2000ms) */
+  redrawWindowMs?: number;
+  /** Output that keeps arriving this long inside the window is agent work and counts again (default: 400ms) */
+  redrawSustainedMs?: number;
+  /** Upper bound for the window when resizes keep renewing it (default: 3000ms from the first trigger) */
+  redrawMaxMs?: number;
 }
 
 export class PtyBroker {
@@ -40,11 +54,19 @@ export class PtyBroker {
   private readonly activityListeners: Set<PtyActivityListener> = new Set();
   private readonly highWaterMarkBytes: number;
   private readonly lowWaterMarkBytes: number;
+  private readonly redrawWindowMs: number;
+  private readonly redrawSustainedMs: number;
+  private readonly redrawMaxMs: number;
+  /** Chunks closer together than this belong to the same output burst. */
+  private static readonly BURST_GAP_MS = 250;
 
   constructor(logger?: Logger, options?: PtyBrokerOptions) {
     this.logger = logger || createLogger('PtyBroker');
     this.highWaterMarkBytes = options?.highWaterMarkBytes ?? 64 * 1024;
     this.lowWaterMarkBytes = options?.lowWaterMarkBytes ?? 16 * 1024;
+    this.redrawWindowMs = options?.redrawWindowMs ?? 2000;
+    this.redrawSustainedMs = options?.redrawSustainedMs ?? 400;
+    this.redrawMaxMs = options?.redrawMaxMs ?? 3000;
   }
 
   /**
@@ -122,6 +144,44 @@ export class PtyBroker {
   }
 
   /**
+   * Attaching or resizing makes tmux repaint the whole screen even when the agent is idle.
+   * Opens (or renews, bounded by `redrawMaxMs` from the first trigger of a series) the window
+   * in which a short output burst is treated as that repaint.
+   */
+  private armRedrawWindow(managed: ManagedPty): void {
+    const now = Date.now();
+    // Triggers closer together than the window belong to one series, even after its cap passed.
+    if (now - managed.redrawLastTriggerAt >= this.redrawWindowMs) {
+      managed.redrawSeriesStart = now;
+    }
+    managed.redrawLastTriggerAt = now;
+    managed.redrawUntil = Math.min(
+      now + this.redrawWindowMs,
+      managed.redrawSeriesStart + this.redrawMaxMs
+    );
+    managed.burstStart = undefined;
+    managed.lastChunkAt = undefined;
+  }
+
+  /**
+   * Output outside the window always counts. Inside it, only a short burst is discarded as a
+   * repaint; output that keeps arriving for `redrawSustainedMs` is real agent work.
+   */
+  private countsAsActivity(managed: ManagedPty): boolean {
+    const now = Date.now();
+    if (now >= managed.redrawUntil) return true;
+    if (
+      managed.burstStart === undefined ||
+      managed.lastChunkAt === undefined ||
+      now - managed.lastChunkAt > PtyBroker.BURST_GAP_MS
+    ) {
+      managed.burstStart = now;
+    }
+    managed.lastChunkAt = now;
+    return now - managed.burstStart >= this.redrawSustainedMs;
+  }
+
+  /**
    * Registers an active PtyStream to stream data bidirectionally with a WebContents instance.
    */
   registerPty(channelId: string, stream: PtyStream, webContents: WebContents): void {
@@ -150,13 +210,19 @@ export class PtyBroker {
       isReady: false,
       pendingData: [],
       pendingBytes: 0,
+      redrawUntil: 0,
+      redrawSeriesStart: 0,
+      redrawLastTriggerAt: Number.NEGATIVE_INFINITY,
     };
+    this.armRedrawWindow(managed);
 
     // Forward PTY output data to Renderer and track metrics
     const unData = stream.onData((data: string) => {
       const byteLen = Buffer.byteLength(data, 'utf8');
-      metrics.lastOutputAt = new Date();
-      metrics.recentOutputBytes += byteLen;
+      if (this.countsAsActivity(managed)) {
+        metrics.lastOutputAt = new Date();
+        metrics.recentOutputBytes += byteLen;
+      }
 
       for (const listener of this.activityListeners) {
         try {
@@ -240,6 +306,7 @@ export class PtyBroker {
   resize(channelId: string, cols: number, rows: number): void {
     const managed = this.channels.get(channelId);
     if (managed) {
+      this.armRedrawWindow(managed);
       managed.stream.resize(cols, rows);
     }
   }

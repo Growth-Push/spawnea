@@ -21,6 +21,10 @@ interface StatusBadgeProps {
   iconOnly?: boolean;
   className?: string;
   showIcon?: boolean;
+  /** A status inspection is in flight; draws a neutral snake border around the icon. */
+  isRefreshing?: boolean;
+  /** Emphasized Needs Input badge: solid violet with a white icon. */
+  emphasizeNeedsInput?: boolean;
 }
 
 export function StatusBadge({
@@ -34,6 +38,8 @@ export function StatusBadge({
   iconOnly = false,
   className = '',
   showIcon = true,
+  isRefreshing = false,
+  emphasizeNeedsInput = false,
 }: StatusBadgeProps): React.JSX.Element {
   let label = 'Idle';
   let colorClass = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30';
@@ -67,7 +73,9 @@ export function StatusBadge({
     case 'needs_input':
       // 2. Input Required -> Violet
       label = 'Needs Input';
-      colorClass = 'text-purple-300 bg-purple-500/15 border-purple-500/40';
+      colorClass = emphasizeNeedsInput
+        ? 'text-white bg-violet-600 border-violet-400'
+        : 'text-purple-300 bg-purple-500/15 border-purple-500/40';
       tooltipColorClass = 'border-purple-500/50 text-purple-200';
       Icon = MessageSquare;
       animClass = !isSeen ? 'animate-pulse' : '';
@@ -123,13 +131,32 @@ export function StatusBadge({
           className={`relative flex items-center justify-center w-6 h-6 rounded-full border transition-all ${colorClass} ${className}`}
           title={`${label}${detailText ? `: ${detailText}` : ''}`}
         >
+          {isRefreshing && (
+            <svg
+              data-testid={`status-refresh-${status}`}
+              aria-hidden="true"
+              viewBox="0 0 32 32"
+              className="absolute -inset-[4px] w-[32px] h-[32px] pointer-events-none text-sky-300 animate-spin"
+            >
+              <circle
+                cx="16"
+                cy="16"
+                r="14.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeDasharray="30 62"
+              />
+            </svg>
+          )}
           {ringAnimClass && (
             <span
               className={`absolute -inset-[3px] rounded-full border pointer-events-none ${ringAnimClass}`}
             />
           )}
           <Icon className={`w-3.5 h-3.5 ${animClass}`} />
-          <span className="sr-only">{label}</span>
+          <span className="sr-only">{isRefreshing ? `${label} (refreshing)` : label}</span>
         </div>
 
         {/* Hover Tooltip anchored to Icon */}

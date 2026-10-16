@@ -171,7 +171,28 @@ interface SidebarProps {
   isLoading?: boolean;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
+  /** Sessions whose status is being re-inspected longer than the visibility threshold. */
+  refreshingSessionIds?: ReadonlySet<string>;
 }
+
+export interface ChildStatusSummary {
+  working: number;
+  needsInput: number;
+}
+
+/** Counts direct children that are working (including starting) or waiting for the operator. */
+export function summarizeChildStatuses(children: readonly Session[]): ChildStatusSummary {
+  let working = 0;
+  let needsInput = 0;
+  for (const child of children) {
+    if (child.status === 'working' || child.status === 'starting') working += 1;
+    else if (child.status === 'needs_input') needsInput += 1;
+  }
+  return { working, needsInput };
+}
+
+const NEEDS_INPUT_EDGE = 'border-l-4 border-l-violet-500 hover:border-l-violet-500';
+const NEEDS_INPUT_EDGE_THIN = 'border-l-[3px] border-l-violet-500 hover:border-l-violet-500';
 
 const STORAGE_KEY_GROUPING = 'spawnea:sidebar:grouping';
 const STORAGE_KEY_STATUS_FILTER = 'spawnea:sidebar:statusFilter';
@@ -364,6 +385,7 @@ export function Sidebar({
   isLoading = false,
   isCollapsed: externalIsCollapsed,
   onToggleCollapse,
+  refreshingSessionIds,
 }: SidebarProps): React.JSX.Element {
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -786,6 +808,8 @@ export function Sidebar({
         aria-current={isSelected ? 'page' : undefined}
         onClick={() => onSelectSession(child.id)}
         className={`w-full flex items-center justify-between p-2 rounded-md border text-left transition-all cursor-pointer ${
+          child.status === 'needs_input' ? NEEDS_INPUT_EDGE : ''
+        } ${
           isSelected
             ? 'bg-purple-950/50 border-purple-500/70 text-white ring-1 ring-purple-500/30'
             : 'bg-[#12161c]/60 border-[#21262d] hover:bg-[#1f242c]/50 hover:border-purple-500/40 text-zinc-300'
@@ -823,6 +847,8 @@ export function Sidebar({
             isFocused={isSelected}
             isAcknowledged={isAcknowledged}
             iconOnly
+            isRefreshing={refreshingSessionIds?.has(child.id)}
+            emphasizeNeedsInput
             className="shrink-0 ml-1.5"
           />
         )}
@@ -855,6 +881,7 @@ export function Sidebar({
     const statusDetails = statusDetailsMap[session.id];
     const alertId = getAlertId(session.id, session.status, statusDetails?.detectedPrompt || statusDetails?.reason);
     const isAcknowledged = acknowledgedAlerts.has(alertId);
+    const childSummary = summarizeChildStatuses(children);
 
     // Primary descriptive title (prevents duplicate title/task text)
     const displayTitle = session.name || session.task;
@@ -865,17 +892,18 @@ export function Sidebar({
     const gitChangeCount = gitChangeCountBySessionId[session.id] ?? (hasUncommittedChanges ? 1 : 0);
     const formattedPath = formatSessionPath(displayPath);
 
-    const cardStyle = isSelected
+    const needsInputEdge = session.status === 'needs_input' ? NEEDS_INPUT_EDGE : '';
+    const cardStyle = `${needsInputEdge} ${isSelected
       ? session.isExternal
         ? 'bg-[#1f242c] border-cyan-500/60 text-white shadow-md ring-1 ring-cyan-500/30'
         : 'bg-[#1f242c] border-emerald-500/50 text-white shadow-md ring-1 ring-emerald-500/20'
       : session.isExternal
       ? 'bg-[#12161c]/60 border-cyan-950/60 hover:bg-[#1f242c]/50 hover:border-cyan-800/50 text-zinc-300'
-      : 'bg-[#12161c]/60 border-[#21262d] hover:bg-[#1f242c]/50 hover:border-[#30363d] text-zinc-300';
+      : 'bg-[#12161c]/60 border-[#21262d] hover:bg-[#1f242c]/50 hover:border-[#30363d] text-zinc-300'}`;
 
     const renderCardHeader = () => (
-      <div className="flex items-center justify-between gap-1.5 w-full">
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+      <div className="flex items-start justify-between gap-1.5 w-full">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 min-h-6">
           <OsIcon osName={osString} className="w-3.5 h-3.5 shrink-0" />
           <AgentIcon
             harness={agent?.harness}
@@ -890,25 +918,62 @@ export function Sidebar({
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {shouldShowStatusBadge(session) && (
-            <StatusBadge
-              status={session.status}
-              isFocused={isSelected}
-              isAcknowledged={isAcknowledged}
-              promptSnippet={statusDetails?.detectedPrompt}
-              errorReason={statusDetails?.reason}
-              iconOnly={true}
-              className="shrink-0"
-            />
+        <div className="flex items-start gap-1.5 shrink-0">
+          {(shouldShowStatusBadge(session) || childSummary.working > 0 || childSummary.needsInput > 0) && (
+            <div className="flex flex-col items-end gap-1">
+              {shouldShowStatusBadge(session) && (
+                <StatusBadge
+                  status={session.status}
+                  isFocused={isSelected}
+                  isAcknowledged={isAcknowledged}
+                  promptSnippet={statusDetails?.detectedPrompt}
+                  errorReason={statusDetails?.reason}
+                  iconOnly={true}
+                  isRefreshing={refreshingSessionIds?.has(session.id)}
+                  emphasizeNeedsInput
+                  className="shrink-0"
+                />
+              )}
+              {(childSummary.working > 0 || childSummary.needsInput > 0) && (
+                <div
+                  data-testid={`session-children-summary-${session.id}`}
+                  className="flex items-center gap-1.5 text-[10px] font-mono"
+                >
+                  {childSummary.working > 0 && (
+                    <span
+                      data-testid={`session-children-working-${session.id}`}
+                      className="inline-flex items-center gap-0.5 text-amber-400"
+                      title={`${childSummary.working} child session${childSummary.working === 1 ? '' : 's'} working`}
+                    >
+                      <Radio className="w-3 h-3" aria-hidden="true" />
+                      <span>{childSummary.working}</span>
+                      <span className="sr-only">working</span>
+                    </span>
+                  )}
+                  {childSummary.needsInput > 0 && (
+                    <span
+                      data-testid={`session-children-needs-input-${session.id}`}
+                      className="inline-flex items-center gap-0.5 text-violet-300"
+                      title={`${childSummary.needsInput} child session${childSummary.needsInput === 1 ? '' : 's'} needing input`}
+                    >
+                      <MessageSquare className="w-3 h-3" aria-hidden="true" />
+                      <span>{childSummary.needsInput}</span>
+                      <span className="sr-only">needs input</span>
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           {shortcut && (
-            <span
-              data-testid={`session-shortcut-badge-${session.id}`}
-              className="text-[9px] font-mono font-medium px-1 py-0.2 rounded bg-[#0d1117] text-zinc-400 border border-[#30363d] group-hover:text-emerald-300 group-hover:border-emerald-500/40 transition-colors shrink-0"
-              title={`Keyboard shortcut: ${shortcut}`}
-            >
-              {shortcut}
+            <span className="flex h-6 items-center">
+              <span
+                data-testid={`session-shortcut-badge-${session.id}`}
+                className="text-[9px] font-mono font-medium px-1 py-0.2 rounded bg-[#0d1117] text-zinc-400 border border-[#30363d] group-hover:text-emerald-300 group-hover:border-emerald-500/40 transition-colors shrink-0"
+                title={`Keyboard shortcut: ${shortcut}`}
+              >
+                {shortcut}
+              </span>
             </span>
           )}
         </div>
@@ -1119,6 +1184,8 @@ export function Sidebar({
           aria-describedby={descriptionId}
           onClick={() => onSelectSession(session.id)}
           className={`w-full h-[82px] min-w-0 rounded-lg border p-2 text-left flex flex-col justify-between transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/80 ${
+            session.status === 'needs_input' ? NEEDS_INPUT_EDGE_THIN : ''
+          } ${
             isSelected
               ? session.isExternal
                 ? 'bg-[#1f242c] border-cyan-500/70 ring-1 ring-cyan-500/30'
@@ -1169,6 +1236,8 @@ export function Sidebar({
                 promptSnippet={statusDetails?.detectedPrompt}
                 errorReason={statusDetails?.reason}
                 iconOnly
+                isRefreshing={refreshingSessionIds?.has(session.id)}
+                emphasizeNeedsInput
                 className="shrink-0"
               />
             )}
@@ -1235,6 +1304,8 @@ export function Sidebar({
               data-testid={`session-item-${child.id}`}
               onClick={() => onSelectSession(child.id)}
               className={`px-1.5 py-1 rounded border text-left flex items-center justify-between text-[11px] cursor-pointer transition-colors ${
+                child.status === 'needs_input' ? NEEDS_INPUT_EDGE_THIN : ''
+              } ${
                 child.id === activeSessionId
                   ? 'bg-purple-950/60 border-purple-500 text-white'
                   : 'bg-[#12161c] border-[#30363d] text-zinc-300 hover:border-purple-400'
@@ -1266,6 +1337,8 @@ export function Sidebar({
                   isFocused={child.id === activeSessionId}
                   isAcknowledged={acknowledgedAlerts.has(getAlertId(child.id, child.status, statusDetailsMap[child.id]?.detectedPrompt || statusDetailsMap[child.id]?.reason))}
                   iconOnly
+                  isRefreshing={refreshingSessionIds?.has(child.id)}
+                  emphasizeNeedsInput
                   className="shrink-0 scale-75"
                 />
               )}
@@ -1327,6 +1400,7 @@ export function Sidebar({
     const visibleChildren = hasFilter ? matchingChildren : children;
     const isSelected = session.id === activeSessionId;
     const hasSelectedChild = children.some((c) => c.id === activeSessionId);
+    const childSummaryCompact = summarizeChildStatuses(children);
     const shortcut = shortcutLabels.get(session.id);
     const server = getServer(session.serverId);
     const hostInfo = hostInfoMap?.[session.serverId];
@@ -1370,11 +1444,20 @@ export function Sidebar({
           {children.length > 0 && (
             <span
               data-testid={`session-compact-child-count-${session.id}`}
-              className={`absolute -top-1 -left-1 px-1 min-w-[14px] h-[14px] rounded-full text-white font-mono text-[9px] font-bold flex items-center justify-center border border-[#161b22] z-10 ${
-                hasSelectedChild
-                  ? 'bg-purple-500 ring-2 ring-purple-400/40'
-                  : 'bg-purple-600'
-              }`}
+              className={`absolute -top-1 -left-1 px-1 min-w-[14px] h-[14px] rounded-full font-mono text-[9px] font-bold flex items-center justify-center border border-[#161b22] z-10 ${
+                childSummaryCompact.needsInput > 0
+                  ? 'bg-violet-600 text-white'
+                  : childSummaryCompact.working > 0
+                  ? 'bg-amber-500 text-zinc-950'
+                  : 'bg-zinc-600 text-white'
+              } ${hasSelectedChild ? 'ring-2 ring-purple-400/40' : ''}`}
+              data-urgency={
+                childSummaryCompact.needsInput > 0
+                  ? 'needs_input'
+                  : childSummaryCompact.working > 0
+                  ? 'working'
+                  : 'none'
+              }
               title={`${children.length} child session${children.length === 1 ? '' : 's'}${hasSelectedChild ? ' (child active)' : ''}`}
             >
               {children.length}
@@ -1452,6 +1535,8 @@ export function Sidebar({
                   promptSnippet={statusDetails?.detectedPrompt}
                   errorReason={statusDetails?.reason}
                   iconOnly={true}
+                  isRefreshing={refreshingSessionIds?.has(session.id)}
+                  emphasizeNeedsInput
                   className="shrink-0"
                 />
               )}
@@ -1547,6 +1632,8 @@ export function Sidebar({
                       onSelectSession(child.id);
                     }}
                     className={`flex w-full items-center justify-between p-1.5 rounded text-xs cursor-pointer transition-colors text-left ${
+                      child.status === 'needs_input' ? NEEDS_INPUT_EDGE : ''
+                    } ${
                       child.id === activeSessionId
                         ? 'bg-purple-500/20 text-purple-200 border border-purple-500/40'
                         : 'hover:bg-[#21262d] text-zinc-300'
@@ -1575,6 +1662,8 @@ export function Sidebar({
                         isFocused={child.id === activeSessionId}
                         isAcknowledged={acknowledgedAlerts.has(getAlertId(child.id, child.status, statusDetailsMap[child.id]?.detectedPrompt || statusDetailsMap[child.id]?.reason))}
                         iconOnly
+                        isRefreshing={refreshingSessionIds?.has(child.id)}
+                        emphasizeNeedsInput
                         className="shrink-0"
                       />
                     )}

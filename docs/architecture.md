@@ -435,6 +435,16 @@ PTY activity streaming (Confidence: 0.60)
 tmux / process liveness & foreground command (Confidence: 0.50)
 ```
 
+#### PTY activity and attach redraws
+
+Attaching a PTY to tmux, and resizing it, makes tmux repaint the whole screen even when the agent is idle. `PtyBroker` therefore forwards that output to the terminal but, inside a short window after registration and after each resize (2 seconds by default), does not count a brief output burst in `lastOutputAt` or `recentOutputBytes`. Output that keeps arriving for 400 ms (chunks less than 250 ms apart) counts as agent work, and resizes in quick succession cannot extend the window beyond 3 seconds from the first trigger. Only counted output feeds the `pty_activity` signal, so opening or resizing a terminal no longer reports an idle session as `working`. Polling intervals are unchanged.
+
+Known limit: slow output inside that window (chunks more than 250 ms apart during the first 2 seconds after an attach or resize) is still discarded as a repaint. The terminal-tail detectors still apply to it, and the output counts again once the window ends.
+
+#### Status refresh signal
+
+`SessionSupervisor` sends `session:checkStateChanged(sessionId, checking)` when a status inspection starts and ends. The renderer shows a neutral rotating border around the status icon only when an inspection lasts more than about 300 ms, and keeps it for at least about 600 ms. The icon itself changes only on `session:statusChanged`.
+
 ---
 
 ## 6. Sequence: First Vertical Slice Execution & Reconnection

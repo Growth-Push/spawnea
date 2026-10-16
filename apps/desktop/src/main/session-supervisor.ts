@@ -108,6 +108,16 @@ export class SessionSupervisor {
   }
 
   /**
+   * Tells the renderer that a status inspection started or finished so it can show a refresh indicator.
+   */
+  private notifyCheckState(sessionId: string, checking: boolean): void {
+    const wc = this.webContentsGetter?.();
+    if (wc && !wc.isDestroyed()) {
+      wc.send('session:checkStateChanged', sessionId, checking);
+    }
+  }
+
+  /**
    * Evaluates and updates status for a single session.
    */
   async checkSession(sessionId: string, generation = this.pollingGeneration): Promise<SessionStatusResult> {
@@ -123,10 +133,12 @@ export class SessionSupervisor {
     }
 
     this.inFlightChecks.add(sessionId);
+    this.notifyCheckState(sessionId, true);
     try {
       return await this.executeSessionInspection(sessionId, generation);
     } finally {
       this.inFlightChecks.delete(sessionId);
+      this.notifyCheckState(sessionId, false);
     }
   }
 

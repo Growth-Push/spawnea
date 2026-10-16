@@ -36,6 +36,7 @@ import { LocalDiscoveryModal } from './components/LocalDiscoveryModal';
 import { ControlFinalizationModal } from './components/ControlFinalizationModal';
 import { AgentSetupModal } from './components/AgentSetupModal';
 import { spawneaSessionTabKey } from './product-storage';
+import { useVisibleRefresh } from './hooks/useVisibleRefresh';
 import { Terminal, Plus } from 'lucide-react';
 
 export const UI_ZOOM_STORAGE_KEY = 'spawnea:ui:zoom';
@@ -126,6 +127,7 @@ export function App(): React.JSX.Element {
   const [gitSyncBySessionId, setGitSyncBySessionId] = useState<Record<string, { ahead: number; behind: number }>>({});
   const [gitUnavailableBySessionId, setGitUnavailableBySessionId] = useState<Record<string, boolean>>({});
   const [gitRefreshNonce, setGitRefreshNonce] = useState(0);
+  const { refreshingIds, setChecking } = useVisibleRefresh();
   const [statusDetailsMap, setStatusDetailsMap] = useState<Record<string, import('@spawnea/domain').SessionStatusResult>>({});
   const [catalog, setCatalog] = useState<OperationalCatalog | null>(null);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
@@ -309,6 +311,10 @@ export function App(): React.JSX.Element {
         setGitRefreshNonce((current) => current + 1);
       });
       unsubs.push(unStatus);
+    }
+
+    if (window.spawneaApi?.onCheckStateChanged) {
+      unsubs.push(window.spawneaApi.onCheckStateChanged(setChecking));
     }
 
     if (window.spawneaApi?.onSessionActivate) {
@@ -1314,6 +1320,7 @@ export function App(): React.JSX.Element {
         hostInfoMap={hostInfoMap}
         hostHealthMap={hostHealthMap}
         statusDetailsMap={statusDetailsMap}
+        refreshingSessionIds={refreshingIds}
         gitDirtyBySessionId={gitDirtyBySessionId}
         gitChangeCountBySessionId={gitChangeCountBySessionId}
         activeSessionId={activeSessionId}
