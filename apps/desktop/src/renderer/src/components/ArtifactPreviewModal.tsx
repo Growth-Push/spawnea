@@ -1,3 +1,4 @@
+import { MarkdownPreview } from './MarkdownPreview';
 import React, { useState, useEffect } from 'react';
 import type { Artifact, FileContentResult } from '@spawnea/domain';
 import {
@@ -412,9 +413,7 @@ export function ArtifactPreviewModal({
               />
             </div>
           ) : isMarkdown && activeTab === 'rendered' && contentResult?.content ? (
-            <div className="p-8 max-w-4xl mx-auto text-zinc-200 text-sm leading-relaxed font-sans space-y-4">
-              {renderMarkdown(contentResult.content)}
-            </div>
+            <MarkdownPreview content={contentResult.content} />
           ) : isJson && contentResult?.content ? (
             <div className="p-4 font-mono text-xs text-zinc-200 overflow-auto">
               <pre className="p-4 bg-[#12161c] border border-[#21262d] rounded-lg overflow-x-auto text-emerald-300">
@@ -451,64 +450,6 @@ export function ArtifactPreviewModal({
       </div>
     </div>
   );
-}
-
-function renderMarkdown(md: string): React.JSX.Element[] {
-  const lines = md.split('\n');
-  const elements: React.JSX.Element[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    if (line.startsWith('# ')) {
-      elements.push(
-        <h1 key={i} className="text-xl font-bold text-white pb-2 border-b border-[#30363d] mt-4 mb-2">
-          {line.replace('# ', '')}
-        </h1>
-      );
-    } else if (line.startsWith('## ')) {
-      elements.push(
-        <h2 key={i} className="text-lg font-semibold text-white pb-1 border-b border-[#30363d]/60 mt-3 mb-2">
-          {line.replace('## ', '')}
-        </h2>
-      );
-    } else if (line.startsWith('### ')) {
-      elements.push(
-        <h3 key={i} className="text-sm font-semibold text-emerald-400 mt-2 mb-1">
-          {line.replace('### ', '')}
-        </h3>
-      );
-    } else if (line.startsWith('- ') || line.startsWith('* ')) {
-      elements.push(
-        <li key={i} className="list-disc list-inside text-zinc-300 text-xs ml-2">
-          {line.substring(2)}
-        </li>
-      );
-    } else if (line.startsWith('```')) {
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith('```')) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      elements.push(
-        <pre
-          key={i}
-          className="p-3 bg-[#161b22] border border-[#30363d] rounded text-xs font-mono text-emerald-300 overflow-x-auto my-2"
-        >
-          {codeLines.join('\n')}
-        </pre>
-      );
-    } else if (line.trim().length > 0) {
-      elements.push(
-        <p key={i} className="text-xs text-zinc-300 leading-relaxed">
-          {line}
-        </p>
-      );
-    }
-  }
-
-  return elements;
 }
 
 function formatJsonString(raw: string): string {

@@ -314,6 +314,16 @@ downloads a temporary copy at that moment and tells the user it is a copy. The c
 The pointer model goes through the common host interface, but only local hosts are
 validated. SSH hosts are not validated for this behavior yet.
 
+### Markdown document previews
+
+Workspace-file and artifact previews share a read-only React Markdown renderer
+with GitHub-flavored tables, task lists, nested lists, and fenced code. Reading
+styles use 16px body text and a bounded line length, with horizontally scrollable
+tables and code blocks. Raw views and copying preserve the original source.
+Raw HTML is displayed as text, images are represented by their descriptions,
+and link destinations are shown as text without navigation. Previewing a document
+therefore does not fetch embedded media or execute document HTML.
+
 ### Named profile storage
 
 Named desktop profiles use trimmed, lowercase identities so case variants select
