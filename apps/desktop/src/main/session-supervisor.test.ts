@@ -9,6 +9,7 @@ import { SessionContextStore } from './session-context-store.js';
 import { PtyBroker } from './pty-broker.js';
 import { SessionManager } from './session-manager.js';
 import { SessionSupervisor } from './session-supervisor.js';
+import type { ArtifactManager } from './artifact-manager.js';
 import type { WebContents } from 'electron';
 
 describe('SessionSupervisor', () => {
@@ -132,6 +133,48 @@ describe('SessionSupervisor', () => {
       'needs_input',
       expect.objectContaining({ status: 'needs_input' })
     );
+  });
+
+  it('keeps the 50-line capture for status and scans a separate 250-line capture for artifacts', async () => {
+    const processOutputChunk = vi.fn().mockResolvedValue([]);
+    supervisor = new SessionSupervisor({
+      repositories: repos,
+      sessionManager,
+      contextStore,
+      ptyBroker,
+      artifactManager: { processOutputChunk } as unknown as ArtifactManager,
+    });
+    supervisor.setWebContentsGetter(() => mockWebContents);
+
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Scan artifacts',
+    });
+    mockHost.customRules.push({
+      pattern: 'tmux list-panes -t',
+      response: { stdout: '9999:::claude:::0\n', stderr: '', exitCode: 0 },
+    });
+    mockHost.customRules.push({
+      pattern: 'tmux capture-pane',
+      response: (command) => ({
+        stdout: command.includes('-S -250')
+          ? 'Saved /tmp/demo/shot.png'
+          : 'Do you want to run `npm test`? [y/N]',
+        stderr: '',
+        exitCode: 0,
+      }),
+    });
+
+    const result = await supervisor.checkSession(session.id);
+
+    const captures = mockHost.executedCommands.map((c) => c.command).filter((c) => c.includes('capture-pane'));
+    expect(captures.some((c) => c.includes('-S -50'))).toBe(true);
+    expect(captures.some((c) => c.includes('-S -250'))).toBe(true);
+    expect(result.status).toBe('needs_input');
+    expect(result.detectedPrompt).toContain('Do you want to run `npm test`? [y/N]');
+    expect(processOutputChunk).toHaveBeenCalledWith(session.id, ['Saved /tmp/demo/shot.png'], 'claude');
   });
 
   it('detects working when active PTY stream activity is received', async () => {

@@ -208,6 +208,13 @@ export interface Artifact {
   createdAt: Date;
 }
 
+/** Outcome of opening an artifact in the OS default app. */
+export interface ArtifactOpenResult {
+  opened: boolean;
+  /** True when the app opened a temporary copy because the original is on a remote host. */
+  temporaryCopy: boolean;
+}
+
 export interface FileEntry {
   name: string;
   path: string;

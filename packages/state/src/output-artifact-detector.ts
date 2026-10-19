@@ -1,11 +1,13 @@
 import { stripAnsi } from './prompt-detector.js';
-import { resolveContainedPath } from '@spawnea/domain';
+import { isPathContained, resolveContainedPath, canonicalizePath } from '@spawnea/domain';
 
 export interface DetectedOutputArtifact {
   rawMatch: string;
   path: string;
   normalizedPath: string;
   filename: string;
+  /** True when the path is outside the session workspace (absolute or `~/` only). */
+  external: boolean;
   source: 'tool_call' | 'terminal_output' | 'capture_pane';
   harnessHint?: string;
   confidence: number;
@@ -15,6 +17,50 @@ export interface OutputDetectorOptions {
   worktreePath: string;
   harness?: string;
   blacklistPatterns?: string[];
+  /** Real `$HOME` of the session host, used to resolve `~/` paths. Without it, `~/` paths are ignored. */
+  homeDir?: string;
+}
+
+/** Extensions accepted for artifacts outside the project workspace. */
+export const EXTERNAL_ARTIFACT_EXTENSIONS: ReadonlySet<string> = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp',
+  'pdf',
+  'md', 'txt', 'yaml', 'yml', 'json', 'toml', 'csv', 'ini', 'conf',
+]);
+
+export function isExternalArtifactFilename(filename: string): boolean {
+  const dot = filename.lastIndexOf('.');
+  if (dot <= 0 || dot === filename.length - 1) return false;
+  return EXTERNAL_ARTIFACT_EXTENSIONS.has(filename.slice(dot + 1).toLowerCase());
+}
+
+const IMAGE_SIGNATURES: Record<string, (head: Buffer) => boolean> = {
+  png: (b) => b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  jpg: (b) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  gif: (b) => b.length >= 6 && /^GIF8[79]a$/.test(b.subarray(0, 6).toString('latin1')),
+  webp: (b) => b.length >= 12 && b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP',
+};
+IMAGE_SIGNATURES.jpeg = IMAGE_SIGNATURES.jpg;
+
+/**
+ * Validates the leading bytes of a file outside the workspace: the extension
+ * must be allowed, images and PDFs must carry a matching signature, and text
+ * must be non-binary UTF-8. `head` is a prefix of the file, not necessarily all of it.
+ */
+export function validateExternalArtifactContent(filename: string, head: Buffer): boolean {
+  if (!isExternalArtifactFilename(filename)) return false;
+  if (head.length === 0) return false;
+  const ext = filename.slice(filename.lastIndexOf('.') + 1).toLowerCase();
+  if (ext in IMAGE_SIGNATURES) return IMAGE_SIGNATURES[ext](head);
+  if (ext === 'pdf') return head.subarray(0, 1024).includes('%PDF-');
+  if (head.includes(0)) return false;
+  try {
+    // `stream` tolerates a multi-byte sequence cut off at the end of the prefix.
+    new TextDecoder('utf-8', { fatal: true }).decode(head, { stream: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export const DEFAULT_BLACKLIST_PATTERNS: string[] = [
@@ -160,18 +206,11 @@ export function stripPathDelimiters(candidate: string): string {
   return candidate.slice(start, end).trim();
 }
 
-function expandHomePath(candidate: string, worktreePath: string): string {
+function expandHomePath(candidate: string, homeDir: string | undefined): string | null {
   if (!candidate.startsWith('~/') && !candidate.startsWith('~\\')) return candidate;
-
-  // The remote user's home is not available as a separate session field. For
-  // the usual POSIX layouts, infer it from the resolved worktree root.
-  const portableWorktree = worktreePath.replace(/\\/g, '/');
-  const homeMatch = portableWorktree.match(
-    /^(\/(?:home|Users)\/[^/]+|[A-Za-z]:\/[Uu][Ss][Ee][Rr][Ss]\/[^/]+)(?:\/|$)/
-  );
-  return homeMatch ? `${homeMatch[1]}/${candidate.slice(2).replace(/\\/g, '/')}` : candidate;
+  if (!homeDir || !/^(?:\/|[A-Za-z]:[\\/])/.test(homeDir)) return null;
+  return `${homeDir.replace(/[\\/]+$/, '')}/${candidate.slice(2).replace(/\\/g, '/')}`;
 }
-
 
 /**
  * Parses terminal lines and capture-pane output to detect candidate files created or edited by LLM agents.
@@ -217,17 +256,20 @@ export function detectOutputArtifacts(
         continue;
       }
 
-      // Normalize and enforce the active worktree boundary. Terminal output is
-      // untrusted input: absolute paths outside the worktree and relative
-      // traversal paths must never become artifact candidates.
+      // Normalize the candidate. Terminal output is untrusted input: paths
+      // inside the worktree are accepted as before; outside it only absolute
+      // and `~/` paths with an allowed type, never relative traversal.
+      const expanded = expandHomePath(cleanPath, options.homeDir);
+      if (expanded === null) continue;
       let normalizedPath: string;
+      let external = false;
       try {
-        normalizedPath = resolveContainedPath(
-          normalizedWorktree,
-          expandHomePath(cleanPath, normalizedWorktree)
-        );
+        normalizedPath = resolveContainedPath(normalizedWorktree, expanded);
       } catch {
-        continue;
+        if (!expanded.startsWith('/')) continue;
+        normalizedPath = canonicalizePath(expanded);
+        if (isPathContained(normalizedWorktree, normalizedPath)) continue;
+        external = true;
       }
 
       const filename = normalizedPath.split('/').pop() || cleanPath;
@@ -248,12 +290,17 @@ export function detectOutputArtifacts(
         continue;
       }
 
+      if (external && !isExternalArtifactFilename(filename)) {
+        continue;
+      }
+
       if (!detectedMap.has(normalizedPath)) {
         detectedMap.set(normalizedPath, {
           rawMatch: match[0].trim(),
           path: cleanPath,
           normalizedPath,
           filename,
+          external,
           source: patternDef.source,
           harnessHint: patternDef.hint || options.harness,
           confidence: patternDef.confidence,

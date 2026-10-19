@@ -258,7 +258,7 @@ export interface IpcChannels {
   'session:deleteArtifact': (sessionId: string, artifactId: string) => Promise<boolean>;
   'session:clearArtifacts': (sessionId: string) => Promise<number>;
   'session:saveArtifactAs': (sessionId: string, artifactId: string) => Promise<boolean>;
-  'session:openArtifactInOs': (sessionId: string, artifactId: string) => Promise<boolean>;
+  'session:openArtifactInOs': (sessionId: string, artifactId: string) => Promise<import('./index.js').ArtifactOpenResult>;
 
   // PTY Streaming Events
   'pty:write': (channelId: string, data: string) => void;

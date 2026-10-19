@@ -53,7 +53,7 @@ describe('ArtifactGallery Component', () => {
       deleteArtifact: vi.fn().mockResolvedValue(true),
       clearArtifacts: vi.fn().mockResolvedValue(2),
       saveArtifactAs: vi.fn().mockResolvedValue(true),
-      openArtifactInOs: vi.fn().mockResolvedValue(true),
+      openArtifactInOs: vi.fn().mockResolvedValue({ opened: true, temporaryCopy: false }),
     };
     if (typeof localStorage !== 'undefined') {
       localStorage.clear();

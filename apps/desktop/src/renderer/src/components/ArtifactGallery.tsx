@@ -203,9 +203,10 @@ export function ArtifactGallery({
   const runOpenInOs = async (art: Artifact) => {
     if (window.spawneaApi?.openArtifactInOs) {
       try {
-        const opened = await window.spawneaApi.openArtifactInOs(sessionId, art.id);
-        if (opened) showToast('Opened in default app');
-        else showToast(`Unable to open ${art.filename}`);
+        const result = await window.spawneaApi.openArtifactInOs(sessionId, art.id);
+        if (!result.opened) showToast(`Unable to open ${art.filename}`);
+        else if (result.temporaryCopy) showToast('Opened a temporary copy; changes will not be saved to the remote file');
+        else showToast('Opened in default app');
       } catch (err) {
         showToast(`Unable to open ${art.filename}: ${err instanceof Error ? err.message : 'Unknown error'}`);
       }
