@@ -18,6 +18,7 @@ import {
   type Session,
   type LogLevel,
   type ArtifactDirection,
+  type ArtifactOpenResult,
 } from '@spawnea/domain';
 import { CatalogManager } from './catalog-manager.js';
 import { SessionContextStore } from './session-context-store.js';
@@ -832,20 +833,17 @@ function registerIpcHandlers(
     }
   });
 
-  ipcMain.handle('session:openArtifactInOs', async (_event, sessionId: string, artifactId: string) => {
+  ipcMain.handle('session:openArtifactInOs', async (_event, sessionId: string, artifactId: string): Promise<ArtifactOpenResult> => {
     try {
-      const artifact = await repos.artifacts.findById(artifactId);
-      if (!artifact) return false;
-      const content = await artManager.getArtifactContentForExport(sessionId, artifactId);
-      if (content.isTruncated) {
-        throw new Error(`Artifact '${artifact.filename}' exceeds the configured file limit and cannot be opened completely`);
+      const target = await artManager.resolveArtifactOpenTarget(sessionId, artifactId);
+      try {
+        const openError = await shell.openPath(target.path);
+        if (openError) throw new Error(`Unable to open artifact: ${openError}`);
+      } catch (openFailure) {
+        if (target.temporaryCopy) await artManager.discardTemporaryCopy(target.path);
+        throw openFailure;
       }
-      if (content.cachedLocalPath && existsSync(content.cachedLocalPath)) {
-        const openError = await shell.openPath(content.cachedLocalPath);
-        if (openError) throw new Error(`Unable to open artifact '${artifact.filename}': ${openError}`);
-        return true;
-      }
-      throw new Error(`Artifact '${artifact.filename}' could not be cached locally for opening`);
+      return { opened: true, temporaryCopy: target.temporaryCopy };
     } catch (err) {
       logger.error('Failed to handle session:openArtifactInOs', err, { sessionId, artifactId });
       throw err;
@@ -1098,6 +1096,10 @@ app.whenReady().then(async () => {
       sessionManager,
       cacheDir: artifactsCacheDir,
       logger: logger.child('artifacts'),
+    });
+    void artifactManager.removeTemporaryCopies();
+    artifactManager.removeDetectedArtifactCaches().catch((error: unknown) => {
+      logger.warn('Could not clean legacy artifact cache', { error });
     });
 
     notificationBroker = new NotificationBroker({

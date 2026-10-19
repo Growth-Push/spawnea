@@ -132,7 +132,12 @@ export function ArtifactPreviewModal({
   const handleOpenInOs = async () => {
     if (window.spawneaApi?.openArtifactInOs) {
       try {
-        await window.spawneaApi.openArtifactInOs(sessionId, artifact.id);
+        const result = await window.spawneaApi.openArtifactInOs(sessionId, artifact.id);
+        setActionError(
+          result.temporaryCopy
+            ? 'Opened a temporary copy; changes will not be saved to the remote file.'
+            : null
+        );
       } catch (err) {
         setActionError(err instanceof Error ? err.message : 'Unable to open the complete artifact.');
       }

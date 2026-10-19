@@ -31,6 +31,14 @@ Spawnea interacts with remote shells and developer machines. Changes involving t
 - artifact previews and untrusted file content;
 - credentials, environment variables, and logs.
 
+Artifacts detected in terminal output may point at files outside the project.
+Only absolute and `~/` paths are accepted (`../` is rejected); the real target of
+symlinks is resolved and re-checked; only png, jpg/jpeg, gif, webp, pdf, md, txt,
+yaml/yml, json, toml, csv, ini, and conf are allowed; content must match the file
+signature or be non-binary text; SVG is rejected; and the existing exclusion list
+still applies. Previews read the original file and never copy it into the artifact
+cache. Remote hosts are not validated for this behavior yet.
+
 Never commit private keys, access tokens, passwords, or production secrets.
 
 SSH connections verify the server key strictly against the user's OpenSSH

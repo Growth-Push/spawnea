@@ -20,6 +20,11 @@ import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
 import type { ArtifactManager } from './artifact-manager.js';
 
+/** Terminal lines used for status detection (unchanged). */
+const STATUS_DETECTION_TAIL_LINES = 50;
+/** Terminal lines scanned for artifact paths. */
+const ARTIFACT_DETECTION_TAIL_LINES = 250;
+
 export interface SessionSupervisorOptions {
   repositories: Repositories;
   sessionManager: SessionManager;
@@ -159,6 +164,7 @@ export class SessionSupervisor {
     let paneCurrentCommand: string | undefined = undefined;
     let panePid: number | undefined = undefined;
     let tailLines: string[] = [];
+    let artifactTailLines: string[] = [];
 
     let harnessName: string | undefined = undefined;
     if (session.agentId) {
@@ -184,7 +190,21 @@ export class SessionSupervisor {
         }
 
         if (!paneDead) {
-          tailLines = await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, 50);
+          tailLines = await this.tmuxManager.capturePaneTail(
+            host,
+            session.tmuxSessionName,
+            STATUS_DETECTION_TAIL_LINES
+          );
+          // Artifact detection scans a longer, separate capture so the status
+          // detector keeps receiving exactly the capture it always had.
+          if (this.artifactManager) {
+            artifactTailLines = await this.tmuxManager
+              .capturePaneTail(host, session.tmuxSessionName, ARTIFACT_DETECTION_TAIL_LINES)
+              .catch((error: unknown) => {
+                this.logger.debug('Could not capture terminal tail for artifact detection', { error });
+                return [];
+              });
+          }
         }
       }
     } catch (err) {
@@ -218,11 +238,11 @@ export class SessionSupervisor {
     }
 
     // Auto-detect candidate output artifacts from terminal tail lines
-    if (this.artifactManager && tailLines && tailLines.length > 0) {
+    if (this.artifactManager && artifactTailLines && artifactTailLines.length > 0) {
       try {
         const createdArtifacts = await this.artifactManager.processOutputChunk(
           sessionId,
-          tailLines,
+          artifactTailLines,
           harnessName
         );
 

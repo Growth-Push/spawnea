@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { detectOutputArtifacts, stripPathLineNumber } from '../src/output-artifact-detector.js';
+import { detectOutputArtifacts, stripPathLineNumber, validateExternalArtifactContent } from '../src/output-artifact-detector.js';
 
 describe('OutputArtifactDetector', () => {
   const worktreePath = '/workspace/spawnea';
@@ -106,18 +106,35 @@ Created generated-schema.json
     expect(results.some((r) => r.filename === 'generated-schema.json')).toBe(false);
   });
 
-  it('rejects external absolute paths, traversal, and prefix collisions', () => {
+  it('rejects relative traversal and prefix collisions but keeps allowed external absolute paths', () => {
     const output = `
 Created file /tmp/external-report.md
 Created file ../outside-report.md
 Created file /workspace/spawnea-extra/report.md
 Created file /workspace/spawnea/docs/../safe-report.md
+Created file /tmp/tool.sh
+Created file /tmp/drawing.svg
 `;
 
     const results = detectOutputArtifacts(output, { worktreePath });
 
-    expect(results.map((result) => result.normalizedPath)).toEqual([
-      '/workspace/spawnea/safe-report.md',
+    expect(results.map((result) => [result.normalizedPath, result.external])).toEqual([
+      ['/tmp/external-report.md', true],
+      ['/workspace/spawnea-extra/report.md', true],
+      ['/workspace/spawnea/safe-report.md', false],
+    ]);
+  });
+
+  const demoHome = ['', 'home', 'demo_usr'].join('/');
+
+  it('resolves ~/ against the supplied host home and ignores it without one', () => {
+    const output = 'Wrote ~/.config/demo/settings.yaml and ~/pics/shot.png';
+    expect(detectOutputArtifacts(output, { worktreePath })).toEqual([]);
+
+    const results = detectOutputArtifacts(output, { worktreePath, homeDir: `${demoHome}/` });
+    expect(results.map((result) => [result.normalizedPath, result.external])).toEqual([
+      [`${demoHome}/.config/demo/settings.yaml`, true],
+      [`${demoHome}/pics/shot.png`, true],
     ]);
   });
 
@@ -140,6 +157,7 @@ artifact-demo.md
     const homeRoot = ['', 'home', 'demo_usr', 'demo-proj'].join('/');
     const homeResults = detectOutputArtifacts('See ~/demo-proj/relative-report.pdf:8', {
       worktreePath: homeRoot,
+      homeDir: ['', 'home', 'demo_usr'].join('/'),
     });
     expect(homeResults[0]?.normalizedPath).toBe(`${homeRoot}/relative-report.pdf`);
 
@@ -151,6 +169,7 @@ artifact-demo.md
 
     const windowsHomeResults = detectOutputArtifacts('See ~\\demo-proj\\relative-report.pdf:8', {
       worktreePath: windowsRoot,
+      homeDir: 'C:/users/demo',
     });
     expect(windowsHomeResults[0]?.normalizedPath).toBe('C:/users/demo/demo-proj/relative-report.pdf');
   });
@@ -211,5 +230,29 @@ Other matches:
       (r) => r.normalizedPath === '/workspace/spawnea/apps/desktop/src/main/session-supervisor.ts'
     );
     expect(supervisorMatches).toHaveLength(1);
+  });
+});
+
+describe('validateExternalArtifactContent', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+
+  it('requires a matching signature for images and PDFs', () => {
+    expect(validateExternalArtifactContent('a.png', png)).toBe(true);
+    expect(validateExternalArtifactContent('a.jpg', Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe(true);
+    expect(validateExternalArtifactContent('a.gif', Buffer.from('GIF89a....'))).toBe(true);
+    expect(validateExternalArtifactContent('a.webp', Buffer.from('RIFF\0\0\0\0WEBPVP8 '))).toBe(true);
+    expect(validateExternalArtifactContent('a.pdf', Buffer.from('%PDF-1.7'))).toBe(true);
+    expect(validateExternalArtifactContent('a.jpg', png)).toBe(false);
+    expect(validateExternalArtifactContent('a.pdf', Buffer.from('plain text'))).toBe(false);
+  });
+
+  it('accepts UTF-8 text, tolerates a cut multi-byte tail, and rejects binary or unsupported types', () => {
+    expect(validateExternalArtifactContent('a.yaml', Buffer.from('key: ñ\n'))).toBe(true);
+    expect(validateExternalArtifactContent('a.txt', Buffer.from('ñ').subarray(0, 1))).toBe(true);
+    expect(validateExternalArtifactContent('a.json', Buffer.from([0x7b, 0x00]))).toBe(false);
+    expect(validateExternalArtifactContent('a.txt', Buffer.from([0xff, 0xfe, 0x41]))).toBe(false);
+    expect(validateExternalArtifactContent('a.svg', Buffer.from('<svg/>'))).toBe(false);
+    expect(validateExternalArtifactContent('a.sh', Buffer.from('echo'))).toBe(false);
+    expect(validateExternalArtifactContent('a.txt', Buffer.alloc(0))).toBe(false);
   });
 });

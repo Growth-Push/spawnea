@@ -272,7 +272,9 @@ export interface Artifact {
   id: string;
   sessionId: string;
   direction: ArtifactDirection;
+  /** Real path on the session host. Detected artifacts point at the original file. */
   remotePath: string;
+  /** Only set for uploaded or pasted inputs; detected artifacts never have a cached copy. */
   cachedLocalPath?: string;
   filename: string;
   mimeType: string;
@@ -280,6 +282,37 @@ export interface Artifact {
   createdAt: Date;
 }
 ```
+
+### Artifact pointers and external files
+
+Artifacts detected from terminal output or promoted from the workspace are
+**pointers** to the original file on the session host (host, real path, name,
+type, size). Spawnea copies no content at detection time and writes no artifact
+cache for them; previews read the original on demand and show its current state.
+A file that is deleted or no longer readable makes its preview fail as
+unavailable; there is no snapshot. Upload and paste inputs are unchanged and
+keep their cached copy. Cache files written by earlier versions for detected
+artifacts are removed at startup, while the existing records keep working.
+
+Detection scans a separate capture of the last 250 terminal lines; status
+detection keeps its own unchanged 50-line capture. The host `$HOME` is queried once per host, and paths that are already registered are skipped before any `realpath` call. The host `realpath` of every candidate decides how it is treated, so a
+symlink is judged by its real target:
+
+* Inside the project: any type already accepted is kept, and files tracked by Git
+  stay ignored.
+* Outside the project: only absolute paths and `~/` (resolved with the session
+  host's real `$HOME`) are considered; relative `../` paths are rejected. Accepted
+  types are png, jpg/jpeg, gif, webp, pdf, md, txt, yaml/yml, json, toml, csv, ini,
+  and conf. Content is validated (image/PDF signature, or non-binary UTF-8 text);
+  external SVG is not accepted. The existing exclusion list applies; no new
+  credential list exists. Missing, unreadable, or unsupported files never become
+  previews, and no permissions are escalated.
+
+"Open in default app" opens the original file for local hosts. For remote hosts it
+downloads a temporary copy at that moment and tells the user it is a copy. The copy lives in a Spawnea-owned directory at a stable path per artifact (overwritten on each open), is deleted if the download or the open fails, and any leftovers are removed at startup.
+
+The pointer model goes through the common host interface, but only local hosts are
+validated. SSH hosts are not validated for this behavior yet.
 
 ### Named profile storage
 
@@ -682,7 +715,7 @@ The PTY broker forwards output and input between the host adapter and the render
 
 ### 9.1 Terminal data retention boundary
 
-PTY bytes are forwarded to the renderer for live display and used transiently for activity metrics. Spawnea does not record a terminal transcript, upload terminal output to a Spawnea service, or run a remote terminal recorder. Status checks inspect a bounded `tmux capture-pane` tail in memory; that tail is not persisted as terminal history. Explicit state-feedback reports may persist a recent tail when the user submits a diagnostic report, and artifact actions may persist files the user uploads or the detector registers. Diagnostic logs use structured metadata, are stored in private application user-data storage by default, and use bounded asynchronous rotation; an explicit `SPAWNEA_LOG_FILE` override is the caller's responsibility to keep private.
+PTY bytes are forwarded to the renderer for live display and used transiently for activity metrics. Spawnea does not record a terminal transcript, upload terminal output to a Spawnea service, or run a remote terminal recorder. Status checks inspect a bounded `tmux capture-pane` tail in memory; that tail is not persisted as terminal history. Explicit state-feedback reports may persist a recent tail when the user submits a diagnostic report, and artifact actions may persist files the user uploads; the detector registers only pointers to original files and copies no content. Diagnostic logs use structured metadata, are stored in private application user-data storage by default, and use bounded asynchronous rotation; an explicit `SPAWNEA_LOG_FILE` override is the caller's responsibility to keep private.
 
 ### 9.2 Claude turn completion
 

@@ -225,7 +225,7 @@ export const api = {
     ipcRenderer.invoke('session:clearArtifacts', sessionId),
   saveArtifactAs: (sessionId: string, artifactId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:saveArtifactAs', sessionId, artifactId),
-  openArtifactInOs: (sessionId: string, artifactId: string): Promise<boolean> =>
+  openArtifactInOs: (sessionId: string, artifactId: string): Promise<import('@spawnea/domain').ArtifactOpenResult> =>
     ipcRenderer.invoke('session:openArtifactInOs', sessionId, artifactId),
   openSnippetInEditor: (text: string): Promise<boolean> =>
     ipcRenderer.invoke('terminal:openSnippetInEditor', text),
