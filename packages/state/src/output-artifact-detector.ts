@@ -209,7 +209,9 @@ export function stripPathDelimiters(candidate: string): string {
 function expandHomePath(candidate: string, homeDir: string | undefined): string | null {
   if (!candidate.startsWith('~/') && !candidate.startsWith('~\\')) return candidate;
   if (!homeDir || !/^(?:\/|[A-Za-z]:[\\/])/.test(homeDir)) return null;
-  return `${homeDir.replace(/[\\/]+$/, '')}/${candidate.slice(2).replace(/\\/g, '/')}`;
+  let end = homeDir.length;
+  while (end > 0 && (homeDir[end - 1] === '/' || homeDir[end - 1] === '\\')) end--;
+  return `${homeDir.slice(0, end)}/${candidate.slice(2).replace(/\\/g, '/')}`;
 }
 
 /**

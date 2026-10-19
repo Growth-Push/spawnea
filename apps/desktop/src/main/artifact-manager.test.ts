@@ -690,6 +690,91 @@ describe('ArtifactManager', () => {
     });
   });
 
+  describe('opening and polling costs', () => {
+    const realpathCalls = (path: string) =>
+      mockHost.executedCommands.filter((c) => c.command === `realpath -- '${path}'`).length;
+
+    it('opens an upload cache copy only when it is owned, the right size, and not a shared legacy file', async () => {
+      const upload = await artifactManager.createTextArtifact(sessionId, 'snippet.txt', 'content', 'output');
+      const download = vi.spyOn(mockHost, 'downloadFile').mockImplementation(async (_remote, local) => {
+        writeFileSync(local, 'content');
+      });
+
+      const good = await artifactManager.resolveArtifactOpenTarget(sessionId, upload.id);
+      expect(good).toEqual({ path: upload.cachedLocalPath, temporaryCopy: false });
+
+      writeFileSync(upload.cachedLocalPath!, 'tampered content!');
+      const mismatched = await artifactManager.resolveArtifactOpenTarget(sessionId, upload.id);
+      expect(mismatched.temporaryCopy).toBe(true);
+      expect(download).toHaveBeenCalledTimes(1);
+
+      const legacyPath = join(artifactManager.getSessionCacheDir(sessionId), 'shared.txt');
+      writeFileSync(legacyPath, 'shared!');
+      const base = { sessionId, direction: 'output' as const, mimeType: 'text/plain', sizeBytes: 7, createdAt: new Date() };
+      await repos.artifacts.save({ ...base, id: 'art-a', remotePath: '/workspace/spawnea/.spawnea/artifacts/shared.txt', cachedLocalPath: legacyPath, filename: 'shared.txt' });
+      await repos.artifacts.save({ ...base, id: 'art-b', remotePath: '/workspace/spawnea/.spawnea/artifacts/other.txt', cachedLocalPath: legacyPath, filename: 'other.txt' });
+      mockHost.mockFiles.set('/workspace/spawnea/.spawnea/artifacts/shared.txt', { content: 'shared!', mimeType: 'text/plain', size: 7 });
+      expect((await artifactManager.resolveArtifactOpenTarget(sessionId, 'art-a')).temporaryCopy).toBe(true);
+    });
+
+    it('deletes a remote copy that exceeds the file limit after downloading', async () => {
+      const limited = new ArtifactManager({
+        repositories: repos,
+        sessionManager,
+        cacheDir: join(tempDir, 'limited'),
+        maxFileBytes: 10,
+      });
+      mockHost.mockFiles.set('/tmp/demo/note.txt', { content: 'hello', mimeType: 'text/plain', size: 5 });
+      const artifact = await limited.handleDetectedOutput(sessionId, '/tmp/demo/note.txt');
+      vi.spyOn(mockHost, 'downloadFile').mockImplementation(async (_remote, local) => {
+        writeFileSync(local, '0123456789ABCDEF');
+      });
+
+      await expect(limited.resolveArtifactOpenTarget(sessionId, artifact!.id)).rejects.toThrow(/per-file limit/);
+      expect(existsSync(join(tempDir, 'artifact-open-copies', artifact!.id))).toBe(false);
+    });
+
+    it('resolves the project root once per chunk and remembers rejected candidates briefly', async () => {
+      const lines = ['a /tmp/demo/one.txt', 'b /tmp/demo/two.txt', 'c /tmp/demo/three.txt'];
+      expect(await artifactManager.processOutputChunk(sessionId, lines)).toEqual([]);
+      expect(realpathCalls('/workspace/spawnea')).toBe(1);
+      expect(realpathCalls('/tmp/demo/one.txt')).toBe(1);
+
+      await artifactManager.processOutputChunk(sessionId, lines);
+      expect(realpathCalls('/tmp/demo/one.txt')).toBe(1);
+
+      // Once the TTL passes the file is looked at again, and it is now found.
+      mockHost.mockFiles.set('/tmp/demo/one.txt', { content: 'hi', mimeType: 'text/plain', size: 2 });
+      const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+      try {
+        const created = await artifactManager.processOutputChunk(sessionId, lines);
+        expect(created.map((a) => a.remotePath)).toEqual(['/tmp/demo/one.txt']);
+        expect(realpathCalls('/tmp/demo/one.txt')).toBe(2);
+      } finally {
+        later.mockRestore();
+      }
+    });
+
+    it('skips a link whose real target is already registered after the first look', async () => {
+      mockHost.mockFiles.set('/tmp/demo/real.txt', { content: 'hi', mimeType: 'text/plain', size: 2 });
+      symlinks.set('/tmp/demo/link.txt', '/tmp/demo/real.txt');
+      expect(await artifactManager.processOutputChunk(sessionId, ['/tmp/demo/real.txt'])).toHaveLength(1);
+
+      expect(await artifactManager.processOutputChunk(sessionId, ['/tmp/demo/link.txt'])).toEqual([]);
+      expect(realpathCalls('/tmp/demo/link.txt')).toBe(1);
+      await artifactManager.processOutputChunk(sessionId, ['/tmp/demo/link.txt']);
+      expect(realpathCalls('/tmp/demo/link.txt')).toBe(1);
+      expect(await repos.artifacts.findBySessionId(sessionId)).toHaveLength(1);
+    });
+
+    it('passes a timeout to host commands used for path resolution', async () => {
+      await artifactManager.processOutputChunk(sessionId, ['/tmp/demo/one.txt']);
+      const probes = mockHost.executedCommands.filter((c) => c.command.startsWith('realpath') || c.command.startsWith('printf'));
+      expect(probes.length).toBeGreaterThan(0);
+      expect(probes.every((c) => c.options?.timeoutMs === 5000)).toBe(true);
+    });
+  });
+
   it('returns PDF previews as data URIs, for project files too', async () => {
     const bytes = Buffer.from('%PDF-1.7\n');
     mockHost.mockFiles.set('/workspace/spawnea/docs/spec.pdf', {
@@ -715,7 +800,8 @@ describe('ArtifactManager', () => {
     expect(await artifactManager.processOutputChunk(sessionId, lines)).toEqual([]);
 
     expect(commands().filter((c) => c === 'printf %s "$HOME"')).toHaveLength(1);
-    expect(commands().slice(afterFirst)).toEqual([]);
+    // Each later chunk only re-resolves the project root, never the registered file.
+    expect(commands().slice(afterFirst)).toEqual(["realpath -- '/workspace/spawnea'", "realpath -- '/workspace/spawnea'"]);
   });
 
   it('removes only the cache of detected artifacts left by earlier versions', async () => {

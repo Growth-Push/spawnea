@@ -107,8 +107,10 @@ describe('ArtifactManager with a local host', () => {
   it('does not create previews for unsupported, missing, unreadable, or escaping paths', async () => {
     writeFileSync(join(outside, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
     writeFileSync(join(outside, 'tool.sh'), 'echo hi\n');
-    writeFileSync(join(outside, 'private.json'), '{}');
-    chmodSync(join(outside, 'private.json'), 0o000);
+    // Permission bits do not stop root, so fall back to content that fails validation.
+    const isRoot = process.getuid?.() === 0;
+    writeFileSync(join(outside, 'private.json'), isRoot ? Buffer.from([0x7b, 0x00, 0x7d]) : '{}');
+    if (!isRoot) chmodSync(join(outside, 'private.json'), 0o000);
     writeFileSync(join(outside, 'bin.json'), Buffer.from([0x7b, 0x00, 0x7d]));
     writeFileSync(join(outside, 'secret.txt'), 'top secret');
     symlinkSync(join(outside, 'icon.svg'), join(outside, 'link.png'));
