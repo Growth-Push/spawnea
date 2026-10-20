@@ -128,9 +128,47 @@ function redactCredentialContinuations(value: string): string {
   return result.join('');
 }
 
+// Keep the existing field grammar, but resume at the actual lexical value end
+// rather than skipping later fields in a regex match's retained flow tail.
+function redactInlineCredentials(source: string): string {
+  const fields = /(?<![\w.-])["']?\b(?:[\w-]+\.)*(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*(?:password|passwd|token|api[_-]?key|secret[_-]?access[_-]?key|(?:secret|private|access|signing|encryption)[_-]?key|secret|authorization|credential)\b["']?[ \t]*(?::[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:''|\\.|[^'\\\r\n])*'|[^\r\n,;}]+?(?=[ \t]+[a-z][\w-]*(?:\.[\w-]+)*[ \t]*=|[\r\n,;}]|$))|=[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:''|\\.|[^'\\\r\n])*'|[^\s,;}]+))/gi;
+  const result: string[] = [];
+  let cursor = 0;
+  let field: RegExpExecArray | null;
+  while ((field = fields.exec(source))) {
+    const match = field[0];
+    const offset = field.index;
+    // Bare colon fields need a line/object/list boundary; quoted keys and
+    // equals assignments remain recognizable anywhere, not arbitrary prose.
+    const bareColon = /^[\w-]+(?:\.[\w-]+)*[ \t]*:/.test(match);
+    const prefix = source.slice(0, offset);
+    const fieldBoundary = /(?:^|[\r\n{,;[])[ \t]*$/.test(prefix)
+      || /(?:^|[\r\n])[ \t]*-[ \t]+$/.test(prefix);
+    if (bareColon && !fieldBoundary) {
+      // Reject the prose label, not later recognizable fields its tentative
+      // value match may have consumed. The colon guarantees forward progress.
+      fields.lastIndex = offset + match.indexOf(':') + 1;
+      continue;
+    }
+    // A same-line open sequence alone gives ] delimiter meaning. Preserve
+    // quoted brackets and nonsequence values using the existing lexical cuts.
+    const inSequence = /\[[^\]\r\n]*$/.test(prefix);
+    const quotedValue = /^["']?[\w.-]+["']?[ \t]*[:=][ \t]*["']/.test(match);
+    const close = inSequence && !quotedValue ? match.indexOf(']') : -1;
+    result.push(source.slice(cursor, offset), '[REDACTED CREDENTIAL]');
+    // Every match includes a nonempty key before a possible ], so this always
+    // advances. Revisit only the unconsumed tail, without recursion or rerunning
+    // the full redaction pipeline; boundary checks retain original context.
+    cursor = offset + (close >= 0 ? close : match.length);
+    fields.lastIndex = cursor;
+  }
+  result.push(source.slice(cursor));
+  return result.join('');
+}
+
 /** Redaction is best-effort: arbitrary unlabeled secrets cannot be recognized. */
 export function redactAgentContextValue(value: string): string {
-  return redactCredentialContinuations(value)
+  const redacted = redactCredentialContinuations(value)
     .replace(/op:\/\/[^\r\n]*/gi, '[REDACTED 1PASSWORD REFERENCE]')
     .replace(/-----BEGIN [A-Z0-9 _-]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 _-]*PRIVATE KEY-----|$)/gi, '[REDACTED PRIVATE KEY]')
     .replace(/(?<![\w.-])["']?\b(?:[\w-]+\.)*(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*authorization\b["']?\s*[:=]\s*(?:"(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+"|'(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+'|(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+)/gi, '[REDACTED AUTHORIZATION]')
@@ -147,22 +185,14 @@ export function redactAgentContextValue(value: string): string {
         ? `[REDACTED AUTHORIZATION]${token.slice(candidate.length)}` : match;
     })
     // Token boundaries avoid interpreting the embedded sk- in task-implementation as a key.
-    .replace(/(?<![\w-])(?:sk-[\w-]{8,}|glpat-[\w-]{15,}|github_pat_[\w]+|gh[pousr]_[\w]{15,}|xox[baprs]-[\w-]+|AKIA[A-Z0-9]{16})(?![\w-])/g, '[REDACTED TOKEN]')
-    // Match the complete qualified key, including literal dotted labels,
-    // environment-style and camelCase prefixes; no property traversal occurs.
-    // Colon values can contain spaces; stop at line/delimiter or a neighboring equals assignment.
-    // Equals values remain single tokens unless quoted, preserving ordinary adjacent assignments.
-    // Doubled YAML single quotes stay inside the value, as in the multiline scanner.
-    .replace(/(?<![\w.-])["']?\b(?:[\w-]+\.)*(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*(?:password|passwd|token|api[_-]?key|secret[_-]?access[_-]?key|(?:secret|private|access|signing|encryption)[_-]?key|secret|authorization|credential)\b["']?[ \t]*(?::[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:''|\\.|[^'\\\r\n])*'|[^\r\n,;}]+?(?=[ \t]+[a-z][\w-]*(?:\.[\w-]+)*[ \t]*=|[\r\n,;}]|$))|=[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:''|\\.|[^'\\\r\n])*'|[^\s,;}]+))/gi, (match, offset: number, source: string) => {
-      // Bare colon fields need a line/object boundary or a line-start YAML list indicator.
-      // Inline hyphens in prose are not structured field boundaries.
-      // Quoted keys and equals assignments remain recognizable anywhere.
-      const bareColon = /^[\w-]+(?:\.[\w-]+)*[ \t]*:/.test(match);
-      const prefix = source.slice(0, offset);
-      const fieldBoundary = /(?:^|[\r\n{,;])[ \t]*$/.test(prefix)
-        || /(?:^|[\r\n])[ \t]*-[ \t]+$/.test(prefix);
-      return !bareColon || fieldBoundary ? '[REDACTED CREDENTIAL]' : match;
-    })
+    .replace(/(?<![\w-])(?:sk-[\w-]{8,}|glpat-[\w-]{15,}|github_pat_[\w]+|gh[pousr]_[\w]{15,}|xox[baprs]-[\w-]+|AKIA[A-Z0-9]{16})(?![\w-])/g, '[REDACTED TOKEN]');
+  return redactInlineCredentials(redacted)
+    // Best-effort raw user:password pastes may include unescaped ?/#. A numeric
+    // prefix before either is ambiguous with a valid host:port URL: preserve it.
+    // Bracketed IPv6 authorities, ordinary query/fragment emails and paths must
+    // not become userinfo merely because they contain a later @.
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s/@?#:[\]]+):([^\s/@]+)@/gi, (match, scheme: string, _user: string, password: string) =>
+      /^\d+[?#]/.test(password) ? match : `${scheme}[REDACTED]@`)
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@?#]+@/gi, '$1[REDACTED]@');
 }
 

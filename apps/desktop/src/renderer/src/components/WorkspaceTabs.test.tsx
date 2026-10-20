@@ -258,6 +258,55 @@ describe('WorkspaceTabs Component', () => {
     expect(screen.queryByText('Agent context copied')).toBeNull();
   });
 
+  it.each(['success', 'failure', 'remount'])('orders browser context writes across %s without stale feedback', async (outcome) => {
+    let finishOld!: () => void;
+    let finishNew!: () => void;
+    let clipboard = '';
+    const writeText = vi.fn()
+      .mockImplementationOnce((text: string) => new Promise<void>((resolve, reject) => {
+        finishOld = () => {
+          if (outcome === 'failure') reject(new Error('fictional old failure'));
+          else { clipboard = text; resolve(); }
+        };
+      }))
+      .mockImplementationOnce((text: string) => new Promise<void>((resolve) => {
+        finishNew = () => { clipboard = text; resolve(); };
+      }))
+      .mockRejectedValueOnce(new Error('fictional current failure'))
+      .mockImplementation(async (text: string) => { clipboard = text; });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const onTabChange = vi.fn();
+    const first = render(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={onTabChange} />);
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    await act(async () => {});
+    const next = { ...mockSession, id: 'session-fictional-next', task: 'Review fictional latest context' };
+    if (outcome === 'remount') {
+      first.unmount();
+      render(<WorkspaceTabs session={next} activeTab="details" onTabChange={onTabChange} />);
+    } else {
+      first.rerender(<WorkspaceTabs session={next} activeTab="details" onTabChange={onTabChange} />);
+    }
+    expect((screen.getByTestId('copy-agent-context-button') as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    await act(async () => {});
+    // Capture before settling, but settle every promise even on the old implementation.
+    const dispatchedBeforeOldSettled = writeText.mock.calls.length;
+    await act(async () => finishOld());
+    expect(screen.queryByText('Agent context copied')).toBeNull();
+    expect(screen.queryByText('Could not copy agent context')).toBeNull();
+    expect((screen.getByTestId('copy-agent-context-button') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finishNew());
+    expect(clipboard).toContain(`task: ${next.task}`);
+    expect(screen.getByText('Agent context copied')).toBeDefined();
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    await screen.findByText('Could not copy agent context');
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    await screen.findByText('Agent context copied');
+    expect(clipboard).toContain(`task: ${next.task}`);
+    expect(writeText).toHaveBeenCalledTimes(4);
+    expect(dispatchedBeforeOldSettled).toBe(1);
+  });
+
   it('renders DetectedOutputBanner only in terminal tab and not in files or diff tabs', async () => {
     const onTabChange = vi.fn();
 

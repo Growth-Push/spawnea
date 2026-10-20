@@ -19,6 +19,48 @@ const server: Server = { id: session.serverId, name: 'Example Host', host: 'excl
 
 describe('session agent context sheet', () => {
   it.each([
+    ['Compare [password: fictional-first] and [token: fictional-second]', 'Compare [[REDACTED CREDENTIAL]] and [[REDACTED CREDENTIAL]]'],
+    ['[password: fictional-first] then [token: fictional-second] then [secret: fictional-third] ordinary suffix', '[[REDACTED CREDENTIAL]] then [[REDACTED CREDENTIAL]] then [[REDACTED CREDENTIAL]] ordinary suffix'],
+    ['- [db.password: fictional-first] versus [api_key: fictional-second] (keep brackets [])', '- [[REDACTED CREDENTIAL]] versus [[REDACTED CREDENTIAL]] (keep brackets [])'],
+    ['[password: fictional-first] and [token: "fictional]second"] end', '[[REDACTED CREDENTIAL]] and [[REDACTED CREDENTIAL]] end'],
+    ["[password: 'fictional]first'] and [token: fictional-second] end", '[[REDACTED CREDENTIAL]] and [[REDACTED CREDENTIAL]] end'],
+    ['password: fictional]suffix', '[REDACTED CREDENTIAL]'],
+    ['[password: fictional-first] ordinary password: ordinary prose', '[[REDACTED CREDENTIAL]] ordinary password: ordinary prose'],
+    ['[password: fictional-first] ordinary password: ordinary prose [token: fictional-second]', '[[REDACTED CREDENTIAL]] ordinary password: ordinary prose [[REDACTED CREDENTIAL]]'],
+  ])('reexamines retained flow tails with forward progress: case %#', (task, expected) => {
+    expect(redactAgentContextValue(task)).toBe(expected);
+    expect(formatSessionAgentContext({ ...session, task }, project, agent, server)).toBe(
+      formatSessionAgentContext(session, project, agent, server).replace('task: Review a sample change', `task: ${expected}`),
+    );
+  });
+
+  it.each([
+    ['[password: fictional-flow-value]', '[[REDACTED CREDENTIAL]]'],
+    ['- [password: fictional-flow-value]', '- [[REDACTED CREDENTIAL]]'],
+    ['[password: fictional-flow-value] ordinary text', '[[REDACTED CREDENTIAL]] ordinary text'],
+    ['[name: keep, db.password: fictional-flow-value]', '[name: keep, [REDACTED CREDENTIAL]]'],
+    ['[password: fictional-flow-value, name: keep]', '[[REDACTED CREDENTIAL], name: keep]'],
+    ['[password: "fictional]value", name: keep]', '[[REDACTED CREDENTIAL], name: keep]'],
+    ["- [password: 'fictional]value'] after=keep", '- [[REDACTED CREDENTIAL]] after=keep'],
+    ['password: fictional]suffix', '[REDACTED CREDENTIAL]'],
+    ['Review password: ordinary words', 'Review password: ordinary words'],
+    ['postgres://fictional-user:fictional#pass?word@example.invalid/db', 'postgres://[REDACTED]@example.invalid/db'],
+    ['postgres://fictional-user:fictional?pass#word@example.invalid/db', 'postgres://[REDACTED]@example.invalid/db'],
+    ['postgres://fictional-user:fictional%23pass%3Fword@example.invalid/db', 'postgres://[REDACTED]@example.invalid/db'],
+    ['https://[2001:db8::1]:8080?email=fictional@example.test', 'https://[2001:db8::1]:8080?email=fictional@example.test'],
+    ['https://example.com:8080?email=fictional@example.test', 'https://example.com:8080?email=fictional@example.test'],
+    ['https://example.com:8080#email=fictional@example.test', 'https://example.com:8080#email=fictional@example.test'],
+    ['https://example.com/path/fictional@example.test', 'https://example.com/path/fictional@example.test'],
+    ['https://example.com?email=fictional@example.test', 'https://example.com?email=fictional@example.test'],
+    ['https://example.com#email=fictional@example.test', 'https://example.com#email=fictional@example.test'],
+  ])('preserves flow and URL boundaries: case %#', (task, expected) => {
+    expect(redactAgentContextValue(task)).toBe(expected);
+    expect(formatSessionAgentContext({ ...session, task }, project, agent, server)).toBe(
+      formatSessionAgentContext(session, project, agent, server).replace('task: Review a sample change', `task: ${expected}`),
+    );
+  });
+
+  it.each([
     ['%TAG !e! tag:yaml.org,2002:\n---\npassword: !e!str "fictional,secret-suffix"\nname: keep', '%TAG !e! tag:yaml.org,2002:\n---\n[REDACTED CREDENTIAL]\nname: keep'],
     ['password: ! "fictional,secret-suffix" after=keep', '[REDACTED CREDENTIAL] after=keep'],
     ['- "db.password": &shared.anchor "fictional,secret-suffix", name: keep', '- [REDACTED CREDENTIAL], name: keep'],

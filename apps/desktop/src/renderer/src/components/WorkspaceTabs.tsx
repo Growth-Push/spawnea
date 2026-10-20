@@ -43,6 +43,20 @@ import { formatSessionAgentContext } from '../session-agent-context';
 
 export type WorkspaceTabType = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details' | 'agent-context';
 
+// Only context-copy browser fallbacks share this FIFO, including across remounts.
+// Browser permission/write steps may run in parallel; native IPC writes directly.
+// Recover the queue after failure without turning a failed write into success.
+let browserContextWrite: Promise<void> | undefined;
+function writeBrowserAgentContext(text: string): Promise<void> {
+  const pending = (browserContextWrite ?? Promise.resolve()).then(() => navigator.clipboard.writeText(text));
+  const settled = pending.then(() => {}, () => {});
+  browserContextWrite = settled;
+  void settled.then(() => {
+    if (browserContextWrite === settled) browserContextWrite = undefined;
+  });
+  return pending;
+}
+
 function isLocalClipboardBridgeEndpoint(endpoint?: HostConnectionEndpoint | null): boolean {
   return endpoint?.transport === 'local' && isLoopbackHost(endpoint.hostname);
 }
@@ -487,7 +501,7 @@ export function WorkspaceTabs({
       if (window.spawneaApi?.writeClipboardText) {
         await window.spawneaApi.writeClipboardText(text);
       } else {
-        await navigator.clipboard.writeText(text);
+        await writeBrowserAgentContext(text);
       }
       if (copyAgentContextInFlight.current !== operation) return;
       setToast({ id: `context-${Date.now()}`, title: 'Agent context copied', type: 'success' });
