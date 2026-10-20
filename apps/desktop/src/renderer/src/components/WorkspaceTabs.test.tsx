@@ -156,6 +156,63 @@ describe('WorkspaceTabs Component', () => {
     });
   }
 
+  it('copies current session data and reports success only after the clipboard resolves', async () => {
+    let resolveWrite!: () => void;
+    const writeClipboardText = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { resolveWrite = resolve; })).mockResolvedValue(undefined);
+    (window as any).spawneaApi.writeClipboardText = writeClipboardText;
+    const onSaveLayout = vi.fn();
+    const onTabChange = vi.fn();
+    const { rerender } = render(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={onTabChange} onSaveLayout={onSaveLayout} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Agent Context' }));
+    expect(writeClipboardText).toHaveBeenCalledWith(expect.stringContaining(mockSession.id));
+    expect(screen.queryByText('Agent context copied')).toBeNull();
+    expect((screen.getByTestId('copy-agent-context-button') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => resolveWrite());
+    expect(screen.getByText('Agent context copied')).toBeDefined();
+    const next = { ...mockSession, id: 'sess-next', task: 'Review sample tests', branch: 'feat/sample-next' };
+    rerender(<WorkspaceTabs session={next} activeTab="details" onTabChange={onTabChange} onSaveLayout={onSaveLayout} />);
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    await waitFor(() => expect(writeClipboardText).toHaveBeenLastCalledWith(expect.stringContaining('Review sample tests')));
+    expect(writeClipboardText.mock.calls[1][0]).not.toContain('sess-1');
+    fireEvent.click(screen.getByTestId('save-layout-details-button'));
+    expect(onSaveLayout).toHaveBeenCalledWith('sess-next');
+    fireEvent.click(screen.getByTestId('workspace-tab-details'));
+    expect(onTabChange).toHaveBeenCalledWith('details');
+    expect(screen.getByText('Host System Environment')).toBeDefined();
+    fireEvent.click(screen.getByTestId('refresh-host-info-button'));
+    expect(window.spawneaApi.getHostSystemInfo).toHaveBeenCalledWith(next.serverId);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    fireEvent.click(screen.getByTestId('copy-session-id-button'));
+    expect(writeText).toHaveBeenCalledWith(next.id);
+  });
+
+  it('reports clipboard failure without echoing its payload and allows retry', async () => {
+    const writeClipboardText = vi.fn().mockRejectedValueOnce(new Error('private clipboard payload')).mockResolvedValue(undefined);
+    (window as any).spawneaApi.writeClipboardText = writeClipboardText;
+    render(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    await screen.findByText('Could not copy agent context');
+    expect(screen.queryByText('Agent context copied')).toBeNull();
+    expect(screen.queryByText('private clipboard payload')).toBeNull();
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    await screen.findByText('Agent context copied');
+    expect(writeClipboardText).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses the browser clipboard fallback and reports unavailable clipboard access', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    render(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    await screen.findByText('Agent context copied');
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining(mockSession.id));
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    await screen.findByText('Could not copy agent context');
+    expect(screen.queryByText('Agent context copied')).toBeNull();
+  });
+
   it('renders DetectedOutputBanner only in terminal tab and not in files or diff tabs', async () => {
     const onTabChange = vi.fn();
 

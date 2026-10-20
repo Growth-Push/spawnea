@@ -38,6 +38,13 @@ This repository is designed to be developed heavily with coding agents.
 - Before publishing or updating a PR, review its text, diff, screenshots, and logs for private information as well as secrets. Use fictional examples and sanitized evidence; preserve useful public technical detail.
 - Keep private planning and coordination in their authorized private channels. Public repository artifacts must stand on their own.
 
+## Required local reviews
+
+- In this Spawnea repository, run both local Codex and local CodeRabbit reviews before every commit or PR. Both must review the current diff, including untracked and new files.
+- Validate actionable findings and fix confirmed issues. After code changes, obtain fresh reviews from both tools on the updated diff before proceeding.
+- Within approved task scope, fix validated actionable findings and rerun both reviews without requesting additional authorization or stopping solely at a review-round limit; material scope changes and other unapproved actions still require direction.
+- Record the reviewed revision and diff (including untracked/new file contents), the exact review commands, results, and the disposition of actionable findings. Unavailable, failed, or rate-limited reviews are not passing reviews; report them as blocked and do not proceed to commit or PR until both required reviews are complete.
+
 ## Completion
 
 Before declaring a task complete:
