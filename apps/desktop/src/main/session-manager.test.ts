@@ -1071,6 +1071,134 @@ hosts:
     ).rejects.toThrow(/is not a valid Git worktree or repository/);
   });
 
+  it('rejects worktree adoption for credential-backed projects', async () => {
+    const catalogPath = join(tempDir, 'spawnea-secure-adopt.yaml');
+    writeFileSync(catalogPath, `
+version: 1
+hosts:
+  secure-host:
+    name: Secure Host
+    projects:
+      cred-proj:
+        name: Credential Project
+        path: op://vault/item/path
+        enabled: true
+    harnesses:
+      claude:
+        name: Claude Code
+        command: claude
+`);
+    catManager = new CatalogManager({ catalogPath });
+    expect(catManager.load().errors).toBeNull();
+    sessionManager = new SessionManager({
+      repositories: repos,
+      catalogManager: catManager,
+      contextStore,
+      ptyBroker,
+      hostAdapterFactory: async () => mockHost,
+      onePasswordResolver: new OnePasswordResolver(),
+    });
+
+    await expect(
+      sessionManager.createSession({
+        serverId: 'secure-host',
+        projectId: 'secure-host:cred-proj',
+        agentId: 'secure-host:claude',
+        task: 'Adopt in credential-backed project',
+        worktreePath: '/workspace/custom-wt',
+      })
+    ).rejects.toThrow('Existing worktree adoption is not supported for credential-backed projects.');
+  });
+
+  it('resolves catalog worktree path locator using project worktrees_dir when configured', async () => {
+    const catalogPath = join(tempDir, 'spawnea-custom-loc.yaml');
+    const projectReference = 'op://vault/item/proj-path';
+    const resolvedPath = '/srv/secure/repo';
+    writeFileSync(catalogPath, `
+version: 1
+hosts:
+  secure-host:
+    name: Secure Host
+    projects:
+      app:
+        name: App
+        path: ${projectReference}
+        worktrees_dir: .custom-wt-dir
+        enabled: true
+    harnesses:
+      claude:
+        name: Claude Code
+        command: claude
+`);
+    catManager = new CatalogManager({ catalogPath });
+    expect(catManager.load().errors).toBeNull();
+    const resolver = new OnePasswordResolver();
+    vi.spyOn(resolver, 'resolveString').mockResolvedValue({
+      value: resolvedPath,
+      sensitive: true,
+      release: () => undefined,
+    });
+
+    sessionManager = new SessionManager({
+      repositories: repos,
+      catalogManager: catManager,
+      contextStore,
+      ptyBroker,
+      hostAdapterFactory: async () => mockHost,
+      onePasswordResolver: resolver,
+    });
+
+    const locator = createCatalogWorktreePathLocator('secure-host', 'app', 'task-leaf-123');
+    const resolved = await (sessionManager as any).resolveCatalogPathLocator(locator);
+    expect(resolved.value).toBe('/srv/secure/repo/.custom-wt-dir/task-leaf-123');
+  });
+
+  it('resolves canonical git-common-dir paths using realpath to resist symlinks', async () => {
+    mockHost.directories.add('/workspace/spawnea/.worktrees/symlink-wt');
+    mockHost.customRules.unshift(
+      {
+        pattern: 'git rev-parse --show-toplevel',
+        response: { stdout: '/workspace/spawnea/.worktrees/symlink-wt\n', stderr: '', exitCode: 0 },
+      },
+      {
+        pattern: 'git rev-parse --git-common-dir',
+        response: (cmd, opts) => {
+          if (opts?.cwd?.includes('symlink-wt')) {
+            return { stdout: '/symlink/to/spawnea/.git\n', stderr: '', exitCode: 0 };
+          }
+          return { stdout: '/workspace/spawnea/.git\n', stderr: '', exitCode: 0 };
+        },
+      },
+      {
+        pattern: 'realpath --',
+        response: (cmd) => {
+          if (cmd.includes('/symlink/to/spawnea/.git')) {
+            return { stdout: '/canonical/spawnea/.git\n', stderr: '', exitCode: 0 };
+          }
+          if (cmd.includes('/workspace/spawnea/.git')) {
+            return { stdout: '/canonical/spawnea/.git\n', stderr: '', exitCode: 0 };
+          }
+          return { stdout: '/other\n', stderr: '', exitCode: 0 };
+        },
+      },
+      {
+        pattern: 'git branch --show-current',
+        response: { stdout: 'feat/symlink-branch\n', stderr: '', exitCode: 0 },
+      }
+    );
+
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Symlinked worktree adoption',
+      worktreePath: '/workspace/spawnea/.worktrees/symlink-wt',
+    });
+
+    expect(session.managedWorktree).toBe(false);
+    expect(session.branch).toBe('feat/symlink-branch');
+  });
+
   it('creates managed worktree using worktrees_dir configured in catalog', async () => {
     const customCatalog: OperationalCatalog = {
       version: 1,

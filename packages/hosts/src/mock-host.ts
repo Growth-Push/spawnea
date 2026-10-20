@@ -163,6 +163,12 @@ export class MockHostAdapter implements HostAdapter {
       return { stdout: '__SPAWNEA_OK__\n', stderr: '', exitCode: 0 };
     }
 
+    if (command.startsWith('realpath ') || command.includes('realpath ')) {
+      const match = command.match(/realpath\s+(?:--\s+)?(?:'([^']+)'|"([^"]+)"|(\S+))/);
+      const targetPath = match ? (match[1] || match[2] || match[3]) : '';
+      return { stdout: `${targetPath}\n`, stderr: '', exitCode: 0 };
+    }
+
     if (command.includes('git rev-parse --git-common-dir')) {
       const cwd = options?.cwd || '';
       const markers = ['__worktrees', '.worktrees', '/.wt', '/worktrees'];

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -350,15 +350,25 @@ describe('managed Git worktrees', () => {
   });
 
   it('fails if worktrees directory is not writable', async () => {
-    const unwriteableDir = '/proc/unwriteable-spawnea-worktrees';
-    await expect(service.createManagedWorktree({
-      host,
-      repositoryPath,
-      taskSlug: 'unwritable',
-      sessionSuffix: 'err1',
-      baseBranch: 'main',
-      worktreesDir: unwriteableDir,
-    })).rejects.toThrow();
+    if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) {
+      return;
+    }
+    const readonlyDir = join(tempRoot, 'readonly-worktrees');
+    mkdirSync(readonlyDir, { recursive: true });
+    chmodSync(readonlyDir, 0o555);
+
+    try {
+      await expect(service.createManagedWorktree({
+        host,
+        repositoryPath,
+        taskSlug: 'unwritable',
+        sessionSuffix: 'err1',
+        baseBranch: 'main',
+        worktreesDir: readonlyDir,
+      })).rejects.toThrow(/is not writable/);
+    } finally {
+      chmodSync(readonlyDir, 0o755);
+    }
   });
 
   it('lists existing worktrees excluding the primary checkout', async () => {

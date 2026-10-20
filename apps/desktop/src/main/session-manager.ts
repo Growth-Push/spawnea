@@ -260,10 +260,22 @@ export class SessionManager {
       `hosts.${locator.hostId}.projects.${locator.projectId}.path`,
       'project_path'
     );
+    if (locator.kind === 'worktree') {
+      const configuredWorktreesDir = resolveProjectWorktreesDir(project);
+      const basePath = resolved.value.replace(/\/+$/, '');
+      const worktreesRoot = configuredWorktreesDir
+        ? (posix.isAbsolute(configuredWorktreesDir)
+            ? posix.normalize(configuredWorktreesDir).replace(/\/+$/, '')
+            : posix.resolve(basePath, configuredWorktreesDir).replace(/\/+$/, ''))
+        : `${basePath}__worktrees`;
+      return {
+        value: `${worktreesRoot}/${locator.worktreeLeaf}`,
+        sensitive: resolved.sensitive,
+        release: resolved.release,
+      };
+    }
     return {
-      value: locator.kind === 'worktree'
-        ? `${resolved.value.replace(/\/+$/, '')}__worktrees/${locator.worktreeLeaf}`
-        : resolved.value,
+      value: resolved.value,
       sensitive: resolved.sensitive,
       release: resolved.release,
     };
@@ -297,6 +309,15 @@ export class SessionManager {
       root.release();
       throw error;
     }
+  }
+
+  private async resolveCanonicalHostPath(host: HostAdapter, targetPath: string): Promise<string> {
+    const quote = (p: string) => `'${p.replace(/'/g, "'\\''")}'`;
+    const result = await host.execute(`realpath -- ${quote(targetPath)}`);
+    if (result.exitCode === 0 && result.stdout.trim()) {
+      return result.stdout.trim().replace(/\/+$/, '');
+    }
+    return posix.normalize(targetPath).replace(/\/+$/, '');
   }
 
   private async resolveProjectRepositoryPath(projectId: string, rootPath: string): Promise<ResolvedValueLease<string>> {
@@ -713,6 +734,9 @@ export class SessionManager {
       if (!configuredProjectPath) {
         throw new Error(`Project path for '${options.projectId}' could not be resolved`);
       }
+      if (options.worktreePath?.trim() && isOnePasswordReference(configuredProjectPath)) {
+        throw new Error('Existing worktree adoption is not supported for credential-backed projects.');
+      }
       const projectPathLease = isOnePasswordReference(configuredProjectPath)
         ? await this.onePasswordResolver.resolveString(
             configuredProjectPath,
@@ -814,7 +838,12 @@ export class SessionManager {
         const candidateCommonDir = posix.resolve(runtimePath, candidateCommonDirCheck.stdout.trim());
         const repoCommonDir = posix.resolve(prepResult.path, repoCommonDirCheck.stdout.trim());
 
-        if (posix.normalize(candidateCommonDir) !== posix.normalize(repoCommonDir)) {
+        const [canonicalCandidateCommonDir, canonicalRepoCommonDir] = await Promise.all([
+          this.resolveCanonicalHostPath(host, candidateCommonDir),
+          this.resolveCanonicalHostPath(host, repoCommonDir),
+        ]);
+
+        if (canonicalCandidateCommonDir !== canonicalRepoCommonDir) {
           throw new Error(
             `Worktree path '${candidatePath}' does not belong to project repository '${prepResult.path}'`
           );

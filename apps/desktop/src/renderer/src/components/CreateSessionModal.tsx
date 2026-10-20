@@ -1512,6 +1512,7 @@ export function CreateSessionModal({
               <button
                 type="button"
                 data-testid="radio-workspace-root"
+                aria-pressed={workspaceOption === 'root'}
                 onClick={() => setWorkspaceOption('root')}
                 className={`p-2 rounded-lg border text-left transition-colors flex flex-col gap-0.5 cursor-pointer ${
                   workspaceOption === 'root'
@@ -1527,6 +1528,7 @@ export function CreateSessionModal({
               <button
                 type="button"
                 data-testid="radio-workspace-new-worktree"
+                aria-pressed={workspaceOption === 'new-worktree'}
                 disabled={!isWorktreeConfigured}
                 onClick={() => {
                   if (isWorktreeConfigured) setWorkspaceOption('new-worktree');
@@ -1554,6 +1556,7 @@ export function CreateSessionModal({
               <button
                 type="button"
                 data-testid="radio-workspace-existing-worktree"
+                aria-pressed={workspaceOption === 'existing-worktree'}
                 onClick={() => setWorkspaceOption('existing-worktree')}
                 className={`p-2 rounded-lg border text-left transition-colors flex flex-col gap-0.5 cursor-pointer ${
                   workspaceOption === 'existing-worktree'
@@ -1597,8 +1600,11 @@ export function CreateSessionModal({
 
                 {discoveredWorktrees.length > 0 && (
                   <div>
-                    <label className="block text-[11px] text-zinc-400 mb-1">Discovered Worktrees</label>
+                    <label htmlFor="select-existing-worktree" className="block text-[11px] text-zinc-400 mb-1">
+                      Discovered Worktrees
+                    </label>
                     <select
+                      id="select-existing-worktree"
                       data-testid="select-existing-worktree"
                       value={discoveredWorktrees.some((w) => w.path === existingWorktreePath) ? existingWorktreePath : ''}
                       onChange={(e) => setExistingWorktreePath(e.target.value)}
@@ -1615,10 +1621,11 @@ export function CreateSessionModal({
                 )}
 
                 <div>
-                  <label className="block text-[11px] text-zinc-400 mb-1">
+                  <label htmlFor="input-manual-worktree-path" className="block text-[11px] text-zinc-400 mb-1">
                     {discoveredWorktrees.length > 0 ? 'Or Custom Worktree Path' : 'Worktree Path'}
                   </label>
                   <input
+                    id="input-manual-worktree-path"
                     type="text"
                     data-testid="input-manual-worktree-path"
                     placeholder="/path/to/existing/worktree"

@@ -644,6 +644,37 @@ describe('CreateSessionModal', () => {
     );
   });
 
+  it('renders workspace buttons with aria-pressed and associates htmlFor on worktree controls', async () => {
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={mockAgents}
+      />
+    );
+
+    const rootBtn = screen.getByTestId('radio-workspace-root');
+    const existingBtn = screen.getByTestId('radio-workspace-existing-worktree');
+
+    expect(rootBtn.getAttribute('aria-pressed')).toBe('true');
+    expect(existingBtn.getAttribute('aria-pressed')).toBe('false');
+
+    await act(async () => {
+      fireEvent.click(existingBtn);
+    });
+
+    expect(rootBtn.getAttribute('aria-pressed')).toBe('false');
+    expect(existingBtn.getAttribute('aria-pressed')).toBe('true');
+
+    const input = screen.getByTestId('input-manual-worktree-path');
+    expect(input.id).toBe('input-manual-worktree-path');
+    const label = screen.getByText('Worktree Path');
+    expect(label.getAttribute('for')).toBe('input-manual-worktree-path');
+  });
+
   it('only calls discoverProjectWorktrees when workspaceOption is existing-worktree', async () => {
     const discoverProjectWorktrees = vi.fn().mockResolvedValue([
       { path: '/workspace/spawnea/.worktrees/wt-1', branch: 'feat/wt-1' },
