@@ -1,8 +1,46 @@
 import type { Agent, Project, Server, Session } from '@spawnea/domain';
 
+// Bounded YAML block-field handling, not a YAML parser: space-indented mapping keys
+// and compact sequence keys, literal/folded indicators, optional chomping and 1–9
+// indentation modifiers. Up to two inline anchor/tag properties may precede the
+// indicator; properties are recognized as text, never resolved or expanded.
+// Keep neighboring text and its original line endings.
+function redactCredentialBlocks(value: string): string {
+  const lines = value.split(/(?<=\n)|(?<=\r)(?!\n)/);
+  const result: string[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    const header = /^([ ]*(?:-[ \t]+)?)(?:"([\w-]+)"|'([\w-]+)'|([\w-]+))[ \t]*:[ \t]*(?:(?:&[\w-]+|!{1,2}[\w:/.-]+|!<[^<>\s]+>)[ \t]+){0,2}[|>]((?:[1-9][+-]?|[+-][1-9]?)?)[ \t]*(?:#.*)?$/.exec(line.replace(/[\r\n]+$/, ''));
+    const key = header && (header[2] ?? header[3] ?? header[4])!;
+    if (!header || !/^(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*(?:password|passwd|token|api[_-]?key|secret[_-]?access[_-]?key|(?:secret|private|access|signing|encryption)[_-]?key|secret|authorization|credential)$/i.test(key!)) {
+      result.push(line);
+      continue;
+    }
+    // For "- key", the key column (not the dash column) is the base indentation.
+    const prefix = header[1]!;
+    const modifier = /[1-9]/.exec(header[5]!);
+    let contentIndent = modifier ? prefix.length + Number(modifier[0]) : undefined;
+    let end = index + 1;
+    while (end < lines.length) {
+      const next = lines[end]!;
+      if (next.trim()) {
+        const indent = /^ */.exec(next)![0].length;
+        if (indent <= prefix.length) break;
+        contentIndent ??= indent;
+        if (indent < contentIndent) break;
+      }
+      end++;
+    }
+    const ending = /(?:\r\n|\r|\n)$/.exec(lines[end - 1]!)?.[0] ?? '';
+    result.push(`${prefix}[REDACTED CREDENTIAL]${ending}`);
+    index = end - 1;
+  }
+  return result.join('');
+}
+
 /** Redaction is best-effort: arbitrary unlabeled secrets cannot be recognized. */
 export function redactAgentContextValue(value: string): string {
-  return value
+  return redactCredentialBlocks(value)
     .replace(/op:\/\/[^\r\n]*/gi, '[REDACTED 1PASSWORD REFERENCE]')
     .replace(/-----BEGIN [A-Z0-9 _-]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 _-]*PRIVATE KEY-----|$)/gi, '[REDACTED PRIVATE KEY]')
     .replace(/(?<![\w-])["']?\b(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*authorization\b["']?\s*[:=]\s*(?:"(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+"|'(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+'|(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+)/gi, '[REDACTED AUTHORIZATION]')

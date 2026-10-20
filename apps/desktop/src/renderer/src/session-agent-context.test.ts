@@ -18,6 +18,52 @@ const agent: Agent = { id: session.agentId, name: 'Example Agent', harness: 'her
 const server: Server = { id: session.serverId, name: 'Example Host', host: 'excluded-connection-target', sshPort: 22, enabled: true, createdAt };
 
 describe('session agent context sheet', () => {
+  it.each(['&shared', '!!str', '!<tag:yaml.org,2002:str>', '&shared !!str', '!!str &shared', '&shared !<tag:yaml.org,2002:str>', '!<tag:yaml.org,2002:str> &shared'].flatMap((properties) =>
+    ['', '  - '].flatMap((prefix) =>
+      ['|', '>-', '|2+', '>+2'].flatMap((indicator) =>
+        ['password', '"APP_SECRET_KEY"', 'description'].map((key) => ({ properties, prefix, indicator, key })))),
+  ))('handles block node properties $properties with $prefix$key: $indicator', ({ properties, prefix, indicator, key }) => {
+    const indent = ' '.repeat(prefix.length);
+    const task = `${prefix}${key}: ${properties} ${indicator} # fictional properties\r\n\r\n${indent}  fictional-property-body\r\n${indent}  second fictional line\r\n${indent}name: keep\r\n${indent}copy: *shared`;
+    const expected = key === 'description' ? task : `${prefix}[REDACTED CREDENTIAL]\r\n${indent}name: keep\r\n${indent}copy: *shared`;
+    expect(redactAgentContextValue(task)).toBe(expected);
+    expect(formatSessionAgentContext({ ...session, task }, project, agent, server)).toBe(
+      formatSessionAgentContext(session, project, agent, server).replace('task: Review a sample change', `task: ${expected.replace(/\r\n/g, '\n').replace(/\n/g, '\n  ')}`),
+    );
+  });
+
+  it.each(['|', '>', '|-', '>+', '|2', '>2-', '|+2', '>-2'].flatMap((indicator) =>
+    ['', '  ', '- ', '  - '].flatMap((prefix) =>
+      ['password', 'APP_SECRET_KEY', '"servicePassword"', "'client_secret'"].map((key) => ({ indicator, prefix, key }))),
+  ))('masks sensitive block scalar $prefix$key: $indicator without consuming neighbors', ({ indicator, prefix, key }) => {
+    const contentIndent = ' '.repeat(prefix.length + 2);
+    const neighborIndent = ' '.repeat(prefix.length);
+    const task = `settings:\n${prefix}${key}: ${indicator} # fictional block\n\n${contentIndent}fictional block content\n${contentIndent}second fictional line\n   \n${neighborIndent}name: ordinary-service\nnext: keep`;
+    const expected = `settings:\n${prefix}[REDACTED CREDENTIAL]\n${neighborIndent}name: ordinary-service\nnext: keep`;
+    expect(redactAgentContextValue(task)).toBe(expected);
+    expect(formatSessionAgentContext({ ...session, task }, project, agent, server)).toBe(
+      formatSessionAgentContext(session, project, agent, server).replace('task: Review a sample change', `task: ${expected.replace(/\n/g, '\n  ')}`),
+    );
+  });
+
+  it.each([
+    ['password: |\n  fictional body', '[REDACTED CREDENTIAL]'],
+    ['- password: |\n    fictional body\n  name: keep\n- name: next', '- [REDACTED CREDENTIAL]\n  name: keep\n- name: next'],
+    ['password: |\n\nname: keep', '[REDACTED CREDENTIAL]\nname: keep'],
+    ['password: >-\nname: keep', '[REDACTED CREDENTIAL]\nname: keep'],
+    ['password: |\n  \n', '[REDACTED CREDENTIAL]\n'],
+    ['password: |\r\n  fictional body\r\nname: keep', '[REDACTED CREDENTIAL]\r\nname: keep'],
+    ['password: |\n    fictional body\n  ordinary: keep', '[REDACTED CREDENTIAL]\n  ordinary: keep'],
+    ['description: |\n  ordinary block\n  second line\nname: keep', 'description: |\n  ordinary block\n  second line\nname: keep'],
+    ['Implement password: |\n  ordinary task continuation', 'Implement password: |\n  ordinary task continuation'],
+    ['Review - password: >\n  ordinary task continuation', 'Review - password: >\n  ordinary task continuation'],
+  ])('preserves block boundaries and ordinary text: case %#', (task, expected) => {
+    expect(redactAgentContextValue(task)).toBe(expected);
+    expect(formatSessionAgentContext({ ...session, task }, project, agent, server)).toBe(
+      formatSessionAgentContext(session, project, agent, server).replace('task: Review a sample change', `task: ${expected.replace(/\r\n?/g, '\n').replace(/\n/g, '\n  ')}`),
+    );
+  });
+
   it.each(['', '  '].flatMap((indent) =>
     ['password', 'APP_SECRET_KEY', 'servicePassword'].flatMap((key) =>
       ['fictional-yaml-value', '"fictional yaml value"', "'fictional yaml value'"].map((value) => ({ indent, key, value }))),
