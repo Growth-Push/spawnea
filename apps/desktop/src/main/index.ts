@@ -427,6 +427,11 @@ function registerIpcHandlers(
     async (_event, serverId: string, projectPath: string, preferredBranch?: string) =>
       sessManager.discoverProjectBranches(serverId, projectPath, preferredBranch)
   );
+  ipcMain.handle(
+    'projects:discoverWorktrees',
+    async (_event, serverId: string, projectPath: string) =>
+      sessManager.discoverProjectWorktrees(serverId, projectPath)
+  );
   ipcMain.handle('projects:choosePath', async (_event, serverId: string, currentPath?: string) => {
     const server = await repos.servers.findById(serverId);
     if (!server) {

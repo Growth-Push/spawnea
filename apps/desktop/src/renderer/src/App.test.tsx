@@ -246,6 +246,7 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       suggestedBranches: ['main'],
       currentBranch: 'main',
     }),
+    discoverProjectWorktrees: vi.fn().mockResolvedValue([]),
     chooseProjectPath: vi.fn().mockResolvedValue({ canceled: true }),
     saveProject: vi.fn(),
     deleteProject: vi.fn(),

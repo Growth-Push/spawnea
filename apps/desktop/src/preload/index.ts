@@ -93,6 +93,10 @@ export const api = {
     projectPath: string,
     preferredBranch?: string
   ): Promise<GitBranchDiscoveryResult> => ipcRenderer.invoke('projects:discoverBranches', serverId, projectPath, preferredBranch),
+  discoverProjectWorktrees: (
+    serverId: string,
+    projectPath: string
+  ): Promise<Array<{ path: string; branch?: string }>> => ipcRenderer.invoke('projects:discoverWorktrees', serverId, projectPath),
   chooseProjectPath: (serverId: string, currentPath?: string): Promise<{ path?: string; canceled: boolean; error?: string }> =>
     ipcRenderer.invoke('projects:choosePath', serverId, currentPath),
 

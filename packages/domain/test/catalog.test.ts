@@ -478,4 +478,50 @@ hosts:
     expect(elapsed).toBeLessThan(50);
     expect(result.success).toBe(true);
   });
+
+  describe('worktrees_dir configuration', () => {
+    it('validates worktrees_dir at project root and inside worktree mapping', () => {
+      const yaml = `
+version: 1
+hosts:
+  local:
+    name: Local
+    projects:
+      proj-root:
+        name: Project with root worktrees_dir
+        path: /repo/proj-root
+        worktrees_dir: .worktrees
+      proj-nested:
+        name: Project with nested worktrees_dir
+        path: /repo/proj-nested
+        worktree:
+          enabled: true
+          copy_files: []
+          worktrees_dir: /var/worktrees
+`;
+      const result = parseOperationalCatalog(yaml);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.catalog.hosts.local.projects['proj-root'].worktrees_dir).toBe('.worktrees');
+      expect(result.catalog.hosts.local.projects['proj-nested'].worktree?.worktrees_dir).toBe('/var/worktrees');
+    });
+
+    it('prioritizes worktree.worktrees_dir over project-level worktrees_dir in resolveProjectWorktreesDir', async () => {
+      const { resolveProjectWorktreesDir } = await import('../src/catalog.js');
+      expect(resolveProjectWorktreesDir({
+        worktrees_dir: 'root-dir',
+        worktree: { enabled: true, copy_files: [], worktrees_dir: 'nested-dir' },
+      })).toBe('nested-dir');
+
+      expect(resolveProjectWorktreesDir({
+        worktrees_dir: 'root-dir',
+      })).toBe('root-dir');
+
+      expect(resolveProjectWorktreesDir({
+        worktree: { enabled: true, copy_files: [], worktrees_dir: 'nested-dir' },
+      })).toBe('nested-dir');
+
+      expect(resolveProjectWorktreesDir({})).toBeUndefined();
+    });
+  });
 });

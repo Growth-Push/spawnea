@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { CreateSessionModal } from './CreateSessionModal';
 import type { Server, Project, Agent } from '@spawnea/domain';
 
@@ -569,6 +569,142 @@ describe('CreateSessionModal', () => {
     rerender(<CreateSessionModal {...props} isOpen={false} />);
     rerender(<CreateSessionModal {...props} />);
     expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('previews custom worktree path when worktrees_dir is configured in catalog', () => {
+    const catalog = {
+      version: 1 as const,
+      hosts: {
+        'srv-1': {
+          id: 'srv-1',
+          name: 'Local Workstation',
+          enabled: true,
+          projects: {
+            'srv-1:spawnea': {
+              id: 'srv-1:spawnea',
+              name: 'Spawnea',
+              path: '/workspace/spawnea',
+              enabled: true,
+              worktree: { enabled: true, copy_files: [], worktrees_dir: '.my-worktrees' },
+            },
+          },
+          harnesses: {},
+        },
+      },
+    };
+
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={mockAgents}
+        catalog={catalog}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('radio-workspace-new-worktree'));
+    expect(screen.getByText(/\/workspace\/spawnea\/\.my-worktrees\//)).toBeDefined();
+  });
+
+  it('allows adopting an existing worktree via manual input and submits worktreePath', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={mockAgents}
+      />
+    );
+
+    // Switch to existing worktree
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('radio-workspace-existing-worktree'));
+    });
+    const input = screen.getByTestId('input-manual-worktree-path');
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '/workspace/spawnea/existing-wt' } });
+    });
+
+    // Submit form
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('submit-create-session'));
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktreePath: '/workspace/spawnea/existing-wt',
+        useWorktree: false,
+      })
+    );
+  });
+
+  it('only calls discoverProjectWorktrees when workspaceOption is existing-worktree', async () => {
+    const discoverProjectWorktrees = vi.fn().mockResolvedValue([
+      { path: '/workspace/spawnea/.worktrees/wt-1', branch: 'feat/wt-1' },
+    ]);
+    const originalApi = window.spawneaApi;
+    window.spawneaApi = { ...originalApi, discoverProjectWorktrees } as any;
+
+    try {
+      render(
+        <CreateSessionModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSubmit={vi.fn()}
+          servers={mockServers}
+          projects={mockProjects}
+          agents={mockAgents}
+        />
+      );
+
+      // Initially in root mode: discoverProjectWorktrees must NOT be called
+      expect(discoverProjectWorktrees).not.toHaveBeenCalled();
+
+      // Click existing worktree option
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('radio-workspace-existing-worktree'));
+      });
+
+      expect(discoverProjectWorktrees).toHaveBeenCalledWith('srv-1', '/workspace/spawnea');
+    } finally {
+      window.spawneaApi = originalApi;
+    }
+  });
+
+  it('resets existingWorktreePath when selected projectId changes', async () => {
+    render(
+      <CreateSessionModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        servers={mockServers}
+        projects={mockProjects}
+        agents={mockAgents}
+      />
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('radio-workspace-existing-worktree'));
+    });
+
+    const input = screen.getByTestId('input-manual-worktree-path') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '/workspace/spawnea/old-wt' } });
+    });
+    expect(input.value).toBe('/workspace/spawnea/old-wt');
+
+    // Change project
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('select-project'), { target: { value: 'srv-1:frontend' } });
+    });
+
+    expect(input.value).toBe('');
   });
 
   it('keeps connection test and retry buttons in the sequential keyboard focus order', async () => {

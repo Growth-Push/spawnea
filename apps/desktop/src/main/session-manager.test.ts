@@ -10,6 +10,7 @@ import {
   createLogger,
   type Logger,
   type SessionTopologySnapshot,
+  type OperationalCatalog,
   createCatalogProjectPathLocator,
   createCatalogWorktreePathLocator,
   registerSensitiveValue,
@@ -965,6 +966,202 @@ hosts:
     expect(session.managedWorktree).toBe(true);
     expect(session.worktreePath).toMatch(/spawnea__worktrees\/task-/);
     expect(session.branch).not.toContain('explicit-worktree-task');
+  });
+
+  it('adopts an existing worktree with autodetected branch and managedWorktree: false', async () => {
+    mockHost.directories.add('/workspace/spawnea/.worktrees/custom-wt');
+    mockHost.customRules.unshift(
+      {
+        pattern: 'git rev-parse --show-toplevel',
+        response: (cmd, opts) => {
+          if (opts?.cwd?.includes('custom-wt')) {
+            return { stdout: '/workspace/spawnea/.worktrees/custom-wt\n', stderr: '', exitCode: 0 };
+          }
+          return { stdout: '/workspace/spawnea\n', stderr: '', exitCode: 0 };
+        },
+      },
+      {
+        pattern: 'git branch --show-current',
+        response: (cmd, opts) => {
+          if (opts?.cwd?.includes('custom-wt')) {
+            return { stdout: 'feat/pre-existing\n', stderr: '', exitCode: 0 };
+          }
+          return { stdout: 'main\n', stderr: '', exitCode: 0 };
+        },
+      }
+    );
+
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Adopted worktree task',
+      worktreePath: '/workspace/spawnea/.worktrees/custom-wt',
+    });
+
+    expect(session.managedWorktree).toBe(false);
+    expect(session.worktreePath).toBe('/workspace/spawnea/.worktrees/custom-wt');
+    expect(session.branch).toBe('feat/pre-existing');
+
+    const context = await contextStore.load(session.id);
+    expect(context?.project.path).toBe('/workspace/spawnea/.worktrees/custom-wt');
+    expect(context?.worktree).toEqual({
+      managed: false,
+      path: '/workspace/spawnea/.worktrees/custom-wt',
+      branch: 'feat/pre-existing',
+      baseBranch: 'feat/pre-existing',
+      baseCommit: undefined,
+    });
+  });
+
+  it('rejects adoption if the worktree belongs to a different repository', async () => {
+    mockHost.directories.add('/workspace/foreign-repo/wt');
+    mockHost.customRules.unshift(
+      {
+        pattern: 'git rev-parse --show-toplevel',
+        response: (cmd, opts) => {
+          if (opts?.cwd?.includes('foreign-repo')) {
+            return { stdout: '/workspace/foreign-repo/wt\n', stderr: '', exitCode: 0 };
+          }
+          return { stdout: '/workspace/spawnea\n', stderr: '', exitCode: 0 };
+        },
+      },
+      {
+        pattern: 'git rev-parse --git-common-dir',
+        response: (cmd, opts) => {
+          if (opts?.cwd?.includes('foreign-repo')) {
+            return { stdout: '/workspace/foreign-repo/.git\n', stderr: '', exitCode: 0 };
+          }
+          return { stdout: '/workspace/spawnea/.git\n', stderr: '', exitCode: 0 };
+        },
+      }
+    );
+
+    await expect(
+      sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Foreign worktree task',
+        worktreePath: '/workspace/foreign-repo/wt',
+      })
+    ).rejects.toThrow(/does not belong to project repository/);
+  });
+
+  it('rejects adoption if the candidate path is not a valid git worktree', async () => {
+    mockHost.directories.add('/workspace/not-git');
+    mockHost.customRules.unshift({
+      pattern: 'git rev-parse --show-toplevel',
+      response: (cmd, opts) => {
+        if (opts?.cwd?.includes('not-git')) {
+          return { stdout: '', stderr: 'fatal: not a git repository', exitCode: 128 };
+        }
+        return { stdout: '/workspace/spawnea\n', stderr: '', exitCode: 0 };
+      },
+    });
+
+    await expect(
+      sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Not a git worktree',
+        worktreePath: '/workspace/not-git',
+      })
+    ).rejects.toThrow(/is not a valid Git worktree or repository/);
+  });
+
+  it('creates managed worktree using worktrees_dir configured in catalog', async () => {
+    const customCatalog: OperationalCatalog = {
+      version: 1,
+      hosts: {
+        'dev-workstation': {
+          id: 'dev-workstation',
+          name: 'Remote Dev',
+          enabled: true,
+          projects: {
+            spawnea: {
+              id: 'spawnea',
+              name: 'Spawnea',
+              path: '/workspace/spawnea',
+              enabled: true,
+              worktree: {
+                enabled: true,
+                copy_files: [],
+                worktrees_dir: '.my-worktrees',
+              },
+            },
+          },
+          harnesses: {
+            claude: {
+              id: 'claude',
+              name: 'Claude Code',
+              command: 'claude',
+              args: [],
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+    await enableManagedWorktrees();
+    (sessionManager as any).catalogManager.getState = vi.fn().mockReturnValue({ catalog: customCatalog, errors: null, filePath: '' });
+    mockHost.customRules.unshift({
+      pattern: 'git branch --show-current',
+      response: (_command, options) => {
+        const cwd = options?.cwd || '';
+        const leaf = cwd.split('/').pop() || '';
+        return {
+          stdout: cwd.includes('.my-worktrees/') ? `spawnea/${leaf}\n` : 'main\n',
+          stderr: '',
+          exitCode: 0,
+        };
+      },
+    });
+
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Custom worktrees_dir task',
+      baseBranch: 'main',
+    });
+
+    expect(session.managedWorktree).toBe(true);
+    expect(session.worktreePath).toMatch(/\/workspace\/spawnea\/\.my-worktrees\/task-/);
+  });
+
+  it('discovers existing project worktrees via discoverProjectWorktrees', async () => {
+    mockHost.customRules.unshift({
+      pattern: 'git worktree list --porcelain',
+      response: {
+        stdout: [
+          'worktree /workspace/spawnea',
+          'HEAD 1111111111111111111111111111111111111111',
+          'branch refs/heads/main',
+          '',
+          'worktree /workspace/spawnea/.worktrees/wt-one',
+          'HEAD 2222222222222222222222222222222222222222',
+          'branch refs/heads/feature-1',
+          '',
+          'worktree /workspace/spawnea/.worktrees/wt-two',
+          'HEAD 3333333333333333333333333333333333333333',
+          'branch refs/heads/feature-2',
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      },
+    });
+
+    const worktrees = await sessionManager.discoverProjectWorktrees(
+      'dev-workstation',
+      '/workspace/spawnea'
+    );
+
+    expect(worktrees).toEqual([
+      { path: '/workspace/spawnea/.worktrees/wt-one', branch: 'feature-1' },
+      { path: '/workspace/spawnea/.worktrees/wt-two', branch: 'feature-2' },
+    ]);
   });
 
   it('honors an explicit control root base branch without changing UI precedence', async () => {

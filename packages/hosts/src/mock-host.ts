@@ -130,6 +130,17 @@ export class MockHostAdapter implements HostAdapter {
       };
     }
 
+    if (command.startsWith('test -w ') || command.includes('test -w ')) {
+      const match = command.match(/test -w\s+(?:'([^']+)'|"([^"]+)"|(\S+))/);
+      const targetPath = match ? (match[1] || match[2] || match[3]) : '';
+      const exists = !targetPath || this.directories.has(targetPath) || this.mockFiles.has(targetPath);
+      return {
+        stdout: '',
+        stderr: exists ? '' : 'Permission denied or not found',
+        exitCode: exists ? 0 : 1,
+      };
+    }
+
     if (command.startsWith('mkdir -p ') || command.includes('mkdir -p ')) {
       const match = command.match(/mkdir -p\s+(?:'([^']+)'|"([^"]+)"|(\S+))/);
       const dirPath = match ? (match[1] || match[2] || match[3]) : '';
@@ -150,6 +161,16 @@ export class MockHostAdapter implements HostAdapter {
 
     if (command.includes('echo __SPAWNEA_OK__')) {
       return { stdout: '__SPAWNEA_OK__\n', stderr: '', exitCode: 0 };
+    }
+
+    if (command.includes('git rev-parse --git-common-dir')) {
+      const cwd = options?.cwd || '';
+      const wtMatch = cwd.match(/^(.*?)(?:__worktrees|\.worktrees|\/\.wt|\/worktrees)(?:\/.*)?$/);
+      if (wtMatch && wtMatch[1]) {
+        const repoPath = wtMatch[1].replace(/\/+$/, '');
+        return { stdout: `${repoPath}/.git\n`, stderr: '', exitCode: 0 };
+      }
+      return { stdout: '.git\n', stderr: '', exitCode: 0 };
     }
 
     if (command.includes('tmux has-session')) {

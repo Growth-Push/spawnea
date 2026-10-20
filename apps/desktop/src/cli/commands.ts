@@ -81,6 +81,7 @@ export interface CreateSessionOptions extends OutputOptions {
   server?: string;
   branch?: string;
   worktree?: boolean;
+  worktreePath?: string;
   clientRequestId?: string;
   model?: string;
   timeoutMs?: number;
@@ -99,7 +100,8 @@ export async function createSession(client: ControlCliClient, options: CreateSes
     agentId: options.agent,
     serverId: options.server,
     baseBranch: options.branch,
-    useWorktree: options.worktree ?? true,
+    useWorktree: options.worktreePath ? false : (options.worktree ?? true),
+    worktreePath: options.worktreePath,
     clientRequestId: options.clientRequestId,
     model: options.model,
   }, options.timeoutMs);

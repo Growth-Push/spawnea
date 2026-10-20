@@ -13,6 +13,7 @@ import type {
   Logger,
 } from '@spawnea/domain';
 import { createLogger, isExactRepositoryRelativePath } from '@spawnea/domain';
+import { posix } from 'node:path';
 
 export interface ManagedWorktreeResult {
   repositoryPath: string;
@@ -81,6 +82,38 @@ export class GitService {
     }
   }
 
+  /**
+   * Lists existing worktrees for a repository via `git worktree list --porcelain`,
+   * excluding the primary checkout.
+   */
+  async listWorktrees(
+    host: HostAdapter,
+    repositoryPath: string
+  ): Promise<Array<{ path: string; branch?: string }>> {
+    try {
+      const rootResult = await host.execute('git rev-parse --show-toplevel', { cwd: repositoryPath });
+      const repoCwd = rootResult.exitCode === 0 && rootResult.stdout.trim()
+        ? rootResult.stdout.trim()
+        : repositoryPath;
+
+      const listResult = await host.execute('git worktree list --porcelain', { cwd: repoCwd });
+      if (listResult.exitCode !== 0 || !listResult.stdout.trim()) {
+        return [];
+      }
+
+      const registered = parseWorktreeList(listResult.stdout);
+      if (registered.length <= 1) {
+        return [];
+      }
+
+      const primaryPath = registered[0].path;
+      return registered.filter((entry, idx) => idx > 0 && entry.path !== primaryPath);
+    } catch (err) {
+      this.logger.warn('Failed to list Git worktrees', { serverId: host.serverId, repositoryPath, error: err });
+      return [];
+    }
+  }
+
   /** Creates and verifies a Spawnea-owned branch and sibling worktree. */
   async createManagedWorktree(options: {
     host: HostAdapter;
@@ -88,6 +121,7 @@ export class GitService {
     taskSlug: string;
     sessionSuffix: string;
     baseBranch?: string;
+    worktreesDir?: string;
   }): Promise<ManagedWorktreeResult> {
     const { host, repositoryPath, taskSlug, sessionSuffix } = options;
     const rootResult = await host.execute('git rev-parse --show-toplevel', { cwd: repositoryPath });
@@ -104,7 +138,13 @@ export class GitService {
 
     const leaf = `${taskSlug}-${sessionSuffix}`;
     const branch = `spawnea/${leaf}`;
-    const worktreesRoot = `${repositoryRoot}__worktrees`;
+    let worktreesRoot = `${repositoryRoot}__worktrees`;
+    if (options.worktreesDir?.trim()) {
+      const configuredDir = options.worktreesDir.trim();
+      worktreesRoot = posix.isAbsolute(configuredDir)
+        ? posix.normalize(configuredDir).replace(/\/+$/, '')
+        : posix.resolve(repositoryRoot, configuredDir).replace(/\/+$/, '');
+    }
     const worktreePath = `${worktreesRoot}/${leaf}`;
 
     await this.assertValidLocalBranch(host, repositoryRoot, baseBranch, 'base');
@@ -137,6 +177,13 @@ export class GitService {
     const mkdirResult = await host.execute(`mkdir -p ${escapeShellPath(worktreesRoot)}`);
     if (mkdirResult.exitCode !== 0) {
       throw new Error(`Failed to prepare worktree directory '${worktreesRoot}'`);
+    }
+
+    const writableCheck = await host.execute(
+      `test -d ${escapeShellPath(worktreesRoot)} && test -w ${escapeShellPath(worktreesRoot)}`
+    );
+    if (writableCheck.exitCode !== 0) {
+      throw new Error(`Worktree directory '${worktreesRoot}' is not writable`);
     }
 
     const addResult = await host.execute(

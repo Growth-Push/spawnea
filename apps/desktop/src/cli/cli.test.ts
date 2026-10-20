@@ -152,6 +152,8 @@ describe('Spawnea Control CLI', () => {
     it('parses an exact model identifier literally and leaves omission undefined', () => {
       expect(parseArgs(['session', 'create', '--project', 'proj', '--task', 'do-work', '--model', 'literal-model.v1:/exact']).flags.model)
         .toBe('literal-model.v1:/exact');
+      expect(parseArgs(['session', 'create', '--project', 'proj', '--task', 'do-work', '--worktree-path', '/custom/path']).flags['worktree-path'])
+        .toBe('/custom/path');
       expect(parseArgs(['session', 'create', '--project', 'proj', '--task', 'do-work']).flags.model).toBeUndefined();
     });
   });
@@ -166,6 +168,15 @@ describe('Spawnea Control CLI', () => {
       callTool.mockClear();
       await createSession(client, { project: 'proj', task: 'task' });
       expect(callTool).toHaveBeenCalledWith('spawnea_create_session', expect.objectContaining({ model: undefined }), undefined);
+
+      callTool.mockClear();
+      await createSession(client, { project: 'proj', task: 'task', worktreePath: '/existing/path' });
+      expect(callTool).toHaveBeenCalledWith('spawnea_create_session', expect.objectContaining({
+        projectId: 'proj',
+        task: 'task',
+        worktreePath: '/existing/path',
+        useWorktree: false,
+      }), undefined);
     });
 
     it('rejects an empty model before creating a request', async () => {

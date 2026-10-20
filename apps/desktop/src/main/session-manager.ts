@@ -1,3 +1,4 @@
+import { posix } from 'node:path';
 import type { WebContents } from 'electron';
 import type {
   Session,
@@ -40,6 +41,7 @@ import {
   maskSensitiveString,
   parseCatalogPathLocator,
   resolveContainedPath,
+  resolveProjectWorktreesDir,
   isLoopbackHost,
   SessionTopologySnapshotSchema,
 } from '@spawnea/domain';
@@ -526,6 +528,19 @@ export class SessionManager {
     }
   }
 
+  async discoverProjectWorktrees(
+    serverId: string,
+    projectPath: string
+  ): Promise<Array<{ path: string; branch?: string }>> {
+    const host = await this.getHostAdapter(serverId);
+    const resolvedPath = await this.resolveCatalogPathLocator(projectPath);
+    try {
+      return await this.gitService.listWorktrees(host, resolvedPath.value);
+    } finally {
+      resolvedPath.release();
+    }
+  }
+
   /**
    * Checks health and latency of a single host in background.
    */
@@ -628,6 +643,7 @@ export class SessionManager {
     name?: string;
     baseBranch?: string;
     useWorktree?: boolean;
+    worktreePath?: string;
     parentSessionId?: string;
     childAlias?: string;
     initialStatus?: SessionStatus;
@@ -763,10 +779,58 @@ export class SessionManager {
       let managedWorktree = false;
       let tmuxCreated = false;
       let sessionPersisted = false;
-      const shouldUseWorktree = options.useWorktree ?? (worktreeConfig?.enabled ?? false);
+      const hasExplicitWorktreePath = Boolean(options.worktreePath?.trim());
+      const shouldUseWorktree = !hasExplicitWorktreePath && (options.useWorktree ?? (worktreeConfig?.enabled ?? false));
       let inheritedWorktreeLocator: string | undefined;
 
-      if (options.parentSessionId && !shouldUseWorktree) {
+      if (hasExplicitWorktreePath) {
+        const rawWorktreePath = options.worktreePath!.trim();
+        const candidatePath = posix.isAbsolute(rawWorktreePath)
+          ? posix.normalize(rawWorktreePath).replace(/\/+$/, '')
+          : posix.resolve(prepResult.path, rawWorktreePath).replace(/\/+$/, '');
+
+        const check = await host.execute('git rev-parse --show-toplevel', { cwd: candidatePath });
+        if (check.exitCode !== 0 || !check.stdout.trim()) {
+          throw new Error(`Worktree path '${candidatePath}' is not a valid Git worktree or repository`);
+        }
+        runtimePath = check.stdout.trim().replace(/\/+$/, '');
+
+        const [candidateCommonDirCheck, repoCommonDirCheck] = await Promise.all([
+          host.execute('git rev-parse --git-common-dir', { cwd: runtimePath }),
+          host.execute('git rev-parse --git-common-dir', { cwd: prepResult.path }),
+        ]);
+
+        if (
+          candidateCommonDirCheck.exitCode !== 0 ||
+          !candidateCommonDirCheck.stdout.trim() ||
+          repoCommonDirCheck.exitCode !== 0 ||
+          !repoCommonDirCheck.stdout.trim()
+        ) {
+          throw new Error(
+            `Failed to verify repository ownership for worktree '${candidatePath}' against project repository '${prepResult.path}'`
+          );
+        }
+
+        const candidateCommonDir = posix.resolve(runtimePath, candidateCommonDirCheck.stdout.trim());
+        const repoCommonDir = posix.resolve(prepResult.path, repoCommonDirCheck.stdout.trim());
+
+        if (posix.normalize(candidateCommonDir) !== posix.normalize(repoCommonDir)) {
+          throw new Error(
+            `Worktree path '${candidatePath}' does not belong to project repository '${prepResult.path}'`
+          );
+        }
+
+        repositoryPath = prepResult.path;
+
+        const branchCheck = await host.execute('git branch --show-current', { cwd: runtimePath });
+        if (branchCheck.exitCode === 0 && branchCheck.stdout.trim()) {
+          branchName = branchCheck.stdout.trim();
+        } else {
+          const commitCheck = await host.execute('git rev-parse --short HEAD', { cwd: runtimePath });
+          branchName = commitCheck.exitCode === 0 && commitCheck.stdout.trim() ? commitCheck.stdout.trim() : 'HEAD';
+        }
+        managedWorktree = false;
+      } else if (options.parentSessionId && !shouldUseWorktree) {
         const parent = await this.repos.sessions.findById(options.parentSessionId);
         if (!parent) throw new Error(`Parent session '${options.parentSessionId}' not found`);
         if (!parent.worktreePath.trim()) {
@@ -781,12 +845,14 @@ export class SessionManager {
 
       try {
         if (shouldUseWorktree) {
+          const configuredWorktreesDir = resolveProjectWorktreesDir(catProject);
           const provisioned = await this.gitService.createManagedWorktree({
             host,
             repositoryPath: prepResult.path,
             taskSlug: 'task',
             sessionSuffix: sessionId.slice('sess-'.length),
             baseBranch: effectiveBaseBranch,
+            worktreesDir: configuredWorktreesDir,
           });
           runtimePath = provisioned.worktreePath;
           repositoryPath = provisioned.repositoryPath;
@@ -849,12 +915,12 @@ export class SessionManager {
             path: persistedRuntimePath,
             git_url: gitUrl,
           },
-          worktree: (managedWorktree && baseBranch) || options.parentSessionId
+          worktree: (managedWorktree && baseBranch) || options.parentSessionId || hasExplicitWorktreePath
             ? {
                 managed: managedWorktree,
                 path: persistedRuntimePath,
                 branch: branchName,
-                baseBranch: baseBranch || effectiveBaseBranch || 'main',
+                baseBranch: baseBranch || effectiveBaseBranch || branchName,
                 baseCommit: baseCommit,
               }
             : undefined,
@@ -1001,6 +1067,7 @@ export class SessionManager {
       task: input.task,
       baseBranch: input.baseBranch,
       useWorktree: input.useWorktree,
+      worktreePath: input.worktreePath,
       model: input.model,
       initialStatus: 'working',
       creationSource,
