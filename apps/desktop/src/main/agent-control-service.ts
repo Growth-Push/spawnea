@@ -836,6 +836,7 @@ export class AgentControlService {
       task: request.task,
       baseBranch: request.baseBranch,
       useWorktree: request.useWorktree,
+      worktreePath: request.worktreePath,
       model: request.model,
     });
     const cached = this.rootResults.get(request.clientRequestId);
@@ -863,6 +864,7 @@ export class AgentControlService {
           task: request.task,
           baseBranch: request.baseBranch,
           useWorktree: request.useWorktree,
+          worktreePath: request.worktreePath,
           model: request.model,
         }, 'control');
         const result: ControlCreateSessionResult = {
@@ -909,6 +911,7 @@ export class AgentControlService {
           task: item.task,
           baseBranch: item.baseBranch,
           useWorktree: item.useWorktree,
+          worktreePath: item.worktreePath,
           model: item.model,
         }, 'control');
         results.push({

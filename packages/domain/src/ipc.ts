@@ -27,6 +27,7 @@ export interface CreateSessionInput {
   task: string;
   baseBranch?: string;
   useWorktree?: boolean;
+  worktreePath?: string;
   /** Exact per-session model override; omitted means the configured harness default. */
   model?: string;
 }
@@ -172,6 +173,10 @@ export interface IpcChannels {
     projectPath: string,
     preferredBranch?: string
   ) => Promise<GitBranchDiscoveryResult>;
+  'projects:discoverWorktrees': (
+    serverId: string,
+    projectPath: string
+  ) => Promise<Array<{ path: string; branch?: string }>>;
   'projects:choosePath': (
     serverId: string,
     currentPath?: string

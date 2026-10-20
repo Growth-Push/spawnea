@@ -1,3 +1,4 @@
+import { posix } from 'node:path';
 import type { WebContents } from 'electron';
 import type {
   Session,
@@ -40,6 +41,7 @@ import {
   maskSensitiveString,
   parseCatalogPathLocator,
   resolveContainedPath,
+  resolveProjectWorktreesDir,
   isLoopbackHost,
   SessionTopologySnapshotSchema,
 } from '@spawnea/domain';
@@ -258,10 +260,22 @@ export class SessionManager {
       `hosts.${locator.hostId}.projects.${locator.projectId}.path`,
       'project_path'
     );
+    if (locator.kind === 'worktree') {
+      const configuredWorktreesDir = resolveProjectWorktreesDir(project);
+      const basePath = resolved.value.replace(/\/+$/, '');
+      const worktreesRoot = configuredWorktreesDir
+        ? (posix.isAbsolute(configuredWorktreesDir)
+            ? posix.normalize(configuredWorktreesDir).replace(/\/+$/, '')
+            : posix.resolve(basePath, configuredWorktreesDir).replace(/\/+$/, ''))
+        : `${basePath}__worktrees`;
+      return {
+        value: `${worktreesRoot}/${locator.worktreeLeaf}`,
+        sensitive: resolved.sensitive,
+        release: resolved.release,
+      };
+    }
     return {
-      value: locator.kind === 'worktree'
-        ? `${resolved.value.replace(/\/+$/, '')}__worktrees/${locator.worktreeLeaf}`
-        : resolved.value,
+      value: resolved.value,
       sensitive: resolved.sensitive,
       release: resolved.release,
     };
@@ -295,6 +309,15 @@ export class SessionManager {
       root.release();
       throw error;
     }
+  }
+
+  private async resolveCanonicalHostPath(host: HostAdapter, targetPath: string): Promise<string> {
+    const quote = (p: string) => `'${p.replace(/'/g, "'\\''")}'`;
+    const result = await host.execute(`realpath -- ${quote(targetPath)}`);
+    if (result.exitCode === 0 && result.stdout.trim()) {
+      return result.stdout.trim().replace(/\/+$/, '');
+    }
+    return posix.normalize(targetPath).replace(/\/+$/, '');
   }
 
   private async resolveProjectRepositoryPath(projectId: string, rootPath: string): Promise<ResolvedValueLease<string>> {
@@ -526,6 +549,19 @@ export class SessionManager {
     }
   }
 
+  async discoverProjectWorktrees(
+    serverId: string,
+    projectPath: string
+  ): Promise<Array<{ path: string; branch?: string }>> {
+    const host = await this.getHostAdapter(serverId);
+    const resolvedPath = await this.resolveCatalogPathLocator(projectPath);
+    try {
+      return await this.gitService.listWorktrees(host, resolvedPath.value);
+    } finally {
+      resolvedPath.release();
+    }
+  }
+
   /**
    * Checks health and latency of a single host in background.
    */
@@ -628,6 +664,7 @@ export class SessionManager {
     name?: string;
     baseBranch?: string;
     useWorktree?: boolean;
+    worktreePath?: string;
     parentSessionId?: string;
     childAlias?: string;
     initialStatus?: SessionStatus;
@@ -697,6 +734,9 @@ export class SessionManager {
       if (!configuredProjectPath) {
         throw new Error(`Project path for '${options.projectId}' could not be resolved`);
       }
+      if (options.worktreePath?.trim() && isOnePasswordReference(configuredProjectPath)) {
+        throw new Error('Existing worktree adoption is not supported for credential-backed projects.');
+      }
       const projectPathLease = isOnePasswordReference(configuredProjectPath)
         ? await this.onePasswordResolver.resolveString(
             configuredProjectPath,
@@ -763,10 +803,63 @@ export class SessionManager {
       let managedWorktree = false;
       let tmuxCreated = false;
       let sessionPersisted = false;
-      const shouldUseWorktree = options.useWorktree ?? (worktreeConfig?.enabled ?? false);
+      const hasExplicitWorktreePath = Boolean(options.worktreePath?.trim());
+      const shouldUseWorktree = !hasExplicitWorktreePath && (options.useWorktree ?? (worktreeConfig?.enabled ?? false));
       let inheritedWorktreeLocator: string | undefined;
 
-      if (options.parentSessionId && !shouldUseWorktree) {
+      if (hasExplicitWorktreePath) {
+        const rawWorktreePath = options.worktreePath!.trim();
+        const candidatePath = posix.isAbsolute(rawWorktreePath)
+          ? posix.normalize(rawWorktreePath).replace(/\/+$/, '')
+          : posix.resolve(prepResult.path, rawWorktreePath).replace(/\/+$/, '');
+
+        const check = await host.execute('git rev-parse --show-toplevel', { cwd: candidatePath });
+        if (check.exitCode !== 0 || !check.stdout.trim()) {
+          throw new Error(`Worktree path '${candidatePath}' is not a valid Git worktree or repository`);
+        }
+        runtimePath = check.stdout.trim().replace(/\/+$/, '');
+
+        const [candidateCommonDirCheck, repoCommonDirCheck] = await Promise.all([
+          host.execute('git rev-parse --git-common-dir', { cwd: runtimePath }),
+          host.execute('git rev-parse --git-common-dir', { cwd: prepResult.path }),
+        ]);
+
+        if (
+          candidateCommonDirCheck.exitCode !== 0 ||
+          !candidateCommonDirCheck.stdout.trim() ||
+          repoCommonDirCheck.exitCode !== 0 ||
+          !repoCommonDirCheck.stdout.trim()
+        ) {
+          throw new Error(
+            `Failed to verify repository ownership for worktree '${candidatePath}' against project repository '${prepResult.path}'`
+          );
+        }
+
+        const candidateCommonDir = posix.resolve(runtimePath, candidateCommonDirCheck.stdout.trim());
+        const repoCommonDir = posix.resolve(prepResult.path, repoCommonDirCheck.stdout.trim());
+
+        const [canonicalCandidateCommonDir, canonicalRepoCommonDir] = await Promise.all([
+          this.resolveCanonicalHostPath(host, candidateCommonDir),
+          this.resolveCanonicalHostPath(host, repoCommonDir),
+        ]);
+
+        if (canonicalCandidateCommonDir !== canonicalRepoCommonDir) {
+          throw new Error(
+            `Worktree path '${candidatePath}' does not belong to project repository '${prepResult.path}'`
+          );
+        }
+
+        repositoryPath = prepResult.path;
+
+        const branchCheck = await host.execute('git branch --show-current', { cwd: runtimePath });
+        if (branchCheck.exitCode === 0 && branchCheck.stdout.trim()) {
+          branchName = branchCheck.stdout.trim();
+        } else {
+          const commitCheck = await host.execute('git rev-parse --short HEAD', { cwd: runtimePath });
+          branchName = commitCheck.exitCode === 0 && commitCheck.stdout.trim() ? commitCheck.stdout.trim() : 'HEAD';
+        }
+        managedWorktree = false;
+      } else if (options.parentSessionId && !shouldUseWorktree) {
         const parent = await this.repos.sessions.findById(options.parentSessionId);
         if (!parent) throw new Error(`Parent session '${options.parentSessionId}' not found`);
         if (!parent.worktreePath.trim()) {
@@ -781,12 +874,14 @@ export class SessionManager {
 
       try {
         if (shouldUseWorktree) {
+          const configuredWorktreesDir = resolveProjectWorktreesDir(catProject);
           const provisioned = await this.gitService.createManagedWorktree({
             host,
             repositoryPath: prepResult.path,
             taskSlug: 'task',
             sessionSuffix: sessionId.slice('sess-'.length),
             baseBranch: effectiveBaseBranch,
+            worktreesDir: configuredWorktreesDir,
           });
           runtimePath = provisioned.worktreePath;
           repositoryPath = provisioned.repositoryPath;
@@ -849,12 +944,12 @@ export class SessionManager {
             path: persistedRuntimePath,
             git_url: gitUrl,
           },
-          worktree: (managedWorktree && baseBranch) || options.parentSessionId
+          worktree: (managedWorktree && baseBranch) || options.parentSessionId || hasExplicitWorktreePath
             ? {
                 managed: managedWorktree,
                 path: persistedRuntimePath,
                 branch: branchName,
-                baseBranch: baseBranch || effectiveBaseBranch || 'main',
+                baseBranch: baseBranch || effectiveBaseBranch || branchName,
                 baseCommit: baseCommit,
               }
             : undefined,
@@ -1001,6 +1096,7 @@ export class SessionManager {
       task: input.task,
       baseBranch: input.baseBranch,
       useWorktree: input.useWorktree,
+      worktreePath: input.worktreePath,
       model: input.model,
       initialStatus: 'working',
       creationSource,

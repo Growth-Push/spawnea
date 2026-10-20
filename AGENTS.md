@@ -41,9 +41,14 @@ This repository is designed to be developed heavily with coding agents.
 ## Required local reviews
 
 - In this Spawnea repository, run both local Codex and local CodeRabbit reviews before every commit or PR. Both must review the current diff, including untracked and new files.
-- Validate actionable findings and fix confirmed issues. After code changes, obtain fresh reviews from both tools on the updated diff before proceeding.
-- Within approved task scope, fix validated actionable findings and rerun both reviews without requesting additional authorization or stopping solely at a review-round limit; material scope changes and other unapproved actions still require direction.
+- Before requesting fixes, the coordinator classifies each finding by reproducibility, meaningful user impact and approved scope; a bot severity label alone does not decide the outcome:
+  - **Fix now:** reproducible, within scope, and materially affects privacy, security, functionality or agreed acceptance criteria.
+  - **Defer:** valid but marginal, low-impact, or an expansion of scope; record why without calling it a false positive.
+  - **Dismiss:** an incorrect premise, false positive, or deliberate behavior under the approved contract; record evidence or a reason.
+- Fix findings classified as Fix now. A consequential defect does not become low-impact because its fix is costly. After code changes, obtain fresh reviews from both tools on the updated diff before proceeding.
+- Within approved task scope, resolve findings classified as Fix now and rerun both reviews without requesting additional authorization or stopping solely at a review-round limit; material scope changes and other unapproved actions still require direction.
 - Record the reviewed revision and diff (including untracked/new file contents), the exact review commands, results, and the disposition of actionable findings. Unavailable, failed, or rate-limited reviews are not passing reviews; report them as blocked and do not proceed to commit or PR until both required reviews are complete.
+- A task can finish when agreed acceptance criteria and required checks pass, both required reviews are complete, and no Fix now findings remain. Deferred and dismissed findings require a recorded reason, not another fix/review round or elimination of every bot suggestion.
 
 ## Completion
 

@@ -34,6 +34,7 @@ COMMANDS:
     [--server <id>]             Target server (default: local)
     [--branch <branch>]         Base git branch
     [--no-worktree]             Do not use isolated worktree
+    [--worktree-path <path>]    Adopt an existing worktree path
     [--request-id <id>]         Client request ID for idempotent retries
     [--timeout <sec>]           Operation timeout in seconds (default: 120)
 
@@ -223,6 +224,7 @@ export async function runCli(argv: string[]): Promise<void> {
           if (parsed.flags.model !== undefined && !model?.trim()) throw new Error('--model requires a non-empty exact model ID');
           const branch = typeof parsed.flags.branch === 'string' ? parsed.flags.branch : undefined;
           const worktree = parsed.flags['no-worktree'] ? false : true;
+          const worktreePath = typeof parsed.flags['worktree-path'] === 'string' ? parsed.flags['worktree-path'] : undefined;
           const clientRequestId = typeof parsed.flags['request-id'] === 'string'
             ? parsed.flags['request-id']
             : typeof parsed.flags['client-request-id'] === 'string'
@@ -239,6 +241,7 @@ export async function runCli(argv: string[]): Promise<void> {
             server,
             branch,
             worktree,
+            worktreePath,
             clientRequestId,
             timeoutMs,
             json: isJson,

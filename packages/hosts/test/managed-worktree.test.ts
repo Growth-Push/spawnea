@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -320,5 +320,78 @@ describe('managed Git worktrees', () => {
       isClean: true,
       message: 'Worktree is on its recorded task branch.',
     });
+  });
+
+  it('creates worktree under custom worktreesDir (both relative and absolute)', async () => {
+    // Relative worktreesDir
+    const relWorktree = await service.createManagedWorktree({
+      host,
+      repositoryPath,
+      taskSlug: 'custom-rel',
+      sessionSuffix: 'rel1',
+      baseBranch: 'main',
+      worktreesDir: '.custom-worktrees',
+    });
+    expect(relWorktree.worktreePath).toBe(join(repositoryPath, '.custom-worktrees', 'custom-rel-rel1'));
+    expect(git(relWorktree.worktreePath, 'branch', '--show-current')).toBe('spawnea/custom-rel-rel1');
+
+    // Absolute worktreesDir
+    const absDir = join(tempRoot, 'external-worktrees');
+    const absWorktree = await service.createManagedWorktree({
+      host,
+      repositoryPath,
+      taskSlug: 'custom-abs',
+      sessionSuffix: 'abs1',
+      baseBranch: 'main',
+      worktreesDir: absDir,
+    });
+    expect(absWorktree.worktreePath).toBe(join(absDir, 'custom-abs-abs1'));
+    expect(git(absWorktree.worktreePath, 'branch', '--show-current')).toBe('spawnea/custom-abs-abs1');
+  });
+
+  it('fails if worktrees directory is not writable', async () => {
+    if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) {
+      return;
+    }
+    const readonlyDir = join(tempRoot, 'readonly-worktrees');
+    mkdirSync(readonlyDir, { recursive: true });
+    chmodSync(readonlyDir, 0o555);
+
+    try {
+      await expect(service.createManagedWorktree({
+        host,
+        repositoryPath,
+        taskSlug: 'unwritable',
+        sessionSuffix: 'err1',
+        baseBranch: 'main',
+        worktreesDir: readonlyDir,
+      })).rejects.toThrow(/is not writable/);
+    } finally {
+      chmodSync(readonlyDir, 0o755);
+    }
+  });
+
+  it('lists existing worktrees excluding the primary checkout', async () => {
+    const wt1 = await service.createManagedWorktree({
+      host,
+      repositoryPath,
+      taskSlug: 'list-one',
+      sessionSuffix: 'l1',
+      baseBranch: 'main',
+    });
+    const wt2 = await service.createManagedWorktree({
+      host,
+      repositoryPath,
+      taskSlug: 'list-two',
+      sessionSuffix: 'l2',
+      baseBranch: 'main',
+    });
+
+    const worktrees = await service.listWorktrees(host, repositoryPath);
+    expect(worktrees).toHaveLength(2);
+    expect(worktrees.map((w) => w.path)).toContain(wt1.worktreePath);
+    expect(worktrees.map((w) => w.path)).toContain(wt2.worktreePath);
+    // Primary checkout is NOT in the list
+    expect(worktrees.map((w) => w.path)).not.toContain(repositoryPath);
   });
 });

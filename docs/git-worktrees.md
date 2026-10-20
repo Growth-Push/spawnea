@@ -31,13 +31,24 @@ projects:
     name: My Project
     path: ~/code/my-project
     base_branch: main        # Default branch used when branching
+    worktrees_dir: .worktrees # Optional directory for new worktrees (relative to project path or absolute)
     worktree:
-      enabled: true          # Enables the worktree checkbox in Spawnea
+      enabled: true          # Enables worktree options in Spawnea
+      worktrees_dir: .worktrees # Optional custom worktrees directory (takes precedence over root worktrees_dir)
       copy_files:            # Optional non-secret files copied from project root into new worktrees
         - .env.example
         - .envrc.custom
     enabled: true
 ```
+
+### Configurable Worktree Directory (`worktrees_dir`)
+
+By default, Spawnea provisions isolated worktrees under `<project-path>__worktrees/<task-slug>`.
+You can customize this directory by specifying `worktrees_dir` either inside the `worktree` block (`worktree.worktrees_dir`) or at the project root (`worktrees_dir`):
+- **Precedence**: `worktree.worktrees_dir` takes precedence over the project-level `worktrees_dir`.
+- **Relative paths**: Resolved against the project root path (e.g., `.worktrees` resolves to `<project-path>/.worktrees/<task-slug>`).
+- **Absolute paths**: Supported directly (e.g., `/var/worktrees/my-project`).
+- Spawnea automatically creates the directory if needed and verifies that it is writable before creating the worktree.
 
 > [!CAUTION]
 > Do not list files containing sensitive credentials or uncommitted secrets in `copy_files`. Plaintext secret files copied into worktrees can inadvertently be committed by agents.
@@ -52,13 +63,16 @@ If `worktree.enabled` is `false` or omitted in `config.yaml`, the session runs d
 
 1. In Spawnea, click **New Session**.
 2. Select your host and project.
-3. Check the **Run in isolated Git Worktree** option. It starts unchecked, including for projects with worktree support enabled.
+3. Choose your workspace option:
+   - **Main Project Root**: Runs directly in the repository root checkout.
+   - **Create New Worktree**: Creates a new isolated Git worktree under the configured `worktrees_dir`.
+   - **Existing Worktree**: Discovers and adopts an existing Git worktree in the project without deleting it when the session closes.
 4. (Optional) Specify a **Base Branch** (defaults to the project's base branch or `main`).
 5. Enter your task description (e.g., `Update database migrations`) and click **Launch Session**.
 
 Spawnea automatically:
 - Creates a dedicated task branch named `spawnea/<task-slug>`.
-- Creates a worktree directory at `<project-path>__worktrees/<task-slug>`.
+- Creates a worktree directory under the configured `worktrees_dir` (or `<project-path>__worktrees/<task-slug>` by default).
 - Copies any configured `copy_files` that exist in the project root into the new worktree (missing entries are safely skipped).
 - Starts a persistent `tmux` session pointed at that worktree directory.
 

@@ -45,6 +45,7 @@ Options:
 - `--server <id>`: Host server (default: `local`)
 - `--branch <branch>`: Base git branch
 - `--no-worktree`: Do not create an isolated managed worktree
+- `--worktree-path <path>`: Adopt an existing Git worktree path for the session instead of creating a new managed worktree
 
 ### `spawnea child create --parent <id> --task "<description>" [options]`
 Creates an isolated child session under an existing root parent session.

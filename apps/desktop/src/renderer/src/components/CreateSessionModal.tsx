@@ -98,7 +98,17 @@ export function CreateSessionModal({
   const [task, setTask] = useState<string>('');
   const [isCustomTask, setIsCustomTask] = useState<boolean>(false);
   const [baseBranch, setBaseBranch] = useState<string>('');
-  const [useWorktree, setUseWorktree] = useState<boolean>(false);
+  const [workspaceOption, setWorkspaceOption] = useState<'root' | 'new-worktree' | 'existing-worktree'>('root');
+  const [existingWorktreePath, setExistingWorktreePath] = useState<string>('');
+  const [discoveredWorktrees, setDiscoveredWorktrees] = useState<Array<{ path: string; branch?: string }>>([]);
+  const [loadingWorktrees, setLoadingWorktrees] = useState<boolean>(false);
+  const setUseWorktree = useCallback((val: boolean | ((prev: boolean) => boolean)) => {
+    setWorkspaceOption((prevOption) => {
+      const prevVal = prevOption === 'new-worktree';
+      const nextVal = typeof val === 'function' ? val(prevVal) : val;
+      return nextVal ? 'new-worktree' : 'root';
+    });
+  }, []);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -192,7 +202,9 @@ export function CreateSessionModal({
     if (!isOpen) return;
     setIsCustomTask(false);
     lastConsumedCreatedProjectRef.current = null;
-    setUseWorktree(false);
+    setWorkspaceOption('root');
+    setExistingWorktreePath('');
+    setDiscoveredWorktrees([]);
     setError(null);
     setHostTestStatus('idle');
     setHostTestResult(null);
@@ -432,6 +444,7 @@ export function CreateSessionModal({
       } else {
         setBaseBranch('');
       }
+      setExistingWorktreePath('');
     }
   }, [projectId, projects]);
 
@@ -454,7 +467,43 @@ export function CreateSessionModal({
     if (!isConfigured) {
       setUseWorktree(false);
     }
-  }, [projectId, effectiveServerId, catalog, projects]);
+  }, [projectId, effectiveServerId, catalog, projects, setUseWorktree]);
+
+  const selectedProjectObj = useMemo(() => {
+    return projects.find((p) => p.id === projectId);
+  }, [projects, projectId]);
+
+  useEffect(() => {
+    if (!isOpen || !selectedProjectObj || !effectiveServerId || workspaceOption !== 'existing-worktree') {
+      setDiscoveredWorktrees([]);
+      setLoadingWorktrees(false);
+      return;
+    }
+    let canceled = false;
+    setLoadingWorktrees(true);
+    if (window.spawneaApi?.discoverProjectWorktrees) {
+      window.spawneaApi
+        .discoverProjectWorktrees(effectiveServerId, selectedProjectObj.rootPath)
+        .then((list) => {
+          if (!canceled) {
+            setDiscoveredWorktrees(list || []);
+            setLoadingWorktrees(false);
+          }
+        })
+        .catch(() => {
+          if (!canceled) {
+            setDiscoveredWorktrees([]);
+            setLoadingWorktrees(false);
+          }
+        });
+    } else {
+      setDiscoveredWorktrees([]);
+      setLoadingWorktrees(false);
+    }
+    return () => {
+      canceled = true;
+    };
+  }, [isOpen, selectedProjectObj, effectiveServerId, workspaceOption]);
 
   // Filtered projects for searchable combobox
   const filteredProjects = useMemo(() => {
@@ -509,6 +558,7 @@ export function CreateSessionModal({
         return;
       }
       setProjectId(newVal);
+      setExistingWorktreePath('');
       setIsProjectOpen(false);
       setProjectSearchQuery('');
     },
@@ -799,7 +849,13 @@ export function CreateSessionModal({
       .substring(0, 30) || 'task';
 
   const previewBasePath = selectedProject ? selectedProject.rootPath : `/workspace/code`;
-  const previewWorktreePath = `${previewBasePath}__worktrees/${slug}`;
+  const configuredWorktreesDir = catalogProject?.worktree?.worktrees_dir || catalogProject?.worktrees_dir;
+  const previewWorktreesRoot = configuredWorktreesDir
+    ? (configuredWorktreesDir.startsWith('/')
+        ? configuredWorktreesDir.replace(/\/+$/, '')
+        : `${previewBasePath}/${configuredWorktreesDir}`.replace(/\/+$/, ''))
+    : `${previewBasePath}__worktrees`;
+  const previewWorktreePath = `${previewWorktreesRoot}/${slug}`;
   const previewTaskBranch = `spawnea/${slug}`;
   const previewBaseBranch = baseBranch.trim() !== '' ? baseBranch.trim() : 'Current branch (e.g. main)';
   const previewTmux = `spawnea-${slug}`;
@@ -831,10 +887,16 @@ export function CreateSessionModal({
     }
     const requestedModel = supportsExplicitModel && modelMode === 'custom' ? modelChoice : undefined;
 
+    if (workspaceOption === 'existing-worktree' && !existingWorktreePath.trim()) {
+      setError('Please select or specify an existing worktree path.');
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       setError(null);
-      const isEffectiveWorktree = Boolean(isWorktreeConfigured && useWorktree);
+      const isEffectiveWorktree = Boolean(isWorktreeConfigured && workspaceOption === 'new-worktree');
+      const effectiveWorktreePath = workspaceOption === 'existing-worktree' ? existingWorktreePath.trim() : undefined;
       await onSubmit({
         serverId: effectiveServerId,
         projectId,
@@ -842,11 +904,14 @@ export function CreateSessionModal({
         task: task.trim(),
         baseBranch: isEffectiveWorktree ? baseBranch.trim() || undefined : undefined,
         useWorktree: isEffectiveWorktree,
+        worktreePath: effectiveWorktreePath,
         model: requestedModel,
       });
       // Reset form
       setTask('');
       setBaseBranch('');
+      setWorkspaceOption('root');
+      setExistingWorktreePath('');
       setModelChoice('');
       setModelMode('default');
       onClose();
@@ -1424,64 +1489,161 @@ export function CreateSessionModal({
             </p>
           </div>
 
-          {/* Isolated Git Worktree Option */}
-          <div className="pt-0.5">
-            <div
-              onClick={() => {
-                if (isWorktreeConfigured && !isSubmitting) {
-                  setUseWorktree((prev) => !prev);
+          {/* Workspace Options */}
+          <div className="pt-0.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                <FolderGit2 className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Workspace Option</span>
+              </label>
+              {isWorktreeConfigured ? (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                  Worktree
+                </span>
+              ) : (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 font-mono">
+                  Disabled in config
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              {/* Option 1: Main Project Root */}
+              <button
+                type="button"
+                data-testid="radio-workspace-root"
+                aria-pressed={workspaceOption === 'root'}
+                onClick={() => setWorkspaceOption('root')}
+                className={`p-2 rounded-lg border text-left transition-colors flex flex-col gap-0.5 cursor-pointer ${
+                  workspaceOption === 'root'
+                    ? 'bg-zinc-800 border-zinc-500 text-white'
+                    : 'bg-[#0d1117] border-[#30363d] text-zinc-400 hover:border-[#484f58]'
+                }`}
+              >
+                <span className="text-xs font-medium">Main Project Root</span>
+                <span className="text-[10px] text-zinc-500 leading-tight">Run in repo root</span>
+              </button>
+
+              {/* Option 2: Create New Worktree */}
+              <button
+                type="button"
+                data-testid="radio-workspace-new-worktree"
+                aria-pressed={workspaceOption === 'new-worktree'}
+                disabled={!isWorktreeConfigured}
+                onClick={() => {
+                  if (isWorktreeConfigured) setWorkspaceOption('new-worktree');
+                }}
+                className={`p-2 rounded-lg border text-left transition-colors flex flex-col gap-0.5 ${
+                  !isWorktreeConfigured
+                    ? 'opacity-50 cursor-not-allowed bg-[#0d1117] border-[#21262d] text-zinc-500'
+                    : workspaceOption === 'new-worktree'
+                      ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-300 cursor-pointer'
+                      : 'bg-[#0d1117] border-[#30363d] text-zinc-400 hover:border-[#484f58] cursor-pointer'
+                }`}
+                title={
+                  isWorktreeConfigured
+                    ? 'Create a dedicated isolated git worktree'
+                    : "Not configured for this project. Add 'worktree: { enabled: true }' in config.yaml"
+                }
+              >
+                <span className="text-xs font-medium">Create New Worktree</span>
+                <span className="text-[10px] text-zinc-500 leading-tight">
+                  {isWorktreeConfigured ? 'Isolated branch' : 'Disabled in config'}
+                </span>
+              </button>
+
+              {/* Option 3: Existing Worktree */}
+              <button
+                type="button"
+                data-testid="radio-workspace-existing-worktree"
+                aria-pressed={workspaceOption === 'existing-worktree'}
+                onClick={() => setWorkspaceOption('existing-worktree')}
+                className={`p-2 rounded-lg border text-left transition-colors flex flex-col gap-0.5 cursor-pointer ${
+                  workspaceOption === 'existing-worktree'
+                    ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-300'
+                    : 'bg-[#0d1117] border-[#30363d] text-zinc-400 hover:border-[#484f58]'
+                }`}
+              >
+                <span className="text-xs font-medium">Existing Worktree</span>
+                <span className="text-[10px] text-zinc-500 leading-tight">Adopt worktree</span>
+              </button>
+            </div>
+
+            {/* Hidden proxy checkbox to preserve compatibility with existing tests */}
+            <input
+              type="checkbox"
+              id="checkbox-use-worktree"
+              data-testid="checkbox-use-worktree"
+              checked={isWorktreeConfigured && workspaceOption === 'new-worktree'}
+              onChange={(e) => {
+                if (isWorktreeConfigured) {
+                  setWorkspaceOption(e.target.checked ? 'new-worktree' : 'root');
                 }
               }}
-              className={`flex items-start gap-2.5 p-2.5 bg-[#0d1117] border rounded-lg transition-colors select-none ${
-                isWorktreeConfigured
-                  ? 'border-[#30363d] hover:border-[#484f58] cursor-pointer'
-                  : 'border-[#21262d] opacity-60 cursor-not-allowed'
-              }`}
-              title={
-                isWorktreeConfigured
-                  ? 'Toggle isolated git worktree for this session'
-                  : "To enable worktrees for this project, add 'worktree: { enabled: true }' in your config.yaml"
-              }
-            >
-              <input
-                type="checkbox"
-                id="checkbox-use-worktree"
-                data-testid="checkbox-use-worktree"
-                checked={isWorktreeConfigured && useWorktree}
-                onChange={(e) => {
-                  if (isWorktreeConfigured) {
-                    setUseWorktree(e.target.checked);
-                  }
-                }}
-                onClick={(e) => e.stopPropagation()}
-                disabled={isSubmitting || !isWorktreeConfigured}
-                className="mt-0.5 w-4 h-4 rounded border-[#30363d] bg-[#161b22] text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0 cursor-pointer disabled:cursor-not-allowed accent-emerald-500"
-              />
-              <div className="flex flex-col gap-0.5 flex-1">
-                <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
-                  <GitBranch className={`w-3.5 h-3.5 ${isWorktreeConfigured ? 'text-emerald-400' : 'text-zinc-500'}`} />
-                  <span>Run in isolated Git Worktree</span>
-                  {isWorktreeConfigured ? (
-                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
-                      Worktree
-                    </span>
-                  ) : (
-                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 font-mono">
-                      Disabled in config
+              className="sr-only"
+              tabIndex={-1}
+              aria-hidden="true"
+            />
+
+            {/* Existing Worktree controls */}
+            {workspaceOption === 'existing-worktree' && (
+              <div className="p-3 bg-[#0d1117] border border-[#30363d] rounded-lg space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-zinc-300">Select Existing Worktree</span>
+                  {loadingWorktrees && (
+                    <span className="text-[10px] text-zinc-500 flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Scanning worktrees...
                     </span>
                   )}
                 </div>
-                <span className="text-[11px] text-zinc-400">
-                  {isWorktreeConfigured
-                    ? "Creates a dedicated branch and folder so work doesn't collide with main or other sessions"
-                    : "Not configured for this project. Add 'worktree: { enabled: true }' in config.yaml"}
-                </span>
+
+                {discoveredWorktrees.length > 0 && (
+                  <div>
+                    <label htmlFor="select-existing-worktree" className="block text-[11px] text-zinc-400 mb-1">
+                      Discovered Worktrees
+                    </label>
+                    <select
+                      id="select-existing-worktree"
+                      data-testid="select-existing-worktree"
+                      value={discoveredWorktrees.some((w) => w.path === existingWorktreePath) ? existingWorktreePath : ''}
+                      onChange={(e) => setExistingWorktreePath(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-[#161b22] border border-[#30363d] rounded-lg text-xs text-zinc-200 focus:outline-none focus:border-cyan-500"
+                    >
+                      <option value="">-- Choose a worktree or enter custom path below --</option>
+                      {discoveredWorktrees.map((wt) => (
+                        <option key={wt.path} value={wt.path}>
+                          {wt.path} {wt.branch ? `(${wt.branch})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div>
+                  <label htmlFor="input-manual-worktree-path" className="block text-[11px] text-zinc-400 mb-1">
+                    {discoveredWorktrees.length > 0 ? 'Or Custom Worktree Path' : 'Worktree Path'}
+                  </label>
+                  <input
+                    id="input-manual-worktree-path"
+                    type="text"
+                    data-testid="input-manual-worktree-path"
+                    placeholder="/path/to/existing/worktree"
+                    value={existingWorktreePath}
+                    onChange={(e) => setExistingWorktreePath(e.target.value)}
+                    disabled={isSubmitting}
+                    className="w-full px-3 py-1.5 bg-[#161b22] border border-[#30363d] rounded-lg text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-cyan-500 disabled:opacity-50 font-mono"
+                  />
+                  <p className="text-[10px] text-zinc-500 mt-1">
+                    Spawnea will adopt this worktree without deleting it when the session closes.
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* Base Branch (if worktree active) */}
-          {isWorktreeConfigured && useWorktree && (
+          {/* Base Branch (if new worktree active) */}
+          {isWorktreeConfigured && workspaceOption === 'new-worktree' && (
             <div>
               <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1">
                 <GitBranch className="w-3 h-3 text-zinc-400" />
@@ -1532,10 +1694,15 @@ export function CreateSessionModal({
           <div className="p-3 bg-[#12161c] border border-[#21262d] rounded-lg space-y-2 text-[11px] font-mono text-zinc-400">
             <div className="flex items-center justify-between text-zinc-300 font-semibold pb-1.5 border-b border-[#21262d]">
               <span>Execution Summary</span>
-              {isWorktreeConfigured && useWorktree ? (
+              {workspaceOption === 'new-worktree' && isWorktreeConfigured ? (
                 <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-sans font-medium">
                   <GitBranch className="w-2.5 h-2.5" />
                   <span>Isolated Worktree</span>
+                </span>
+              ) : workspaceOption === 'existing-worktree' ? (
+                <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-sans font-medium">
+                  <GitBranch className="w-2.5 h-2.5" />
+                  <span>Existing Worktree</span>
                 </span>
               ) : (
                 <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 font-sans font-medium">
@@ -1545,7 +1712,7 @@ export function CreateSessionModal({
             </div>
 
             <div className="space-y-1.5">
-              {isWorktreeConfigured && useWorktree ? (
+              {workspaceOption === 'new-worktree' && isWorktreeConfigured ? (
                 <>
                   <div
                     className="flex items-baseline justify-between gap-3 group cursor-help"
@@ -1588,6 +1755,28 @@ export function CreateSessionModal({
                       </span>
                     </div>
                   )}
+                </>
+              ) : workspaceOption === 'existing-worktree' ? (
+                <>
+                  <div
+                    className="flex items-baseline justify-between gap-3 group cursor-help"
+                    title={`Adopted Worktree Path: ${existingWorktreePath || '(none specified)'}`}
+                  >
+                    <span className="text-zinc-500 shrink-0">Worktree Path:</span>
+                    <span className="truncate text-cyan-400 font-medium text-right max-w-[280px]">
+                      {existingWorktreePath || '(select or enter path)'}
+                    </span>
+                  </div>
+                  <div
+                    className="flex items-baseline justify-between gap-3 group cursor-help"
+                    title="Branch will be auto-detected upon adoption"
+                  >
+                    <span className="text-zinc-500 shrink-0">Worktree Branch:</span>
+                    <span className="truncate text-zinc-300 text-right max-w-[280px]">
+                      {discoveredWorktrees.find((w) => w.path === existingWorktreePath)?.branch ||
+                        'Auto-detected on adoption'}
+                    </span>
+                  </div>
                 </>
               ) : (
                 <div
