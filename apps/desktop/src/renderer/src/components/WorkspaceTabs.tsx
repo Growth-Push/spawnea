@@ -39,8 +39,23 @@ import {
   Bookmark,
 } from 'lucide-react';
 import { AgentContextView } from './AgentContextView';
+import { formatSessionAgentContext } from '../session-agent-context';
 
 export type WorkspaceTabType = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details' | 'agent-context';
+
+// Only context-copy browser fallbacks share this FIFO, including across remounts.
+// Browser permission/write steps may run in parallel; native IPC writes directly.
+// Recover the queue after failure without turning a failed write into success.
+let browserContextWrite: Promise<void> | undefined;
+function writeBrowserAgentContext(text: string): Promise<void> {
+  const pending = (browserContextWrite ?? Promise.resolve()).then(() => navigator.clipboard.writeText(text));
+  const settled = pending.then(() => {}, () => {});
+  browserContextWrite = settled;
+  void settled.then(() => {
+    if (browserContextWrite === settled) browserContextWrite = undefined;
+  });
+  return pending;
+}
 
 function isLocalClipboardBridgeEndpoint(endpoint?: HostConnectionEndpoint | null): boolean {
   return endpoint?.transport === 'local' && isLoopbackHost(endpoint.hostname);
@@ -139,6 +154,8 @@ export function WorkspaceTabs({
   const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(false);
   const [hostInfo, setHostInfo] = useState<HostSystemInfo | null>(null);
   const [isLoadingHostInfo, setIsLoadingHostInfo] = useState(false);
+  const [isCopyingAgentContext, setIsCopyingAgentContext] = useState(false);
+  const copyAgentContextInFlight = useRef<symbol | null>(null);
   const [clipboardBridgeState, setClipboardBridgeState] = useState<{
     sessionId: string | null;
     available: boolean;
@@ -466,6 +483,45 @@ export function WorkspaceTabs({
   };
 
 
+  useEffect(() => {
+    copyAgentContextInFlight.current = null;
+    setIsCopyingAgentContext(false);
+    setToast((current) => current?.id.startsWith('context-') ? null : current);
+    return () => { copyAgentContextInFlight.current = null; };
+  }, [session?.id]);
+
+  const handleCopyAgentContext = async () => {
+    if (!session || copyAgentContextInFlight.current) return;
+    const operation = Symbol('copy-agent-context');
+    copyAgentContextInFlight.current = operation;
+    setIsCopyingAgentContext(true);
+    setToast(null);
+    try {
+      const text = formatSessionAgentContext(session, project, agent, server);
+      if (window.spawneaApi?.writeClipboardText) {
+        await window.spawneaApi.writeClipboardText(text);
+      } else {
+        await writeBrowserAgentContext(text);
+      }
+      if (copyAgentContextInFlight.current !== operation) return;
+      setToast({ id: `context-${Date.now()}`, title: 'Agent context copied', type: 'success' });
+    } catch {
+      if (copyAgentContextInFlight.current !== operation) return;
+      // Clipboard errors may contain operational data; do not echo their payload.
+      setToast({
+        id: `context-error-${Date.now()}`,
+        title: 'Could not copy agent context',
+        message: 'Clipboard write failed. Try Copy Agent Context again.',
+        type: 'warning',
+      });
+    } finally {
+      if (copyAgentContextInFlight.current === operation) {
+        copyAgentContextInFlight.current = null;
+        setIsCopyingAgentContext(false);
+      }
+    }
+  };
+
   const tabs: {
     id: WorkspaceTabType;
     label: string;
@@ -684,6 +740,17 @@ export function WorkspaceTabs({
               <h4 className="text-sm font-semibold text-white">
                 Session Entity Details
               </h4>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="copy-agent-context-button"
+                  onClick={handleCopyAgentContext}
+                  disabled={isCopyingAgentContext}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#21262d] hover:bg-[#30363d] text-zinc-300 text-[11px] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Copy className="w-3 h-3 text-emerald-400" />
+                  <span>Copy Agent Context</span>
+                </button>
               {session.status !== 'done' && onSaveLayout && (
                 <button
                   type="button"
@@ -696,6 +763,7 @@ export function WorkspaceTabs({
                   <span>Save Layout</span>
                 </button>
               )}
+              </div>
             </div>
             <dl className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <DetailCard
