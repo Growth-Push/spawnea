@@ -1,35 +1,125 @@
 import type { Agent, Project, Server, Session } from '@spawnea/domain';
 
-// Bounded YAML block-field handling, not a YAML parser: space-indented mapping keys
-// and compact sequence keys, literal/folded indicators, optional chomping and 1–9
-// indentation modifiers. Up to two inline anchor/tag properties may precede the
-// indicator; properties are recognized as text, never resolved or expanded.
-// Keep neighboring text and its original line endings.
-function redactCredentialBlocks(value: string): string {
+// Locate a closing scalar quote, respecting YAML doubled single quotes and double
+// quote escapes. No decoding, alias resolution or whole-document parsing occurs.
+function closingScalarQuote(text: string, quote: string, start: number): number {
+  for (let index = start; index < text.length; index++) {
+    if (quote === '"' && text[index] === '\\') index++;
+    else if (text[index] === quote) {
+      if (quote === "'" && text[index + 1] === "'") index++;
+      else return index;
+    }
+  }
+  return -1;
+}
+
+// Bounded structured fields: space-indented mapping/compact sequence keys. Block
+// bodies honor modifiers and inferred indentation; plain/quoted continuations
+// stay above the key column. Inline properties are lexical only. Preserve line
+// endings and preserve text after a closed quoted scalar. Other single-line
+// fields retain the existing delimiter-aware masking.
+function redactCredentialContinuations(value: string): string {
   const lines = value.split(/(?<=\n)|(?<=\r)(?!\n)/);
   const result: string[] = [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]!;
-    const header = /^([ ]*(?:-[ \t]+)?)(?:"([\w-]+)"|'([\w-]+)'|([\w-]+))[ \t]*:[ \t]*(?:(?:&[\w-]+|!{1,2}[\w:/.-]+|!<[^<>\s]+>)[ \t]+){0,2}[|>]((?:[1-9][+-]?|[+-][1-9]?)?)[ \t]*(?:#.*)?$/.exec(line.replace(/[\r\n]+$/, ''));
-    const key = header && (header[2] ?? header[3] ?? header[4])!;
+    const header = /^([ ]*(?:-[ \t]+)?)(?:"([\w-]+(?:\.[\w-]+)*)"|'([\w-]+(?:\.[\w-]+)*)'|([\w-]+(?:\.[\w-]+)*))[ \t]*:[ \t]*(.*)$/.exec(line.replace(/[\r\n]+$/, ''));
+    // Dots qualify a literal label; only its final segment determines sensitivity.
+    const key = header && (header[2] ?? header[3] ?? header[4])!.split('.').pop();
     if (!header || !/^(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*(?:password|passwd|token|api[_-]?key|secret[_-]?access[_-]?key|(?:secret|private|access|signing|encryption)[_-]?key|secret|authorization|credential)$/i.test(key!)) {
       result.push(line);
       continue;
     }
     // For "- key", the key column (not the dash column) is the base indentation.
     const prefix = header[1]!;
-    const modifier = /[1-9]/.exec(header[5]!);
+    const scalar = header[5]!.replace(/^(?:(?:!<[^<>\s]+>|&[^\s,[\]{}]+|![^\s,[\]{}<>]*)(?:[ \t]+|$)){0,2}/, '');
+    const block = /^[|>]((?:[1-9][+-]?|[+-][1-9]?)?)[ \t]*(?:#.*)?$/.exec(scalar);
+    const modifier = block && /[1-9]/.exec(block[1]!);
+    let quote = !block && /^["']/.test(scalar) ? scalar[0] : undefined;
+    let closing = quote ? closingScalarQuote(scalar, quote, 1) : -1;
+    if (closing >= 0) {
+      // Prefer YAML's literal-backslash close before a real neighbor/comment or
+      // delimiter. Only whitespace-led value text can extend to a complete
+      // legacy escaped-quote close; never search through an ordinary assignment.
+      const yamlTail = scalar.slice(closing + 1);
+      const escapedClosing = quote === "'" && /(?:^|[^\\])(?:\\\\)*\\$/.test(scalar.slice(0, closing));
+      const neighborTail = /^(?:[ \t]*(?:[,;}#]|$)|[ \t]+[a-z][\w-]*(?:\.[\w-]+)*[ \t]*=)/i.test(yamlTail);
+      if (escapedClosing && /^[ \t]+\S/.test(yamlTail) && !neighborTail) {
+        const legacy = /^'(?:''|\\.|[^'\\\r\n])*'/.exec(scalar);
+        if (legacy && /^(?:[ \t,;}]|$)/.test(scalar.slice(legacy[0].length))) {
+          closing = legacy[0].length - 1;
+        }
+      }
+      // Structured colon fields use YAML quoting (literal single-quote backslashes),
+      // including after lexical properties. Keep delimiters/assignments outside
+      // the closing quote. An immediate non-delimiter suffix instead delegates
+      // to the legacy backslash-escaped inline syntax, as do equals assignments.
+      const tail = scalar.slice(closing + 1);
+      const scalarOffset = line.replace(/[\r\n]+$/, '').length - scalar.length;
+      // Ordinary quoted values still delegate, preserving specialized markers
+      // such as authorization. Only the incompatible lexical forms need this cut.
+      const needsLexicalMask = scalar !== header[5] || (quote === "'" && scalar.includes('\\'));
+      result.push(needsLexicalMask && /^(?:[ \t,;}]|$)/.test(tail)
+        ? `${prefix}[REDACTED CREDENTIAL]${line.slice(scalarOffset + closing + 1)}`
+        : line);
+      continue;
+    }
+    let started = Boolean(scalar.trim()) && !scalar.startsWith('#');
+    const canStartIndentlessSequence = !block && !started;
+    let indentlessSequence = false;
+    let hasBody = false;
     let contentIndent = modifier ? prefix.length + Number(modifier[0]) : undefined;
     let end = index + 1;
     while (end < lines.length) {
       const next = lines[end]!;
       if (next.trim()) {
         const indent = /^ */.exec(next)![0].length;
-        if (indent <= prefix.length) break;
-        contentIndent ??= indent;
-        if (indent < contentIndent) break;
+        // Comments do not dedent an empty-header sequence search or active list.
+        // Explicit blocks and nonempty scalars keep their existing boundaries.
+        if (canStartIndentlessSequence && (!started || indentlessSequence) && next.trimStart().startsWith('#')) {
+          end++;
+          continue;
+        }
+        if (indent <= prefix.length) {
+          // Only an empty/comment-only non-block header can own same-column
+          // sequence items. Outer entries and nonsequence siblings stay literal.
+          if (indent < prefix.length || !canStartIndentlessSequence || (started && !indentlessSequence)) break;
+          const item = next.slice(indent);
+          if (!/^-(?:[ \t]|[\r\n]|$)/.test(item)) break;
+          indentlessSequence = true;
+        }
+        if (block) {
+          contentIndent ??= indent;
+          if (indent < contentIndent) break;
+        } else if (!started && next.trimStart().startsWith('#')) {
+          end++;
+          continue;
+        }
+        hasBody = true;
+        let quoteStart = 0;
+        if (!block && !started) {
+          const first = next.trimStart();
+          quote = /^["']/.test(first) ? first[0] : undefined;
+          quoteStart = indent + 1;
+        }
+        started = true;
+        const bodyClosing = quote ? closingScalarQuote(next, quote, quoteStart) : -1;
+        if (bodyClosing >= 0) {
+          // A quoted key or other trailing content is not a scalar terminator.
+          // Fall back to indentation-only consumption, without traversing nodes.
+          const tail = next.slice(bodyClosing + 1).replace(/[\r\n]+$/, '');
+          if (/^[ \t]*(?:#.*)?$/.test(tail)) {
+            end++;
+            break;
+          }
+          quote = undefined;
+        }
       }
       end++;
+    }
+    if (!block && !hasBody) {
+      result.push(line);
+      continue;
     }
     const ending = /(?:\r\n|\r|\n)$/.exec(lines[end - 1]!)?.[0] ?? '';
     result.push(`${prefix}[REDACTED CREDENTIAL]${ending}`);
@@ -40,10 +130,10 @@ function redactCredentialBlocks(value: string): string {
 
 /** Redaction is best-effort: arbitrary unlabeled secrets cannot be recognized. */
 export function redactAgentContextValue(value: string): string {
-  return redactCredentialBlocks(value)
+  return redactCredentialContinuations(value)
     .replace(/op:\/\/[^\r\n]*/gi, '[REDACTED 1PASSWORD REFERENCE]')
     .replace(/-----BEGIN [A-Z0-9 _-]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 _-]*PRIVATE KEY-----|$)/gi, '[REDACTED PRIVATE KEY]')
-    .replace(/(?<![\w-])["']?\b(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*authorization\b["']?\s*[:=]\s*(?:"(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+"|'(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+'|(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+)/gi, '[REDACTED AUTHORIZATION]')
+    .replace(/(?<![\w.-])["']?\b(?:[\w-]+\.)*(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*authorization\b["']?\s*[:=]\s*(?:"(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+"|'(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+'|(?:Basic|Bearer)\s+[A-Za-z0-9_\-.~+/=]+)/gi, '[REDACTED AUTHORIZATION]')
     // Without an explicit key, require eight characters plus a digit, token separator,
     // internal period or lowercase-to-uppercase transition. Ignore sentence-final periods;
     // initial capitalization alone is ordinary prose, not evidence of a credential.
@@ -58,14 +148,16 @@ export function redactAgentContextValue(value: string): string {
     })
     // Token boundaries avoid interpreting the embedded sk- in task-implementation as a key.
     .replace(/(?<![\w-])(?:sk-[\w-]{8,}|glpat-[\w-]{15,}|github_pat_[\w]+|gh[pousr]_[\w]{15,}|xox[baprs]-[\w-]+|AKIA[A-Z0-9]{16})(?![\w-])/g, '[REDACTED TOKEN]')
-    // Match the complete qualified key, including environment-style and camelCase prefixes.
+    // Match the complete qualified key, including literal dotted labels,
+    // environment-style and camelCase prefixes; no property traversal occurs.
     // Colon values can contain spaces; stop at line/delimiter or a neighboring equals assignment.
     // Equals values remain single tokens unless quoted, preserving ordinary adjacent assignments.
-    .replace(/(?<![\w-])["']?\b(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*(?:password|passwd|token|api[_-]?key|secret[_-]?access[_-]?key|(?:secret|private|access|signing|encryption)[_-]?key|secret|authorization|credential)\b["']?[ \t]*(?::[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\r\n,;}]+?(?=[ \t]+[a-z][\w-]*[ \t]*=|[\r\n,;}]|$))|=[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+))/gi, (match, offset: number, source: string) => {
+    // Doubled YAML single quotes stay inside the value, as in the multiline scanner.
+    .replace(/(?<![\w.-])["']?\b(?:[\w-]+\.)*(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*(?:password|passwd|token|api[_-]?key|secret[_-]?access[_-]?key|(?:secret|private|access|signing|encryption)[_-]?key|secret|authorization|credential)\b["']?[ \t]*(?::[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:''|\\.|[^'\\\r\n])*'|[^\r\n,;}]+?(?=[ \t]+[a-z][\w-]*(?:\.[\w-]+)*[ \t]*=|[\r\n,;}]|$))|=[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:''|\\.|[^'\\\r\n])*'|[^\s,;}]+))/gi, (match, offset: number, source: string) => {
       // Bare colon fields need a line/object boundary or a line-start YAML list indicator.
       // Inline hyphens in prose are not structured field boundaries.
       // Quoted keys and equals assignments remain recognizable anywhere.
-      const bareColon = /^[\w-]+[ \t]*:/.test(match);
+      const bareColon = /^[\w-]+(?:\.[\w-]+)*[ \t]*:/.test(match);
       const prefix = source.slice(0, offset);
       const fieldBoundary = /(?:^|[\r\n{,;])[ \t]*$/.test(prefix)
         || /(?:^|[\r\n])[ \t]*-[ \t]+$/.test(prefix);
