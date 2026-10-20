@@ -187,6 +187,51 @@ describe('WorkspaceTabs Component', () => {
     expect(writeText).toHaveBeenCalledWith(next.id);
   });
 
+  it.each(['success', 'failure'])('isolates an old %s from a newer pending copy after switching sessions', async (outcome) => {
+    let resolveOld!: () => void;
+    let rejectOld!: (error: Error) => void;
+    let resolveNew!: () => void;
+    const writeClipboardText = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveNew = resolve; }));
+    (window as any).spawneaApi.writeClipboardText = writeClipboardText;
+    const onTabChange = vi.fn();
+    const { rerender } = render(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={onTabChange} />);
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    expect(writeClipboardText).toHaveBeenCalledTimes(1);
+    const next = { ...mockSession, id: 'session-fictional-next', task: 'Review fictional next task' };
+    rerender(<WorkspaceTabs session={next} activeTab="details" onTabChange={onTabChange} />);
+    expect((screen.getByTestId('copy-agent-context-button') as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    expect(writeClipboardText).toHaveBeenCalledTimes(2);
+    expect(writeClipboardText).toHaveBeenLastCalledWith(expect.stringContaining(next.task));
+    await act(async () => { if (outcome === 'success') resolveOld(); else rejectOld(new Error('fictional old failure')); });
+    expect(screen.queryByText('Agent context copied')).toBeNull();
+    expect(screen.queryByText('Could not copy agent context')).toBeNull();
+    expect((screen.getByTestId('copy-agent-context-button') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    expect(writeClipboardText).toHaveBeenCalledTimes(2);
+    await act(async () => resolveNew());
+    expect(screen.getByText('Agent context copied')).toBeDefined();
+  });
+
+  it('invalidates a pending copy when leaving and returning to the same session', async () => {
+    let resolveOld!: () => void;
+    const writeClipboardText = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { resolveOld = resolve; })).mockResolvedValue(undefined);
+    (window as any).spawneaApi.writeClipboardText = writeClipboardText;
+    const onTabChange = vi.fn();
+    const { rerender } = render(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={onTabChange} />);
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    rerender(<WorkspaceTabs session={{ ...mockSession, id: 'session-fictional-next' }} activeTab="details" onTabChange={onTabChange} />);
+    rerender(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={onTabChange} />);
+    await act(async () => resolveOld());
+    expect(screen.queryByText('Agent context copied')).toBeNull();
+    fireEvent.click(screen.getByTestId('copy-agent-context-button'));
+    await screen.findByText('Agent context copied');
+    expect(writeClipboardText).toHaveBeenCalledTimes(2);
+  });
+
   it('reports clipboard failure without echoing its payload and allows retry', async () => {
     const writeClipboardText = vi.fn().mockRejectedValueOnce(new Error('private clipboard payload')).mockResolvedValue(undefined);
     (window as any).spawneaApi.writeClipboardText = writeClipboardText;

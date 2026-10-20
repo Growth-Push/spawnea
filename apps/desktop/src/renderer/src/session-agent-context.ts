@@ -23,8 +23,17 @@ export function redactAgentContextValue(value: string): string {
     // Match the complete qualified key, including environment-style and camelCase prefixes.
     // Colon values can contain spaces; stop at line/delimiter or a neighboring equals assignment.
     // Equals values remain single tokens unless quoted, preserving ordinary adjacent assignments.
-    .replace(/(?<![\w-])["']?\b(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*(?:password|passwd|token|api[_-]?key|secret[_-]?access[_-]?key|(?:secret|private|access|signing|encryption)[_-]?key|secret|authorization|credential)\b["']?[ \t]*(?::[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\r\n,;}]+?(?=[ \t]+[a-z][\w-]*[ \t]*=|[\r\n,;}]|$))|=[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+))/gi, '[REDACTED CREDENTIAL]')
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@');
+    .replace(/(?<![\w-])["']?\b(?:[a-z][a-z0-9]*[_-])*[a-z0-9]*(?:password|passwd|token|api[_-]?key|secret[_-]?access[_-]?key|(?:secret|private|access|signing|encryption)[_-]?key|secret|authorization|credential)\b["']?[ \t]*(?::[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\r\n,;}]+?(?=[ \t]+[a-z][\w-]*[ \t]*=|[\r\n,;}]|$))|=[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+))/gi, (match, offset: number, source: string) => {
+      // Bare colon fields need a line/object boundary or a line-start YAML list indicator.
+      // Inline hyphens in prose are not structured field boundaries.
+      // Quoted keys and equals assignments remain recognizable anywhere.
+      const bareColon = /^[\w-]+[ \t]*:/.test(match);
+      const prefix = source.slice(0, offset);
+      const fieldBoundary = /(?:^|[\r\n{,;])[ \t]*$/.test(prefix)
+        || /(?:^|[\r\n])[ \t]*-[ \t]+$/.test(prefix);
+      return !bareColon || fieldBoundary ? '[REDACTED CREDENTIAL]' : match;
+    })
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@?#]+@/gi, '$1[REDACTED]@');
 }
 
 export function formatSessionAgentContext(

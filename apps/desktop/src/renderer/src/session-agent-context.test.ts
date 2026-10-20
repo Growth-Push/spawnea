@@ -18,6 +18,56 @@ const agent: Agent = { id: session.agentId, name: 'Example Agent', harness: 'her
 const server: Server = { id: session.serverId, name: 'Example Host', host: 'excluded-connection-target', sshPort: 22, enabled: true, createdAt };
 
 describe('session agent context sheet', () => {
+  it.each(['', '  '].flatMap((indent) =>
+    ['password', 'APP_SECRET_KEY', 'servicePassword'].flatMap((key) =>
+      ['fictional-yaml-value', '"fictional yaml value"', "'fictional yaml value'"].map((value) => ({ indent, key, value }))),
+  ))('masks YAML sequence credential fields with indentation "$indent", key $key and value $value', ({ indent, key, value }) => {
+    const task = `credentials:\n${indent}- ${key}: ${value}\n${indent}  name: fictional-service\n${indent}  enabled: true`;
+    const expected = `credentials:\n${indent}- [REDACTED CREDENTIAL]\n${indent}  name: fictional-service\n${indent}  enabled: true`;
+    expect(redactAgentContextValue(task)).toBe(expected);
+    expect(formatSessionAgentContext({ ...session, task }, project, agent, server)).toBe(
+      formatSessionAgentContext(session, project, agent, server).replace('task: Review a sample change', `task: ${expected.replace(/\n/g, '\n  ')}`),
+    );
+  });
+
+  it.each([
+    ['- password: fictional-yaml-value', '- [REDACTED CREDENTIAL]'],
+    ['  -\tAPP_SECRET_KEY: "fictional yaml value"', '  -\t[REDACTED CREDENTIAL]'],
+    ['- name: fictional-service\n  password: fictional-yaml-value', '- name: fictional-service\n  [REDACTED CREDENTIAL]'],
+    ['Review - password: reset UI', 'Review - password: reset UI'],
+    ['Review inline-password: reset UI', 'Review inline-password: reset UI'],
+    ['Review, - password: reset UI', 'Review, - password: reset UI'],
+    ['- Implement password: reset UI', '- Implement password: reset UI'],
+    ['-password: reset UI', '-password: reset UI'],
+    ['Fix authorization: reject expired sessions', 'Fix authorization: reject expired sessions'],
+    ['Implement password: reset UI', 'Implement password: reset UI'],
+  ])('recognizes only line-start sequence indicators and preserves prose: %s', (task, expected) => {
+    expect(redactAgentContextValue(task)).toBe(expected);
+    expect(formatSessionAgentContext({ ...session, task }, project, agent, server)).toBe(
+      formatSessionAgentContext(session, project, agent, server).replace('task: Review a sample change', `task: ${expected.replace(/\n/g, '\n  ')}`),
+    );
+  });
+
+  it.each([
+    ['https://example.com?email=fictional@example.test', 'https://example.com?email=fictional@example.test'],
+    ['https://example.com#email=fictional@example.test', 'https://example.com#email=fictional@example.test'],
+    ['https://fictional-user:fictional-password@example.invalid?email=fictional@example.test', 'https://[REDACTED]@example.invalid?email=fictional@example.test'],
+    ['ssh://fictional-user@example.invalid/path#email=fictional@example.test', 'ssh://[REDACTED]@example.invalid/path#email=fictional@example.test'],
+    ['Fix authorization: reject expired sessions', 'Fix authorization: reject expired sessions'],
+    ['Implement password: reset UI', 'Implement password: reset UI'],
+    ['Discuss password: reset UI, then review', 'Discuss password: reset UI, then review'],
+    ['password: fictional multiword value', '[REDACTED CREDENTIAL]'],
+    ['ordinary line\n  password: fictional multiword value', 'ordinary line\n  [REDACTED CREDENTIAL]'],
+    ['{password: fictional multiword value, ordinary: keep}', '{[REDACTED CREDENTIAL], ordinary: keep}'],
+    ['prefix "password": "fictional value", after=keep', 'prefix [REDACTED CREDENTIAL], after=keep'],
+    ['Review password=fictional after=keep', 'Review [REDACTED CREDENTIAL] after=keep'],
+  ])('preserves prose and URL boundaries while masking structured credentials: %s', (task, expected) => {
+    expect(redactAgentContextValue(task)).toBe(expected);
+    expect(formatSessionAgentContext({ ...session, task }, project, agent, server)).toBe(
+      formatSessionAgentContext(session, project, agent, server).replace('task: Review a sample change', `task: ${expected.replace(/\n/g, '\n  ')}`),
+    );
+  });
+
   it('includes only the eight agreed data fields, not launch or connection details', () => {
     const text = formatSessionAgentContext(session, project, agent, server);
     expect(text.match(/^[a-z ]+: /gm)).toHaveLength(8);

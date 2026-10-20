@@ -141,7 +141,7 @@ export function WorkspaceTabs({
   const [hostInfo, setHostInfo] = useState<HostSystemInfo | null>(null);
   const [isLoadingHostInfo, setIsLoadingHostInfo] = useState(false);
   const [isCopyingAgentContext, setIsCopyingAgentContext] = useState(false);
-  const copyAgentContextInFlight = useRef(false);
+  const copyAgentContextInFlight = useRef<symbol | null>(null);
   const [clipboardBridgeState, setClipboardBridgeState] = useState<{
     sessionId: string | null;
     available: boolean;
@@ -469,9 +469,17 @@ export function WorkspaceTabs({
   };
 
 
+  useEffect(() => {
+    copyAgentContextInFlight.current = null;
+    setIsCopyingAgentContext(false);
+    setToast((current) => current?.id.startsWith('context-') ? null : current);
+    return () => { copyAgentContextInFlight.current = null; };
+  }, [session?.id]);
+
   const handleCopyAgentContext = async () => {
     if (!session || copyAgentContextInFlight.current) return;
-    copyAgentContextInFlight.current = true;
+    const operation = Symbol('copy-agent-context');
+    copyAgentContextInFlight.current = operation;
     setIsCopyingAgentContext(true);
     setToast(null);
     try {
@@ -481,8 +489,10 @@ export function WorkspaceTabs({
       } else {
         await navigator.clipboard.writeText(text);
       }
+      if (copyAgentContextInFlight.current !== operation) return;
       setToast({ id: `context-${Date.now()}`, title: 'Agent context copied', type: 'success' });
     } catch {
+      if (copyAgentContextInFlight.current !== operation) return;
       // Clipboard errors may contain operational data; do not echo their payload.
       setToast({
         id: `context-error-${Date.now()}`,
@@ -491,8 +501,10 @@ export function WorkspaceTabs({
         type: 'warning',
       });
     } finally {
-      copyAgentContextInFlight.current = false;
-      setIsCopyingAgentContext(false);
+      if (copyAgentContextInFlight.current === operation) {
+        copyAgentContextInFlight.current = null;
+        setIsCopyingAgentContext(false);
+      }
     }
   };
 
