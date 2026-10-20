@@ -165,10 +165,17 @@ export class MockHostAdapter implements HostAdapter {
 
     if (command.includes('git rev-parse --git-common-dir')) {
       const cwd = options?.cwd || '';
-      const wtMatch = cwd.match(/^(.*?)(?:__worktrees|\.worktrees|\/\.wt|\/worktrees)(?:\/.*)?$/);
-      if (wtMatch && wtMatch[1]) {
-        const repoPath = wtMatch[1].replace(/\/+$/, '');
-        return { stdout: `${repoPath}/.git\n`, stderr: '', exitCode: 0 };
+      const markers = ['__worktrees', '.worktrees', '/.wt', '/worktrees'];
+      for (const marker of markers) {
+        const idx = cwd.indexOf(marker);
+        if (idx !== -1) {
+          let end = idx;
+          while (end > 0 && cwd.charCodeAt(end - 1) === 47 /* '/' */) {
+            end--;
+          }
+          const repoPath = cwd.slice(0, end);
+          return { stdout: `${repoPath}/.git\n`, stderr: '', exitCode: 0 };
+        }
       }
       return { stdout: '.git\n', stderr: '', exitCode: 0 };
     }

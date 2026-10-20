@@ -36,6 +36,14 @@ export interface ManagedWorktreeIdentity {
   baseCommit?: string;
 }
 
+function trimTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path.charCodeAt(end - 1) === 47 /* '/' */) {
+    end--;
+  }
+  return path.slice(0, end);
+}
+
 export class GitService {
   private readonly logger: Logger;
   private static readonly statusTimeoutMs = 5000;
@@ -142,8 +150,8 @@ export class GitService {
     if (options.worktreesDir?.trim()) {
       const configuredDir = options.worktreesDir.trim();
       worktreesRoot = posix.isAbsolute(configuredDir)
-        ? posix.normalize(configuredDir).replace(/\/+$/, '')
-        : posix.resolve(repositoryRoot, configuredDir).replace(/\/+$/, '');
+        ? trimTrailingSlashes(posix.normalize(configuredDir))
+        : trimTrailingSlashes(posix.resolve(repositoryRoot, configuredDir));
     }
     const worktreePath = `${worktreesRoot}/${leaf}`;
 
@@ -950,7 +958,7 @@ export function parseWorktreeList(output: string): Array<{ path: string; branch?
       const path = lines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length) ?? '';
       const branchRef = lines.find((line) => line.startsWith('branch '))?.slice('branch '.length);
       return {
-        path: path.replace(/\/+$/, ''),
+        path: trimTrailingSlashes(path),
         branch: branchRef?.startsWith('refs/heads/') ? branchRef.slice('refs/heads/'.length) : undefined,
       };
     })
