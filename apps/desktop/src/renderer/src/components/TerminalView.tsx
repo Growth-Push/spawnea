@@ -17,7 +17,7 @@ import {
 import { TerminalContextMenu } from './TerminalContextMenu.js';
 import { ReconnectionBanner } from './ReconnectionBanner.js';
 import { findReferences, ReferenceActions, ReferencePreview, useReferenceContext, type Reference } from './reference-actions';
-import { installReferenceHighlights, referenceLinkProvider, selectedTextFromLines, terminalCellAtClick, terminalReferenceAtClick, type CellPosition } from './terminal-references';
+import { installReferenceHighlights, referenceLinkProvider, selectedTextFromBuffer, terminalCellAtClick, terminalReferenceAtClick, type CellPosition } from './terminal-references';
 
 interface TerminalViewProps {
   session: Session;
@@ -182,7 +182,7 @@ export function TerminalView({
   const [referencePreview, setReferencePreview] = useState<{ sessionId: string; path: string } | null>(null);
   const openReferencePreview = useCallback((path: string) => setReferencePreview({ sessionId: session.id, path }), [session.id]);
   useEffect(() => setReferencePreview(null), [session.id]);
-  const referenceDragRef = useRef<{ start: CellPosition; end: CellPosition; lines: string[]; selectedText?: string; text?: string; buffer: Terminal['buffer']['active'] } | null>(null);
+  const referenceDragRef = useRef<{ start: CellPosition; end: CellPosition; lines: Array<{ text: string; isWrapped: boolean }>; selectedText?: string; text?: string; buffer: Terminal['buffer']['active'] } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
   const terminalZoom = uiZoom ?? 1;
@@ -815,8 +815,11 @@ export function TerminalView({
       if (term && drag && end && mouseSelectionGestureRef.current && (drag.start.x !== end.x || drag.start.y !== end.y)) {
         drag.end = end;
         drag.lines = [];
-        for (let y = Math.min(drag.start.y, end.y); y <= Math.max(drag.start.y, end.y); y++) drag.lines.push(term.buffer.active.getLine(y)?.translateToString(true) || '');
-        drag.selectedText = selectedTextFromLines(drag.lines, drag.start, end);
+        for (let y = Math.min(drag.start.y, end.y); y <= Math.max(drag.start.y, end.y); y++) {
+          const line = term.buffer.active.getLine(y);
+          drag.lines.push({ text: line?.translateToString(true) || '', isWrapped: line?.isWrapped ?? false });
+        }
+        drag.selectedText = selectedTextFromBuffer(term, drag.start, end);
       } else referenceDragRef.current = null;
       leftMouseDownRef.current = false;
     }
@@ -829,7 +832,10 @@ export function TerminalView({
     const clickX = nativeClick.spawneaOriginalClientX ?? e.clientX;
     const clickY = nativeClick.spawneaOriginalClientY ?? e.clientY;
     const savedDrag = referenceDragRef.current;
-    if (term && savedDrag && (savedDrag.buffer !== term.buffer.active || (savedDrag.lines.length > 0 && savedDrag.lines.some((line, index) => term.buffer.active.getLine(Math.min(savedDrag.start.y, savedDrag.end.y) + index)?.translateToString(true) !== line)))) {
+    if (term && savedDrag && (savedDrag.buffer !== term.buffer.active || (savedDrag.lines.length > 0 && savedDrag.lines.some((line, index) => {
+      const current = term.buffer.active.getLine(Math.min(savedDrag.start.y, savedDrag.end.y) + index);
+      return current?.translateToString(true) !== line.text || current?.isWrapped !== line.isWrapped;
+    })))) {
       referenceDragRef.current = null;
       lastOsc52ClipboardTextRef.current = null;
       lastContextSelectionTextRef.current = null;
@@ -868,7 +874,10 @@ export function TerminalView({
       const first = drag.start.y * term.cols + drag.start.x;
       const last = drag.end.y * term.cols + drag.end.x;
       const offset = cell.y * term.cols + cell.x;
-      const unchanged = drag.lines.length > 0 && drag.lines.every((line, index) => term.buffer.active.getLine(Math.min(drag.start.y, drag.end.y) + index)?.translateToString(true) === line);
+      const unchanged = drag.lines.length > 0 && drag.lines.every((line, index) => {
+        const current = term.buffer.active.getLine(Math.min(drag.start.y, drag.end.y) + index);
+        return current?.translateToString(true) === line.text && current?.isWrapped === line.isWrapped;
+      });
       if (unchanged && offset >= Math.min(first, last) && offset <= Math.max(first, last)) {
         const references = findReferences(drag.text.trim(), true);
         reference = references.length === 1 ? references[0] : null;

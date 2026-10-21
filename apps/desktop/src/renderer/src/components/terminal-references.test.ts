@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Terminal as XtermTerminal, type Terminal } from '@xterm/xterm';
-import { installReferenceHighlights, MAX_REFERENCE_ROWS, referenceLinkProvider, referencesAtRow, selectedTextFromLines, terminalReferenceAtClick } from './terminal-references';
+import { installReferenceHighlights, MAX_REFERENCE_ROWS, referenceLinkProvider, referencesAtRow, selectedTextFromBuffer, terminalReferenceAtClick } from './terminal-references';
 
 function terminal(lines: Array<{ text: string; wrapped?: boolean }>, cols = 40, viewportY = 0): Terminal {
   const buffer = lines.map(({ text, wrapped }) => {
@@ -28,6 +28,7 @@ describe('terminal reference coordinates', () => {
       expect(firstLine.getCell(10)?.getWidth()).toBe(1);
       expect(wrappedLine.isWrapped).toBe(true);
       expect(wrappedLine.getCell(0)?.getChars()).toBe('界');
+      expect(selectedTextFromBuffer(term, { x: 0, y: 0 }, { x: 1, y: 1 })).toBe('https://ab界');
 
       Object.defineProperty(term, 'element', {
         configurable: true,
@@ -79,25 +80,41 @@ describe('terminal reference coordinates', () => {
     }
   });
 
-  it('captures the selected text range from buffer lines', () => {
-    expect(selectedTextFromLines(['xxhttps://a.testyy'], { x: 2, y: 0 }, { x: 15, y: 0 })).toBe('https://a.test');
+  it('reconstructs selections using real xterm cells for Unicode before and inside the selection', async () => {
+    const term = new XtermTerminal({ cols: 30, rows: 3, allowProposedApi: true });
+    try {
+      await new Promise<void>((resolve) => term.write('界e\u0301.md', resolve));
+      expect(selectedTextFromBuffer(term, { x: 2, y: 0 }, { x: 5, y: 0 })).toBe('e\u0301.md');
+      expect(selectedTextFromBuffer(term, { x: 0, y: 0 }, { x: 5, y: 0 })).toBe('界e\u0301.md');
+    } finally {
+      term.dispose();
+    }
   });
-  it('returns identical trimmed text for forward and reverse two-row selections', () => {
-    const lines = ['  alpha ', ' beta  '];
-    const forward = selectedTextFromLines(lines, { x: 2, y: 0 }, { x: 4, y: 1 });
-    const reverse = selectedTextFromLines(lines, { x: 4, y: 1 }, { x: 2, y: 0 });
-    expect(forward).toBe('alpha\n beta');
-    expect(reverse).toBe(forward);
+  it('joins a real xterm soft-wrapped path while preserving its explicit space', async () => {
+    const term = new XtermTerminal({ cols: 8, rows: 3, allowProposedApi: true });
+    try {
+      await new Promise<void>((resolve) => term.write('my file.md', resolve));
+      expect(term.buffer.active.getLine(1)?.isWrapped).toBe(true);
+      expect(selectedTextFromBuffer(term, { x: 0, y: 0 }, { x: 1, y: 1 })).toBe('my file.md');
+    } finally {
+      term.dispose();
+    }
   });
-  it('returns identical trimmed text for forward and reverse selections across more than two rows', () => {
-    const lines = ['  alpha  ', ' middle  ', '  omega  '];
-    const forward = selectedTextFromLines(lines, { x: 2, y: 0 }, { x: 4, y: 2 });
-    const reverse = selectedTextFromLines(lines, { x: 4, y: 2 }, { x: 2, y: 0 });
-    expect(forward).toBe('alpha\n middle\n  ome');
-    expect(reverse).toBe(forward);
-  });
-  it('preserves inclusive same-row selection and trimming', () => {
-    expect(selectedTextFromLines(['  same row  '], { x: 9, y: 0 }, { x: 2, y: 0 })).toBe('same row');
+  it('preserves hard breaks, explicit spaces and forward/reverse selection equivalence', async () => {
+    const term = new XtermTerminal({ cols: 30, rows: 4, allowProposedApi: true });
+    try {
+      await new Promise<void>((resolve) => term.write('ab  \r\n界 mid\r\nzz', resolve));
+      expect(term.buffer.active.getLine(1)?.isWrapped).toBe(false);
+      const start = { x: 0, y: 0 };
+      const end = { x: 1, y: 2 };
+      const forward = selectedTextFromBuffer(term, start, end);
+      const reverse = selectedTextFromBuffer(term, end, start);
+      expect(forward).toBe('ab  \n界 mid\nzz');
+      expect(reverse).toBe(forward);
+      expect(selectedTextFromBuffer(term, { x: 5, y: 1 }, { x: 3, y: 1 })).toBe('mid');
+    } finally {
+      term.dispose();
+    }
   });
   it('bounds recognition of a thousand-row wrapped line without returning truncated references', () => {
     const term = terminal(Array.from({ length: 1000 }, (_, i) => ({ text: 'https://example.test/', wrapped: i > 0 })), 40, 500);

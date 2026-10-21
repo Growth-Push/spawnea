@@ -4,20 +4,36 @@ import { findReferences, type Reference } from './reference-actions';
 export interface CellPosition { x: number; y: number }
 export interface TerminalReference extends Reference { first: CellPosition; last: CellPosition }
 
-export function selectedTextFromLines(lines: string[], start: CellPosition, end: CellPosition): string {
-  if (!lines.length) return '';
-  if (start.y === end.y) return lines[0]!.slice(Math.min(start.x, end.x), Math.max(start.x, end.x) + 1).trim();
-  const forward = start.y < end.y;
-  const firstY = forward ? start.y : end.y;
-  const lastY = forward ? end.y : start.y;
-  const firstX = forward ? start.x : end.x;
-  const lastX = forward ? end.x : start.x;
-  return lines.map((line, index) => {
-    const y = firstY + index;
-    if (y === firstY) return line.slice(firstX).trimEnd();
-    if (y === lastY) return line.slice(0, lastX + 1).trimEnd();
-    return line.trimEnd();
-  }).join('\n').trim();
+export function selectedTextFromBuffer(term: Terminal, start: CellPosition, end: CellPosition): string {
+  const forward = start.y < end.y || (start.y === end.y && start.x <= end.x);
+  const first = forward ? start : end;
+  const last = forward ? end : start;
+  let text = '';
+
+  for (let y = first.y; y <= last.y; y++) {
+    const line = term.buffer.active.getLine(y);
+    if (!line) break;
+    let fromX = y === first.y ? first.x : 0;
+    const toX = y === last.y ? last.x : term.cols - 1;
+    if (line.getCell(fromX)?.getWidth() === 0) fromX--;
+
+    let lastOccupiedX = fromX - 1;
+    for (let x = fromX; x <= toX; x++) {
+      const cell = line.getCell(x);
+      if (cell?.getWidth() !== 0 && cell?.getChars()) {
+        lastOccupiedX = x + Math.max(cell.getWidth(), 1) - 1;
+      }
+    }
+
+    for (let x = fromX; x <= Math.min(toX, lastOccupiedX); x++) {
+      const cell = line.getCell(x);
+      if (cell?.getWidth() === 0) continue;
+      text += cell?.getChars() || ' ';
+    }
+
+    if (y < last.y && !term.buffer.active.getLine(y + 1)?.isWrapped) text += '\n';
+  }
+  return text;
 }
 
 // Oversized logical lines are deliberately not recognized; never scan unbounded scrollback.
