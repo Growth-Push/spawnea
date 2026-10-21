@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Terminal } from '@xterm/xterm';
-import { installReferenceHighlights, MAX_REFERENCE_ROWS, referencesAtRow, selectedTextFromLines, terminalReferenceAtClick } from './terminal-references';
+import { installReferenceHighlights, MAX_REFERENCE_ROWS, referenceLinkProvider, referencesAtRow, selectedTextFromLines, terminalReferenceAtClick } from './terminal-references';
 
 function terminal(lines: Array<{ text: string; wrapped?: boolean }>, cols = 40, viewportY = 0): Terminal {
   const buffer = lines.map(({ text, wrapped }) => {
@@ -83,6 +83,42 @@ describe('terminal reference coordinates', () => {
     expect(reference.first).toEqual({ x: 0, y: 0 });
     expect(reference.last).toEqual({ x: 8, y: 1 });
     expect(terminalReferenceAtClick(term, 25, 15)?.text).toBe(reference.text);
+  });
+
+  it('includes the second cell of a final wide glyph in wrapped URL hit, link and underline ranges', () => {
+    const term = terminal([{ text: 'https://abx' }, { text: '界', wrapped: true }], 11);
+    Object.assign(term, { rows: 2 });
+    const reference = referencesAtRow(term, 0)[0]!;
+    expect(reference.text).toBe('https://abx界');
+    expect(reference.last).toEqual({ x: 1, y: 1 });
+    expect(terminalReferenceAtClick(term, 15, 15)?.text).toBe(reference.text);
+
+    let linkEnd: unknown;
+    let linkDecorations: unknown;
+    referenceLinkProvider(term, vi.fn()).provideLinks(1, (value) => {
+      linkEnd = value?.[0]?.range.end;
+      linkDecorations = value?.[0]?.decorations;
+    });
+    expect(linkEnd).toEqual({ x: 2, y: 2 });
+    expect(linkDecorations).toEqual({ underline: true, pointerCursor: true });
+
+    const screen = document.createElement('div');
+    Object.defineProperty(term, 'element', { value: { querySelector: () => screen } });
+    Object.assign(term, {
+      onRender: (callback: () => void) => { callback(); return { dispose: vi.fn() }; },
+      onScroll: () => ({ dispose: vi.fn() }),
+    });
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1; });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const dispose = installReferenceHighlights(term);
+    try {
+      const highlights = screen.firstElementChild!;
+      expect(highlights.children).toHaveLength(2);
+      expect(parseFloat((highlights.children[1] as HTMLElement).style.width) * term.cols / 100).toBeCloseTo(2);
+    } finally {
+      dispose();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('maps Unicode width, multiple targets, punctuation and scrollback', () => {

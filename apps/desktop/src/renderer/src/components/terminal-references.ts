@@ -63,8 +63,10 @@ function readReferences(term: Terminal, firstRow: number, nextRow: number): Term
     const start = reference.start + (quoted ? 1 : 0);
     const first = positions[start];
     const last = positions[start + reference.text.length - 1];
-    return { ...reference, first, last };
-  }).filter((reference) => reference.first && reference.last);
+    if (!first || !last) return null;
+    const finalCellWidth = buffer.getLine(last.y)?.getCell(last.x)?.getWidth() || 1;
+    return { ...reference, first, last: { ...last, x: last.x + finalCellWidth - 1 } };
+  }).filter((reference): reference is TerminalReference => reference !== null);
 }
 
 export function terminalCellAtClick(term: Terminal, clientX: number, clientY: number): CellPosition | null {

@@ -363,6 +363,27 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
     await waitFor(() => expect(clipboardWriteText).toHaveBeenLastCalledWith(selected));
   });
 
+  it.each([
+    { label: 'plain context menu', reference: null },
+    { label: 'file reference while local context is loading', reference: '/workspace/a.md' },
+  ])('positions a $label using the short menu height', async ({ reference }) => {
+    const originalHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 300 });
+    try {
+      xtermMockState.referenceLines = Array(16).fill('');
+      if (reference) {
+        xtermMockState.referenceLines[15] = reference;
+        window.spawneaApi.getLocalReferenceContext = vi.fn(() => new Promise(() => {})) as any;
+      }
+      render(<TerminalView session={mockSession} />);
+      const viewport = screen.getByTestId('xterm-container').parentElement!;
+      fireEvent.contextMenu(viewport, { clientX: 5, clientY: 155 });
+      expect((await screen.findByTestId('terminal-context-menu')).style.top).toBe('70px');
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalHeight });
+    }
+  });
+
   it('keeps preview gestures outside terminal focus and context-menu handlers', async () => {
     xtermMockState.referenceLines = ['/workspace/a.md'];
     const getLocalReferenceContent = vi.fn().mockResolvedValue({ path: '/workspace/a.md', content: 'preview', isBinary: false, isTruncated: false, sizeBytes: 7, mimeType: 'text/plain' });

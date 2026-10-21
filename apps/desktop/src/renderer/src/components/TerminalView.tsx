@@ -1069,7 +1069,9 @@ export function TerminalView({
             y={contextMenu.y}
             uiZoom={terminalZoom}
             hasSelection={contextMenu.hasSelection}
-            referenceActions={<ReferenceActions reference={contextMenu.reference} context={referenceContext} sessionId={session.id} onPreview={openReferencePreview} onClose={() => setContextMenu(null)} onError={showToast} />}
+            referenceActions={contextMenu.reference && (contextMenu.reference.kind === 'url' || referenceContext)
+              ? <ReferenceActions reference={contextMenu.reference} context={referenceContext} sessionId={session.id} onPreview={openReferencePreview} onClose={() => setContextMenu(null)} onError={showToast} />
+              : undefined}
             onCopy={handleCopy}
             onPaste={handlePaste}
             onOpenInEditor={handleOpenInEditor}
