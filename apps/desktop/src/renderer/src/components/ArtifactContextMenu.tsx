@@ -16,6 +16,8 @@ export interface ArtifactContextMenuProps {
   y: number;
   uiZoom?: number;
   artifact: Artifact;
+  referenceActions?: React.ReactNode;
+  local?: boolean;
   isHidden: boolean;
   onToggleHide: () => void;
   onAddToBlacklistExact: () => void;
@@ -32,6 +34,8 @@ export function ArtifactContextMenu({
   y,
   uiZoom = 1,
   artifact,
+  referenceActions,
+  local,
   isHidden,
   onToggleHide,
   onAddToBlacklistExact,
@@ -67,7 +71,7 @@ export function ArtifactContextMenu({
 
   // Adjust positioning to avoid overflowing viewport
   const menuWidth = 260;
-  const menuHeight = 270;
+  const menuHeight = local ? 430 : 270;
   const screenW = window.innerWidth / uiZoom;
   const screenH = window.innerHeight / uiZoom;
 
@@ -81,7 +85,7 @@ export function ArtifactContextMenu({
       ref={menuRef}
       role="menu"
       data-testid="artifact-context-menu"
-      style={{ left: `${posX}px`, top: `${posY}px` }}
+      style={{ left: `${posX}px`, top: `${posY}px`, maxHeight: `${Math.max(0, screenH - posY - 10)}px`, overflowY: 'auto' }}
       className="fixed z-50 w-64 bg-[#161b22]/95 backdrop-blur-md border border-[#30363d] rounded-lg shadow-2xl py-1 text-xs text-zinc-200 animate-in fade-in zoom-in-95 duration-100 select-none font-sans"
     >
       <div className="px-3 py-1.5 border-b border-[#30363d] text-[11px] font-mono text-zinc-400 truncate">
@@ -143,8 +147,9 @@ export function ArtifactContextMenu({
 
       <div className="my-1 border-t border-[#30363d]" />
 
+      {referenceActions}
       {/* 4. Copy Remote Path */}
-      <button
+      {!local && <button
         type="button"
         role="menuitem"
         data-testid="artifact-context-copy-path"
@@ -158,10 +163,10 @@ export function ArtifactContextMenu({
           <Copy className="w-3.5 h-3.5 text-zinc-400" />
           <span>Copy Remote Path</span>
         </div>
-      </button>
+      </button>}
 
       {/* 5. Open in Default OS / Editor */}
-      <button
+      {!local && <button
         type="button"
         role="menuitem"
         data-testid="artifact-context-open-os"
@@ -175,7 +180,7 @@ export function ArtifactContextMenu({
           <ExternalLink className="w-3.5 h-3.5 text-zinc-400" />
           <span>Open in OS Default</span>
         </div>
-      </button>
+      </button>}
 
       {/* 6. Save / Export As */}
       <button

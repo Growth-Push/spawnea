@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
 import { LocalHostAdapter } from '@spawnea/hosts';
 import { CatalogManager } from './catalog-manager.js';
@@ -128,5 +128,71 @@ describe('ArtifactManager with a local host', () => {
 
     expect(created).toEqual([]);
     expect(await repos.artifacts.findBySessionId(sessionId)).toHaveLength(0);
+  });
+
+  it('resolves explicit local references without reading content or registering artifacts', async () => {
+    const host = await sessionManager.getHostAdapter('local');
+    const read = vi.spyOn(host, 'readFileRaw');
+    expect(await artifactManager.getLocalReferenceContext(sessionId)).toEqual({ workspacePath: project, homePath: home, persistedWorkspacePath: project });
+    expect(await artifactManager.getLocalReferencePaths(sessionId, '~/notes with spaces.md')).toEqual({ fullPath: join(home, 'notes with spaces.md'), relativePath: relative(project, join(home, 'notes with spaces.md')) });
+    expect(await artifactManager.getLocalReferencePaths(sessionId, 'notes.md')).toEqual({ fullPath: join(project, 'notes.md'), relativePath: 'notes.md' });
+    expect(read).not.toHaveBeenCalled();
+    expect(await repos.artifacts.findBySessionId(sessionId)).toEqual([]);
+  });
+
+  it('previews tracked files and absolute or home external references without registering them', async () => {
+    writeFileSync(join(project, 'tracked.md'), '# Tracked\n');
+    execFileSync('git', ['add', 'tracked.md'], { cwd: project });
+    writeFileSync(join(home, 'notes with spaces.md'), '# Home\n');
+    writeFileSync(join(outside, 'notes.txt'), 'External\n');
+    expect((await artifactManager.getLocalReferenceContent(sessionId, './tracked.md')).content).toBe('# Tracked\n');
+    expect((await artifactManager.getLocalReferenceContent(sessionId, '~/notes with spaces.md')).content).toBe('# Home\n');
+    expect((await artifactManager.getLocalReferenceContent(sessionId, join(outside, 'notes.txt'))).content).toBe('External\n');
+    const open = vi.fn().mockResolvedValue(undefined);
+    await artifactManager.withLocalReference(sessionId, 'tracked.md', open);
+    expect(open).toHaveBeenCalledWith(join(project, 'tracked.md'), 'text/markdown', true);
+    expect(await repos.artifacts.findBySessionId(sessionId)).toEqual([]);
+    expect(existsSync(join(root, 'cache'))).toBe(false);
+  });
+
+  it('allows external references through symlinked home and parents only when their real destinations are permitted', async () => {
+    writeFileSync(join(home, 'notes.txt'), 'Home reference');
+    writeFileSync(join(outside, 'notes.txt'), 'External reference');
+    writeFileSync(join(outside, 'page.html'), '<h1>Excluded HTML</h1>');
+    symlinkSync(home, join(root, 'home-link'), 'dir');
+    symlinkSync(outside, join(root, 'outside-link'), 'dir');
+    symlinkSync(join(outside, 'page.html'), join(outside, 'disguised.txt'));
+    process.env['HOME'] = join(root, 'home-link');
+    expect((await artifactManager.getLocalReferenceContent(sessionId, '~/notes.txt')).content).toBe('Home reference');
+    expect((await artifactManager.getLocalReferenceContent(sessionId, join(root, 'outside-link', 'notes.txt'))).content).toBe('External reference');
+    await expect(artifactManager.getLocalReferenceContent(sessionId, join(root, 'outside-link', 'disguised.txt'))).rejects.toThrow();
+    await expect(artifactManager.getLocalReferenceContent(sessionId, '../outside-link/notes.txt')).rejects.toThrow();
+    expect(await repos.artifacts.findBySessionId(sessionId)).toEqual([]);
+  });
+
+  it.each(['page.html', 'page.htm'])('recognizes workspace HTML browser targets: %s', async (filename) => {
+    writeFileSync(join(project, filename), '<h1>Internal HTML</h1>');
+    const open = vi.fn().mockResolvedValue(undefined);
+    await artifactManager.withLocalReference(sessionId, filename, open);
+    expect(open).toHaveBeenCalledWith(join(project, filename), 'text/html', true);
+  });
+
+  it('validates missing, inaccessible, excluded and symlink targets at action time', async () => {
+    writeFileSync(join(outside, 'notes.txt'), 'External');
+    writeFileSync(join(outside, 'page.html'), '<html>External</html>');
+    writeFileSync(join(outside, 'binary.json'), Buffer.from([0, 1]));
+    writeFileSync(join(project, 'page.html'), '<html>Internal</html>');
+    writeFileSync(join(project, 'private.txt'), 'Unreadable');
+    chmodSync(join(project, 'private.txt'), 0o000);
+    symlinkSync(join(outside, 'page.html'), join(project, 'link.html'));
+    symlinkSync(join(outside, 'notes.txt'), join(project, 'link.txt'));
+    const open = vi.fn().mockResolvedValue(undefined);
+    await artifactManager.withLocalReference(sessionId, 'page.html', open);
+    expect(open).toHaveBeenCalledWith(join(project, 'page.html'), 'text/html', true);
+    for (const path of ['missing.md', '../outside/notes.txt', join(outside, 'page.html'), 'link.html', 'link.txt', join(outside, 'binary.json')]) {
+      await expect(artifactManager.getLocalReferenceContent(sessionId, path)).rejects.toThrow();
+    }
+    if (process.getuid?.() !== 0) await expect(artifactManager.getLocalReferenceContent(sessionId, 'private.txt')).rejects.toThrow();
+    expect(await repos.artifacts.findBySessionId(sessionId)).toEqual([]);
   });
 });

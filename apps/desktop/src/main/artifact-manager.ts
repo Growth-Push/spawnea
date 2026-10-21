@@ -1,4 +1,4 @@
-import { join, basename, dirname } from 'node:path';
+import { join, basename, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { mkdir, writeFile, readFile, rm, rename, readdir, stat as localStat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -735,6 +735,70 @@ export class ArtifactManager {
     return undefined;
   }
 
+  /** Metadata only: no target is inspected when reference menus are displayed. */
+  async getLocalReferenceContext(sessionId: string): Promise<{ workspacePath: string; homePath: string; persistedWorkspacePath: string } | null> {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session) throw new Error('Session not found');
+    const host = await this.sessionManager.getHostAdapter(session.serverId);
+    if (!(host instanceof LocalHostAdapter)) return null;
+    const root = await this.sessionManager.resolveSessionWorktreePath(session);
+    try {
+      const homePath = await this.resolveHostHome(session.serverId, host);
+      if (!homePath) throw new Error('Session host home directory is unavailable');
+      return { workspacePath: root.value, homePath, persistedWorkspacePath: session.worktreePath };
+    } finally {
+      root.release();
+    }
+  }
+
+  async getLocalReferencePaths(sessionId: string, reference: string): Promise<{ fullPath: string; relativePath: string }> {
+    if (typeof reference !== 'string' || !reference.trim() || Array.from(reference).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
+      throw new Error('Invalid file reference');
+    }
+    const context = await this.getLocalReferenceContext(sessionId);
+    if (!context) throw new Error('File reference actions are available for local sessions only');
+    const fullPath = reference.startsWith('~/')
+      ? resolve(context.homePath, reference.slice(2))
+      : resolve(context.workspacePath, reference);
+    return { fullPath, relativePath: relative(context.workspacePath, fullPath) };
+  }
+
+  /** Explicit references bypass detection/registration, never the external-file policy. */
+  async withLocalReference<T>(sessionId: string, reference: string, action: (path: string, mimeType: string, internal: boolean) => Promise<T>): Promise<T> {
+    const { fullPath } = await this.getLocalReferencePaths(sessionId, reference);
+    const session = (await this.repos.sessions.findById(sessionId))!;
+    const host = await this.sessionManager.getHostAdapter(session.serverId);
+    const root = await this.sessionManager.resolveSessionWorktreePath(session);
+    try {
+      const realRoot = await this.realPath(host, root.value);
+      const realTarget = await this.realPath(host, fullPath);
+      if (!realRoot || !realTarget) throw new Error('File is missing or inaccessible');
+      const internal = isPathContained(realRoot, realTarget);
+      if (await this.isPathBlacklisted(fullPath) || await this.isPathBlacklisted(realTarget)) {
+        throw new Error('File is excluded by the artifact access policy');
+      }
+      if (!internal && ((!isAbsolute(reference) && !reference.startsWith('~/')) || !(await this.isAcceptableExternalFile(host, realTarget)))) {
+        throw new Error('External file reference is not supported by the artifact access policy');
+      }
+      const stat = await host.stat(realTarget);
+      if (!stat.isFile) throw new Error('Reference is not a regular file');
+      this.assertFileWithinLimit(stat.size, 'open');
+      // Check readability even for an OS open, without changing permissions.
+      await host.readFileRaw(realTarget, 1);
+      return await action(realTarget, getMimeType(basename(realTarget)), internal);
+    } finally {
+      root.release();
+    }
+  }
+
+  async getLocalReferenceContent(sessionId: string, reference: string): Promise<FileContentResult> {
+    return this.withLocalReference(sessionId, reference, async (path, mimeType) => {
+      const session = (await this.repos.sessions.findById(sessionId))!;
+      const host = await this.sessionManager.getHostAdapter(session.serverId);
+      return withDataUri(await host.readFile(path, this.maxPreviewBytes), mimeType);
+    });
+  }
+
   /**
    * Reads artifact content, using local cache when available or downloading on demand.
    */
@@ -1299,6 +1363,7 @@ export function getMimeType(filePath: string): string {
     case 'tsx': return 'text/typescript';
     case 'js':
     case 'jsx': return 'text/javascript';
+    case 'htm':
     case 'html': return 'text/html';
     case 'css': return 'text/css';
     case 'txt': return 'text/plain';

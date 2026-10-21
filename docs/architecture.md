@@ -314,6 +314,12 @@ downloads a temporary copy at that moment and tells the user it is a copy. The c
 The pointer model goes through the common host interface, but only local hosts are
 validated. SSH hosts are not validated for this behavior yet.
 
+### Context-aware reference actions
+
+Terminal references are recognized lexically from public xterm buffer cells, including wrapped rows and wide characters. Recognition is bounded to 64 rows per logical line; oversized wrapped lines are not recognized. A pointer-free overlay keeps references underlined without modifying PTY output or selection; the link provider supplies the hover cursor. Highlight updates are coalesced per animation frame, scan each visible logical line once, and preserve unchanged overlay nodes. Highlighting and menu display do not read target content or download files. The clicked reference wins over an unrelated selection or clipboard; a selection under the click must contain exactly one reference. Paths with spaces require quotes or a complete selection. Ambiguous selections retain text actions only, including the explicitly named snippet action.
+
+HTTP(S) references offer copying and explicit browser opening on local and remote sessions through the existing protocol-validated handler. Local terminal and Artifacts menus additionally resolve full and workspace-relative paths, preview the original through the inert artifact viewer, or explicitly open the original with the system default app. Previewing an explicit reference creates no artifact record or cache. Tracked files are eligible without changing automatic detection. `~/` uses the session host's home. External relative paths can be copied (including `../`) but not opened. Opening revalidates existence, readability, size, exclusions, real paths and the existing external type/content policy. Symlinks are resolved and their actual destinations must satisfy that policy. Workspace HTML has an explicit browser action; on Linux it queries the configured browser with `xdg-settings` and launches that desktop application with `gtk-launch`, independently of HTML file associations. Missing facilities or unsupported platforms produce an explicit error rather than falling back to a file-type handler. External HTML remains excluded and previews never execute HTML. New file actions are local-only; remote artifact downloads and temporary-copy notices are unchanged.
+
 ### Markdown document previews
 
 Workspace-file and artifact previews share a read-only React Markdown renderer

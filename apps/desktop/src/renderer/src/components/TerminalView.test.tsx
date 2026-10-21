@@ -14,6 +14,8 @@ const xtermMockState = vi.hoisted(() => ({
   inputHandler: null as null | ((data: string) => void),
   mouseTrackingMode: 'any' as 'none' | 'x10' | 'vt200' | 'drag' | 'any',
   selectionText: '',
+  referenceLines: [] as string[],
+  focus: vi.fn(),
 }));
 
 // Mock xterm.js and fit addon
@@ -28,7 +30,17 @@ vi.mock('@xterm/xterm', () => {
           return xtermMockState.mouseTrackingMode;
         },
       };
-      open = vi.fn();
+      element?: HTMLElement;
+      open = vi.fn((container: HTMLElement) => {
+        if (!xtermMockState.referenceLines.length) return;
+        this.element = container;
+        const screen = document.createElement('div');
+        screen.className = 'xterm-screen';
+        screen.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 240 }) as DOMRect;
+        container.appendChild(screen);
+      });
+      onRender = vi.fn().mockReturnValue({ dispose: vi.fn() });
+      onScroll = vi.fn().mockReturnValue({ dispose: vi.fn() });
       loadAddon = vi.fn();
       attachCustomKeyEventHandler = vi.fn();
       registerLinkProvider = vi.fn().mockReturnValue({ dispose: vi.fn() });
@@ -38,17 +50,21 @@ vi.mock('@xterm/xterm', () => {
           return { dispose: vi.fn() };
         }),
       };
-      buffer = { active: { getLine: vi.fn().mockReturnValue(undefined) } };
+      buffer = { active: { viewportY: 0, length: 2, getLine: vi.fn((y: number) => {
+        const text = xtermMockState.referenceLines[y];
+        return text === undefined ? undefined : { isWrapped: false, translateToString: () => text, getCell: (x: number) => ({ getChars: () => text[x] || '', getWidth: () => 1 }) };
+      }) } };
       write = vi.fn((_data: string, cb?: () => void) => {
         if (typeof cb === 'function') cb();
       });
       writeln = vi.fn();
       paste = vi.fn();
       getSelection = vi.fn(() => xtermMockState.selectionText);
+      getSelectionPosition = vi.fn().mockReturnValue(undefined);
       hasSelection = vi.fn().mockReturnValue(false);
       selectAll = vi.fn();
       clear = vi.fn();
-      focus = vi.fn();
+      focus = xtermMockState.focus;
       dispose = vi.fn();
       onData = vi.fn((handler: (data: string) => void) => {
         xtermMockState.inputHandler = handler;
@@ -147,6 +163,8 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
     xtermMockState.inputHandler = null;
     xtermMockState.mouseTrackingMode = 'any';
     xtermMockState.selectionText = '';
+    xtermMockState.referenceLines = [];
+    xtermMockState.focus.mockClear();
     hostStateListener = null;
     sessionReconnectedListener = null;
     clipboardWriteText = vi.fn().mockResolvedValue(undefined);
@@ -305,6 +323,96 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
       expect(readClipboardText).toHaveBeenCalled();
       expect((screen.getByTestId('context-menu-copy') as HTMLButtonElement).disabled).toBe(false);
     });
+  });
+
+  it.each(['simple click', 'buffer change'])('invalidates stale OSC52 reference targeting after a %s through mouse handlers', async (scenario) => {
+    const first = 'https://a.test';
+    const second = 'https://b.test';
+    xtermMockState.referenceLines = [first, second];
+    render(<TerminalView session={mockSession} />);
+    const viewport = screen.getByTestId('xterm-container').parentElement!;
+    fireEvent.mouseDown(viewport, { button: 0, clientX: 5, clientY: 5 });
+    fireEvent.mouseMove(viewport, { buttons: 1, clientX: 135, clientY: 5 });
+    fireEvent.mouseUp(viewport, { button: 0, clientX: 135, clientY: 5 });
+    await act(async () => { await xtermMockState.osc52Handler?.(`c;${btoa(first)}`); });
+    if (scenario === 'simple click') {
+      fireEvent.mouseDown(viewport, { button: 0, clientX: 5, clientY: 15 });
+      fireEvent.mouseUp(viewport, { button: 0, clientX: 5, clientY: 15 });
+    } else {
+      xtermMockState.referenceLines[0] = second;
+    }
+    fireEvent.contextMenu(viewport, { clientX: 5, clientY: scenario === 'simple click' ? 15 : 5 });
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Copy URL' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenLastCalledWith(second));
+  });
+
+  it('keeps a selected reference bound to its drag when later OSC52 text changes', async () => {
+    const selected = 'https://a.test';
+    xtermMockState.referenceLines = [selected];
+    render(<TerminalView session={mockSession} />);
+    const viewport = screen.getByTestId('xterm-container').parentElement!;
+    fireEvent.mouseDown(viewport, { button: 0, clientX: 5, clientY: 5 });
+    fireEvent.mouseMove(viewport, { buttons: 1, clientX: 135, clientY: 5 });
+    fireEvent.mouseUp(viewport, { button: 0, clientX: 135, clientY: 5 });
+    await act(async () => { await xtermMockState.osc52Handler?.(`c;${btoa(selected)}`); });
+    await act(async () => { await xtermMockState.osc52Handler?.(`c;${btoa('https://b.test')}`); });
+    fireEvent.contextMenu(viewport, { clientX: 5, clientY: 5 });
+    await screen.findByRole('menuitem', { name: 'Copy URL' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenLastCalledWith(selected));
+  });
+
+  it.each([
+    { label: 'plain context menu', reference: null },
+    { label: 'file reference while local context is loading', reference: '/workspace/a.md' },
+  ])('positions a $label using the short menu height', async ({ reference }) => {
+    const originalHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 300 });
+    try {
+      xtermMockState.referenceLines = Array(16).fill('');
+      if (reference) {
+        xtermMockState.referenceLines[15] = reference;
+        window.spawneaApi.getLocalReferenceContext = vi.fn(() => new Promise(() => {})) as any;
+      }
+      render(<TerminalView session={mockSession} />);
+      const viewport = screen.getByTestId('xterm-container').parentElement!;
+      fireEvent.contextMenu(viewport, { clientX: 5, clientY: 155 });
+      expect((await screen.findByTestId('terminal-context-menu')).style.top).toBe('70px');
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalHeight });
+    }
+  });
+
+  it('keeps preview gestures outside terminal focus and context-menu handlers', async () => {
+    xtermMockState.referenceLines = ['/workspace/a.md'];
+    const getLocalReferenceContent = vi.fn().mockResolvedValue({ path: '/workspace/a.md', content: 'preview', isBinary: false, isTruncated: false, sizeBytes: 7, mimeType: 'text/plain' });
+    window.spawneaApi = {
+      ...window.spawneaApi,
+      getLocalReferenceContext: vi.fn().mockResolvedValue({ workspacePath: '/workspace', homePath: '/fictional-host-home' }),
+      getArtifactContent: vi.fn(),
+      getLocalReferenceContent,
+    } as any;
+    const { rerender } = render(<TerminalView session={mockSession} />);
+    const viewport = screen.getByTestId('xterm-container').parentElement!;
+    fireEvent.contextMenu(viewport, { clientX: 5, clientY: 5 });
+    await screen.findByRole('menuitem', { name: 'Open in Artifact Preview' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open in Artifact Preview' }));
+    await screen.findByTestId('artifact-preview-modal');
+    await waitFor(() => expect(getLocalReferenceContent).toHaveBeenCalledWith(mockSession.id, '/workspace/a.md'));
+    xtermMockState.focus.mockClear();
+    const modal = screen.getByTestId('artifact-preview-modal').firstElementChild as HTMLElement;
+    fireEvent.click(modal);
+    fireEvent.contextMenu(modal);
+    expect(xtermMockState.focus).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('context-menu-copy')).toBeNull();
+    fireEvent.click(screen.getByTestId('close-artifact-modal-button'));
+    fireEvent.click(viewport);
+    expect(xtermMockState.focus).toHaveBeenCalled();
+    const requestCount = getLocalReferenceContent.mock.calls.length;
+    rerender(<TerminalView session={{ ...mockSession, id: 'sess-recon-2' }} />);
+    expect(screen.queryByTestId('artifact-preview-modal')).toBeNull();
+    expect(getLocalReferenceContent).toHaveBeenCalledTimes(requestCount);
   });
 
   it('does not use the local clipboard as a remote tmux selection', async () => {

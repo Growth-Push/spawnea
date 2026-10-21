@@ -332,6 +332,10 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
     clearArtifacts: vi.fn().mockResolvedValue(0),
     saveArtifactAs: vi.fn().mockResolvedValue(true),
     openArtifactInOs: vi.fn().mockResolvedValue({ opened: true, temporaryCopy: false }),
+    getLocalReferenceContext: vi.fn().mockResolvedValue(null),
+    getLocalReferencePaths: vi.fn(),
+    getLocalReferenceContent: vi.fn(),
+    openLocalReference: vi.fn().mockResolvedValue(undefined),
     openSnippetInEditor: vi.fn().mockResolvedValue(true),
     createArtifactFromText: vi.fn().mockResolvedValue({
       id: 'art-1',

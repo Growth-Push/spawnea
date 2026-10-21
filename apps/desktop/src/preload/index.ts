@@ -231,6 +231,14 @@ export const api = {
     ipcRenderer.invoke('session:saveArtifactAs', sessionId, artifactId),
   openArtifactInOs: (sessionId: string, artifactId: string): Promise<import('@spawnea/domain').ArtifactOpenResult> =>
     ipcRenderer.invoke('session:openArtifactInOs', sessionId, artifactId),
+  getLocalReferenceContext: (sessionId: string): Promise<{ workspacePath: string; homePath: string; persistedWorkspacePath: string } | null> =>
+    ipcRenderer.invoke('session:getLocalReferenceContext', sessionId),
+  getLocalReferencePaths: (sessionId: string, reference: string): Promise<{ fullPath: string; relativePath: string }> =>
+    ipcRenderer.invoke('session:getLocalReferencePaths', sessionId, reference),
+  getLocalReferenceContent: (sessionId: string, reference: string): Promise<import('@spawnea/domain').FileContentResult> =>
+    ipcRenderer.invoke('session:getLocalReferenceContent', sessionId, reference),
+  openLocalReference: (sessionId: string, reference: string, browser: boolean): Promise<void> =>
+    ipcRenderer.invoke('session:openLocalReference', sessionId, reference, browser),
   openSnippetInEditor: (text: string): Promise<boolean> =>
     ipcRenderer.invoke('terminal:openSnippetInEditor', text),
   createArtifactFromText: (

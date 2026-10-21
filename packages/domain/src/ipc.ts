@@ -264,6 +264,10 @@ export interface IpcChannels {
   'session:clearArtifacts': (sessionId: string) => Promise<number>;
   'session:saveArtifactAs': (sessionId: string, artifactId: string) => Promise<boolean>;
   'session:openArtifactInOs': (sessionId: string, artifactId: string) => Promise<import('./index.js').ArtifactOpenResult>;
+  'session:getLocalReferenceContext': (sessionId: string) => Promise<{ workspacePath: string; homePath: string; persistedWorkspacePath: string } | null>;
+  'session:getLocalReferencePaths': (sessionId: string, reference: string) => Promise<{ fullPath: string; relativePath: string }>;
+  'session:getLocalReferenceContent': (sessionId: string, reference: string) => Promise<import('./index.js').FileContentResult>;
+  'session:openLocalReference': (sessionId: string, reference: string, browser: boolean) => Promise<void>;
 
   // PTY Streaming Events
   'pty:write': (channelId: string, data: string) => void;
