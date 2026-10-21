@@ -205,9 +205,17 @@ function CompactSessionCard({ sessionId, children }: {
   const [focused, setFocused] = useState(false);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const [anchorVisible, setAnchorVisible] = useState(true);
+  const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
   const open = hovered || focused;
+  // Portal into the zoomed UI root so the popup keeps the global UI zoom; its
+  // fixed coordinates are then in root-local (unzoomed) CSS pixels.
+  const zoom = Number(portalRoot?.dataset.uiZoom) || 1;
   const contains = (target: EventTarget | null) => target instanceof Node
     && Boolean(anchorRef.current?.contains(target) || popupRef.current?.contains(target));
+
+  useLayoutEffect(() => {
+    setPortalRoot(anchorRef.current?.closest<HTMLElement>('[data-ui-zoom]') ?? document.body);
+  }, []);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -219,8 +227,8 @@ function CompactSessionCard({ sessionId, children }: {
       const list = anchor.closest('[data-testid="session-list"]')?.getBoundingClientRect();
       setAnchorVisible(!list || (rect.bottom > list.top && rect.top < list.bottom));
       setPosition({
-        left: Math.max(0, Math.min(rect.right, window.innerWidth - popup.offsetWidth)),
-        top: Math.max(8, Math.min(rect.top, window.innerHeight - popup.offsetHeight - 8)),
+        left: Math.max(0, Math.min(rect.right / zoom, window.innerWidth / zoom - popup.offsetWidth)),
+        top: Math.max(8, Math.min(rect.top / zoom, window.innerHeight / zoom - popup.offsetHeight - 8)),
       });
     };
     update();
@@ -234,7 +242,7 @@ function CompactSessionCard({ sessionId, children }: {
       window.removeEventListener('resize', update);
       observer.disconnect();
     };
-  }, [open]);
+  }, [open, zoom]);
 
   return (
     <div
@@ -263,14 +271,14 @@ function CompactSessionCard({ sessionId, children }: {
       }}
     >
       {children[0]}
-      {createPortal(React.cloneElement(children[1], {
+      {portalRoot && createPortal(React.cloneElement(children[1], {
         ref: popupRef,
         style: {
           display: open && anchorVisible ? 'flex' : 'none',
           position: 'fixed', left: position.left, top: position.top,
-          maxHeight: 'calc(100vh - 16px)', maxWidth: '100vw', overflowY: 'auto',
+          maxHeight: `calc(${100 / zoom}vh - 16px)`, maxWidth: `${100 / zoom}vw`, overflowY: 'auto',
         },
-      }), document.body)}
+      }), portalRoot)}
     </div>
   );
 }

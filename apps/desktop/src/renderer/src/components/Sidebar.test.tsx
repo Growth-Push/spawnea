@@ -91,6 +91,7 @@ const renderSidebar = (
     onOpenCreateChildModal?: (parentSessionId?: string) => void;
     onOpenAgentSetup?: () => void;
     refreshingSessionIds?: ReadonlySet<string>;
+    wrapper?: React.JSXElementConstructor<{ children: React.ReactNode }>;
   } = {}
 ) => render(
   <Sidebar
@@ -108,7 +109,8 @@ const renderSidebar = (
     onRefresh={vi.fn()}
     isCollapsed={options.isCollapsed}
     refreshingSessionIds={options.refreshingSessionIds}
-  />
+  />,
+  { wrapper: options.wrapper }
 );
 
 beforeEach(() => {
@@ -183,6 +185,27 @@ describe('compact popup interaction', () => {
     rect.bottom = -10;
     fireEvent.scroll(screen.getByTestId('session-list'));
     expect(popup.style.display).toBe('none');
+  });
+
+  it('portals into the zoomed UI root and positions in its unzoomed coordinates', () => {
+    renderSidebar(mockSessions, {
+      isCollapsed: true,
+      wrapper: ({ children }) => <div data-testid="zoom-root" data-ui-zoom="1.5">{children}</div>,
+    });
+    const card = screen.getByTestId('session-compact-item-sess-1');
+    const popup = screen.getByTestId('session-popup-sess-1');
+    const rect = { x: 0, y: 150, top: 150, bottom: 190, left: 0, right: 60,
+      width: 60, height: 40, toJSON: () => ({}) };
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return this === card ? rect : { ...rect, top: 100, bottom: 400 };
+    });
+    expect(popup.parentElement).toBe(screen.getByTestId('zoom-root'));
+    expect(screen.getByTestId('session-list').contains(popup)).toBe(false);
+    fireEvent.mouseEnter(card);
+    expect(popup.style.display).toBe('flex');
+    expect(popup.style.left).toBe('40px');
+    expect(popup.style.top).toBe('100px');
+    expect(popup.style.maxWidth).toBe(`${100 / 1.5}vw`);
   });
 });
 
