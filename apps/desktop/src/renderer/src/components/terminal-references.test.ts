@@ -55,6 +55,30 @@ describe('terminal reference coordinates', () => {
     }
   });
 
+  it('finds and maps a reference after real xterm cursor-movement padding', async () => {
+    const term = new XtermTerminal({ cols: 30, rows: 3, allowProposedApi: true });
+    try {
+      await new Promise<void>((resolve) => term.write('界界界界界\u001b[5Ca.md', resolve));
+      const line = term.buffer.active.getLine(0)!;
+      expect(line.translateToString(true).length).toBe(14);
+      expect(line.getCell(14)?.getChars()).toBe('');
+      expect(line.getCell(15)?.getChars()).toBe('a');
+      Object.defineProperty(term, 'element', {
+        configurable: true,
+        value: { querySelector: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 300, height: 30 }) }) },
+      });
+
+      const reference = referencesAtRow(term, 0).find(({ text }) => text === 'a.md');
+      expect(reference?.first).toEqual({ x: 15, y: 0 });
+      expect(terminalReferenceAtClick(term, 155, 5)?.text).toBe('a.md');
+      let linkRange: unknown;
+      referenceLinkProvider(term, vi.fn()).provideLinks(1, (links) => { linkRange = links?.find(({ text }) => text === 'a.md')?.range; });
+      expect(linkRange).toEqual({ start: { x: 16, y: 1 }, end: { x: 19, y: 1 } });
+    } finally {
+      term.dispose();
+    }
+  });
+
   it('captures the selected text range from buffer lines', () => {
     expect(selectedTextFromLines(['xxhttps://a.testyy'], { x: 2, y: 0 }, { x: 15, y: 0 })).toBe('https://a.test');
   });

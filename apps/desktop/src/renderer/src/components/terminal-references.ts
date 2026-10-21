@@ -49,7 +49,7 @@ function readReferences(term: Terminal, firstRow: number, nextRow: number): Term
     const line = buffer.getLine(y);
     if (!line) break;
     const nextLine = buffer.getLine(y + 1);
-    const end = nextLine?.isWrapped ? term.cols : line.translateToString(true).length;
+    const end = nextLine?.isWrapped ? term.cols : occupiedCellEnd(line, term.cols);
     const hasEarlyWideWrapPadding = Boolean(nextLine?.isWrapped && nextLine.getCell(0)?.getWidth() === 2);
     for (let x = 0; x < term.cols; x++) {
       const cell = line.getCell(x);
@@ -71,6 +71,15 @@ function readReferences(term: Terminal, firstRow: number, nextRow: number): Term
     const finalCellWidth = buffer.getLine(last.y)?.getCell(last.x)?.getWidth() || 1;
     return { ...reference, first, last: { ...last, x: last.x + finalCellWidth - 1 } };
   }).filter((reference): reference is TerminalReference => reference !== null);
+}
+
+function occupiedCellEnd(line: NonNullable<ReturnType<Terminal['buffer']['active']['getLine']>>, cols: number): number {
+  for (let x = cols - 1; x >= 0; x--) {
+    const cell = line.getCell(x);
+    if (!cell || cell.getWidth() === 0 || !cell.getChars()) continue;
+    return x + Math.max(cell.getWidth(), 1);
+  }
+  return 0;
 }
 
 export function terminalCellAtClick(term: Terminal, clientX: number, clientY: number): CellPosition | null {
