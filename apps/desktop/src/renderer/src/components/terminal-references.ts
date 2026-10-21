@@ -48,12 +48,16 @@ function readReferences(term: Terminal, firstRow: number, nextRow: number): Term
   for (let y = firstRow; y < nextRow; y++) {
     const line = buffer.getLine(y);
     if (!line) break;
-    const end = buffer.getLine(y + 1)?.isWrapped ? term.cols : line.translateToString(true).length;
+    const nextLine = buffer.getLine(y + 1);
+    const end = nextLine?.isWrapped ? term.cols : line.translateToString(true).length;
+    const hasEarlyWideWrapPadding = Boolean(nextLine?.isWrapped && nextLine.getCell(0)?.getWidth() === 2);
     for (let x = 0; x < term.cols; x++) {
       const cell = line.getCell(x);
       if (!cell || cell.getWidth() === 0) continue;
-      const chars = cell.getChars() || ' ';
-      if (x >= end && !cell.getChars()) break;
+      const cellChars = cell.getChars();
+      if (x === term.cols - 1 && hasEarlyWideWrapPadding && !cellChars) continue;
+      const chars = cellChars || ' ';
+      if (x >= end && !cellChars) break;
       text += chars;
       for (let i = 0; i < chars.length; i++) positions.push({ x, y });
     }

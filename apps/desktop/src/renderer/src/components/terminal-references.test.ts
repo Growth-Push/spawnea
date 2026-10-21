@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Terminal } from '@xterm/xterm';
+import { Terminal as XtermTerminal, type Terminal } from '@xterm/xterm';
 import { installReferenceHighlights, MAX_REFERENCE_ROWS, referenceLinkProvider, referencesAtRow, selectedTextFromLines, terminalReferenceAtClick } from './terminal-references';
 
 function terminal(lines: Array<{ text: string; wrapped?: boolean }>, cols = 40, viewportY = 0): Terminal {
@@ -16,6 +16,45 @@ function terminal(lines: Array<{ text: string; wrapped?: boolean }>, cols = 40, 
 }
 
 describe('terminal reference coordinates', () => {
+  it('reconstructs real xterm early-wide-wrap padding while preserving explicit spaces', async () => {
+    const term = new XtermTerminal({ cols: 11, rows: 3, allowProposedApi: true });
+    const write = (text: string) => new Promise<void>((resolve) => term.write(text, resolve));
+    try {
+      await write('https://ab界');
+      const firstLine = term.buffer.active.getLine(0)!;
+      const wrappedLine = term.buffer.active.getLine(1)!;
+      expect(firstLine.translateToString(true)).toBe('https://ab');
+      expect(firstLine.getCell(10)?.getChars()).toBe('');
+      expect(firstLine.getCell(10)?.getWidth()).toBe(1);
+      expect(wrappedLine.isWrapped).toBe(true);
+      expect(wrappedLine.getCell(0)?.getChars()).toBe('界');
+
+      Object.defineProperty(term, 'element', {
+        configurable: true,
+        value: { querySelector: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 110, height: 30 }) }) },
+      });
+      const reference = referencesAtRow(term, 0)[0]!;
+      expect(reference.text).toBe('https://ab界');
+      expect(reference.last).toEqual({ x: 1, y: 1 });
+      expect(terminalReferenceAtClick(term, 15, 15)?.text).toBe('https://ab界');
+
+      let linkEnd: unknown;
+      referenceLinkProvider(term, vi.fn()).provideLinks(1, (links) => { linkEnd = links?.[0]?.range.end; });
+      expect(linkEnd).toEqual({ x: 2, y: 2 });
+
+      const explicitSpace = new XtermTerminal({ cols: 11, rows: 3, allowProposedApi: true });
+      try {
+        await new Promise<void>((resolve) => explicitSpace.write('https://ab 界', resolve));
+        expect(explicitSpace.buffer.active.getLine(0)?.getCell(10)?.getChars()).toBe(' ');
+        expect(referencesAtRow(explicitSpace, 0).map(({ text }) => text)).toEqual(['https://ab']);
+      } finally {
+        explicitSpace.dispose();
+      }
+    } finally {
+      term.dispose();
+    }
+  });
+
   it('captures the selected text range from buffer lines', () => {
     expect(selectedTextFromLines(['xxhttps://a.testyy'], { x: 2, y: 0 }, { x: 15, y: 0 })).toBe('https://a.test');
   });
