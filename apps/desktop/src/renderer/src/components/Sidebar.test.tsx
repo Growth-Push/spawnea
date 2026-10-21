@@ -1,5 +1,5 @@
 import React from 'react';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { act, render, screen, fireEvent } from '@testing-library/react';
 import {
   Sidebar,
@@ -113,6 +113,77 @@ const renderSidebar = (
 
 beforeEach(() => {
   localStorage.clear();
+});
+
+describe('compact popup interaction', () => {
+  beforeEach(() => {
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 100, top: 100, bottom: 400, left: 0, right: 64,
+      width: 64, height: 300, toJSON: () => ({}),
+    });
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      disconnect() {}
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('portals outside the scrolling list and retains hover across the popup boundary', () => {
+    renderSidebar(mockSessions, { isCollapsed: true });
+    const card = screen.getByTestId('session-compact-item-sess-1');
+    const popup = screen.getByTestId('session-popup-sess-1');
+    expect(popup.parentElement).toBe(document.body);
+    expect(screen.getByTestId('session-list').contains(popup)).toBe(false);
+    fireEvent.mouseEnter(card);
+    expect(popup.style.display).toBe('flex');
+    fireEvent.mouseLeave(card, { relatedTarget: popup });
+    expect(popup.style.display).toBe('flex');
+    fireEvent.mouseLeave(popup, { relatedTarget: document.body });
+    expect(popup.style.display).toBe('none');
+  });
+
+  it('opens on focus and lets Tab and Shift+Tab cross the portal boundary', () => {
+    renderSidebar([...mockSessions, {
+      ...mockSessions[0], id: 'child-focus', parentSessionId: 'sess-1', childAlias: 'child-1',
+    }], { isCollapsed: true });
+    const trigger = screen.getByTestId('session-item-sess-1');
+    const popup = screen.getByTestId('session-popup-sess-1');
+    act(() => trigger.focus());
+    expect(popup.style.display).toBe('flex');
+    fireEvent.keyDown(trigger, { key: 'Tab' });
+    expect(popup.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(trigger);
+    act(() => trigger.blur());
+    expect(popup.style.display).toBe('none');
+  });
+
+  it('reanchors on scroll and resize and hides when its session leaves the list', () => {
+    renderSidebar(mockSessions, { isCollapsed: true });
+    const card = screen.getByTestId('session-compact-item-sess-1');
+    const popup = screen.getByTestId('session-popup-sess-1');
+    const rect = { x: 0, y: 150, top: 150, bottom: 190, left: 0, right: 64,
+      width: 64, height: 40, toJSON: () => ({}) };
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return this === card ? rect : { ...rect, top: 100, bottom: 400 };
+    });
+    fireEvent.mouseEnter(card);
+    expect(popup.style.top).toBe('150px');
+    rect.top = 120;
+    rect.bottom = 160;
+    fireEvent.scroll(screen.getByTestId('session-list'));
+    expect(popup.style.top).toBe('120px');
+    rect.right = 60;
+    fireEvent.resize(window);
+    expect(popup.style.left).toBe('60px');
+    rect.top = -50;
+    rect.bottom = -10;
+    fireEvent.scroll(screen.getByTestId('session-list'));
+    expect(popup.style.display).toBe('none');
+  });
 });
 
 describe('formatSessionPath', () => {

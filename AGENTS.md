@@ -24,6 +24,7 @@ This repository is designed to be developed heavily with coding agents.
 - Use English for all repository-authored text, including source-code identifiers and strings, UI copy, errors, logs, prompts and runtime messages, comments, tests, configuration, scripts, and documentation.
 - Non-English text is allowed only in an explicitly identified fixture or test case that verifies multilingual input. It must not become expected Spawnea product copy or leak into user-visible output.
 - Update architecture/docs when a task changes a documented contract.
+- When changing terminal selection or reference detection, distinguish terminal-cell coordinates from UTF-16 offsets and soft wraps from hard line breaks. Validate affected behavior with real xterm buffers, covering relevant Unicode and forward/reverse selection cases; string-only mocks are insufficient for these contracts.
 - If a problem or failure is reported more than once, the agent MUST run and verify the actual runtime execution/builds directly before presenting solutions or asking the user to test.
 - When running or verifying the Electron desktop app on Linux/Wayland environments, always execute via the local project binary (`./apps/desktop/node_modules/.bin/electron`) using native Wayland flags (`--ozone-platform=wayland` or `--ozone-platform-hint=auto`) to prevent Xwayland mapping stalls.
 
