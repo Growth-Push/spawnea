@@ -7,12 +7,15 @@ export interface TerminalReference extends Reference { first: CellPosition; last
 export function selectedTextFromLines(lines: string[], start: CellPosition, end: CellPosition): string {
   if (!lines.length) return '';
   if (start.y === end.y) return lines[0]!.slice(Math.min(start.x, end.x), Math.max(start.x, end.x) + 1).trim();
-  const firstY = Math.min(start.y, end.y);
-  const lastY = Math.max(start.y, end.y);
+  const forward = start.y < end.y;
+  const firstY = forward ? start.y : end.y;
+  const lastY = forward ? end.y : start.y;
+  const firstX = forward ? start.x : end.x;
+  const lastX = forward ? end.x : start.x;
   return lines.map((line, index) => {
     const y = firstY + index;
-    if (y === firstY) return y === start.y ? line.slice(start.x).trimEnd() : line.slice(0, end.x + 1).trimEnd();
-    if (y === lastY) return y === end.y ? line.slice(0, end.x + 1).trimEnd() : line.slice(start.x).trimEnd();
+    if (y === firstY) return line.slice(firstX).trimEnd();
+    if (y === lastY) return line.slice(0, lastX + 1).trimEnd();
     return line.trimEnd();
   }).join('\n').trim();
 }

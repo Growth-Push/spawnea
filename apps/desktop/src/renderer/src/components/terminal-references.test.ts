@@ -82,6 +82,23 @@ describe('terminal reference coordinates', () => {
   it('captures the selected text range from buffer lines', () => {
     expect(selectedTextFromLines(['xxhttps://a.testyy'], { x: 2, y: 0 }, { x: 15, y: 0 })).toBe('https://a.test');
   });
+  it('returns identical trimmed text for forward and reverse two-row selections', () => {
+    const lines = ['  alpha ', ' beta  '];
+    const forward = selectedTextFromLines(lines, { x: 2, y: 0 }, { x: 4, y: 1 });
+    const reverse = selectedTextFromLines(lines, { x: 4, y: 1 }, { x: 2, y: 0 });
+    expect(forward).toBe('alpha\n beta');
+    expect(reverse).toBe(forward);
+  });
+  it('returns identical trimmed text for forward and reverse selections across more than two rows', () => {
+    const lines = ['  alpha  ', ' middle  ', '  omega  '];
+    const forward = selectedTextFromLines(lines, { x: 2, y: 0 }, { x: 4, y: 2 });
+    const reverse = selectedTextFromLines(lines, { x: 4, y: 2 }, { x: 2, y: 0 });
+    expect(forward).toBe('alpha\n middle\n  ome');
+    expect(reverse).toBe(forward);
+  });
+  it('preserves inclusive same-row selection and trimming', () => {
+    expect(selectedTextFromLines(['  same row  '], { x: 9, y: 0 }, { x: 2, y: 0 })).toBe('same row');
+  });
   it('bounds recognition of a thousand-row wrapped line without returning truncated references', () => {
     const term = terminal(Array.from({ length: 1000 }, (_, i) => ({ text: 'https://example.test/', wrapped: i > 0 })), 40, 500);
     const read = vi.spyOn(term.buffer.active, 'getLine');
