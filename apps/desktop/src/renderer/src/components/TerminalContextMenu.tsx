@@ -13,6 +13,7 @@ export interface TerminalContextMenuProps {
   y: number;
   uiZoom?: number;
   hasSelection: boolean;
+  referenceActions?: React.ReactNode;
   onCopy: () => void;
   onPaste: () => void;
   onOpenInEditor: () => void;
@@ -27,6 +28,7 @@ export function TerminalContextMenu({
   y,
   uiZoom = 1,
   hasSelection,
+  referenceActions,
   onCopy,
   onPaste,
   onOpenInEditor,
@@ -61,7 +63,7 @@ export function TerminalContextMenu({
 
   // Adjust positioning to avoid overflowing viewport
   const menuWidth = 240;
-  const menuHeight = 220;
+  const menuHeight = referenceActions ? 400 : 220;
   const screenW = window.innerWidth / uiZoom;
   const screenH = window.innerHeight / uiZoom;
 
@@ -73,9 +75,10 @@ export function TerminalContextMenu({
       ref={menuRef}
       role="menu"
       data-testid="terminal-context-menu"
-      style={{ left: `${posX}px`, top: `${posY}px` }}
+      style={{ left: `${posX}px`, top: `${posY}px`, maxHeight: `${Math.max(0, screenH - posY - 10)}px`, overflowY: 'auto' }}
       className="fixed z-50 w-60 bg-[#161b22]/95 backdrop-blur-md border border-[#30363d] rounded-lg shadow-2xl py-1 text-xs text-zinc-200 animate-in fade-in zoom-in-95 duration-100 select-none font-sans"
     >
+      {referenceActions}
       {/* 1. Copy Selection */}
       <button
         type="button"
@@ -129,7 +132,7 @@ export function TerminalContextMenu({
       >
         <div className="flex items-center gap-2">
           <FileCode2 className="w-3.5 h-3.5 text-blue-400" />
-          <span>Open in Default Editor</span>
+          <span>Open Selection as Snippet</span>
         </div>
       </button>
 

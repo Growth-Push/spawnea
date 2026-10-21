@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import { TerminalContextMenu } from './TerminalContextMenu.js';
 import { ReconnectionBanner } from './ReconnectionBanner.js';
+import { findReferences, ReferenceActions, ReferencePreview, useReferenceContext, type Reference } from './reference-actions';
+import { installReferenceHighlights, referenceLinkProvider, selectedTextFromLines, terminalCellAtClick, terminalReferenceAtClick, type CellPosition } from './terminal-references';
 
 interface TerminalViewProps {
   session: Session;
@@ -174,7 +176,13 @@ export function TerminalView({
     y: number;
     hasSelection: boolean;
     selectionText: string;
+    reference: Reference | null;
   } | null>(null);
+  const referenceContext = useReferenceContext(session.id);
+  const [referencePreview, setReferencePreview] = useState<{ sessionId: string; path: string } | null>(null);
+  const openReferencePreview = useCallback((path: string) => setReferencePreview({ sessionId: session.id, path }), [session.id]);
+  useEffect(() => setReferencePreview(null), [session.id]);
+  const referenceDragRef = useRef<{ start: CellPosition; end: CellPosition; lines: string[]; selectedText?: string; text?: string; buffer: Terminal['buffer']['active'] } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
   const terminalZoom = uiZoom ?? 1;
@@ -509,6 +517,9 @@ export function TerminalView({
 
     cleanupActiveConnection();
     lastOsc52ClipboardTextRef.current = null;
+    setContextMenu(null);
+    setReferencePreview(null);
+    referenceDragRef.current = null;
     lastContextSelectionTextRef.current = null;
     clipboardBeforeMouseDragReadRef.current = null;
     containerRef.current.innerHTML = '';
@@ -552,13 +563,15 @@ export function TerminalView({
     term.loadAddon(fitAddon);
     term.open(containerRef.current);
     const linkProviderDisposable = term.registerLinkProvider(
-      createHttpLinkProvider(
-        (bufferLineNumber) => term.buffer.active.getLine(bufferLineNumber - 1)?.translateToString(true) || '',
+      referenceLinkProvider(
+        term,
         (url) => {
           void window.spawneaApi?.openExternalUrl?.(url);
         }
       )
     );
+    const removeReferenceHighlights = installReferenceHighlights(term);
+
     const osc52ClipboardDisposable = term.parser.registerOscHandler(52, (data) => {
       const text = decodeOsc52Clipboard(data);
       if (text === null) return true;
@@ -570,6 +583,9 @@ export function TerminalView({
       }
 
       lastOsc52ClipboardTextRef.current = text;
+      const drag = referenceDragRef.current;
+      const expected = drag?.selectedText?.replace(/\s+/g, ' ').trim();
+      if (drag && ((leftMouseDownRef.current && mouseSelectionGestureRef.current) || (expected && expected === text.replace(/\s+/g, ' ').trim()))) drag.text = text;
       void writeClipboardText(text)
         .then(() => showToast('Copied to clipboard'))
         .catch(() => showToast('Clipboard copy failed'));
@@ -709,6 +725,7 @@ export function TerminalView({
       containerElem.removeEventListener('wheel', handleWheel);
       resizeObserver.disconnect();
       linkProviderDisposable.dispose();
+      removeReferenceHighlights();
       osc52ClipboardDisposable.dispose();
       term.dispose();
       terminalInstanceRef.current = null;
@@ -766,6 +783,11 @@ export function TerminalView({
 
   const handleTerminalMouseDown = (e: React.MouseEvent) => {
     if (e.button === 0) {
+      const term = terminalInstanceRef.current;
+      const nativeEvent = e.nativeEvent as ZoomAdjustedMouseEvent;
+      const start = term ? terminalCellAtClick(term, nativeEvent.spawneaOriginalClientX ?? e.clientX, nativeEvent.spawneaOriginalClientY ?? e.clientY) : null;
+      // Reference selection belongs to this gesture, not the retained text-action clipboard.
+      referenceDragRef.current = start && term ? { start, end: start, lines: [], buffer: term.buffer.active } : null;
       leftMouseDownRef.current = true;
       mouseSelectionGestureRef.current = false;
       clipboardBeforeMouseDragReadRef.current = clipboardBridgeAvailable
@@ -786,6 +808,16 @@ export function TerminalView({
 
   const handleTerminalMouseUp = (e: React.MouseEvent) => {
     if (e.button === 0) {
+      const term = terminalInstanceRef.current;
+      const nativeEvent = e.nativeEvent as ZoomAdjustedMouseEvent;
+      const end = term ? terminalCellAtClick(term, nativeEvent.spawneaOriginalClientX ?? e.clientX, nativeEvent.spawneaOriginalClientY ?? e.clientY) : null;
+      const drag = referenceDragRef.current;
+      if (term && drag && end && mouseSelectionGestureRef.current && (drag.start.x !== end.x || drag.start.y !== end.y)) {
+        drag.end = end;
+        drag.lines = [];
+        for (let y = Math.min(drag.start.y, end.y); y <= Math.max(drag.start.y, end.y); y++) drag.lines.push(term.buffer.active.getLine(y)?.translateToString(true) || '');
+        drag.selectedText = selectedTextFromLines(drag.lines, drag.start, end);
+      } else referenceDragRef.current = null;
       leftMouseDownRef.current = false;
     }
   };
@@ -793,6 +825,16 @@ export function TerminalView({
   const handleContextMenu = async (e: React.MouseEvent) => {
     e.preventDefault();
     const term = terminalInstanceRef.current;
+    const nativeClick = e.nativeEvent as ZoomAdjustedMouseEvent;
+    const clickX = nativeClick.spawneaOriginalClientX ?? e.clientX;
+    const clickY = nativeClick.spawneaOriginalClientY ?? e.clientY;
+    const savedDrag = referenceDragRef.current;
+    if (term && savedDrag && (savedDrag.buffer !== term.buffer.active || (savedDrag.lines.length > 0 && savedDrag.lines.some((line, index) => term.buffer.active.getLine(Math.min(savedDrag.start.y, savedDrag.end.y) + index)?.translateToString(true) !== line)))) {
+      referenceDragRef.current = null;
+      lastOsc52ClipboardTextRef.current = null;
+      lastContextSelectionTextRef.current = null;
+    }
+    let reference = term ? terminalReferenceAtClick(term, clickX, clickY) : null;
     const hasNewMouseSelection = mouseSelectionGestureRef.current;
     const mouseTrackingActive = term?.modes.mouseTrackingMode !== 'none';
     const preferFreshMouseSelection = hasNewMouseSelection && mouseTrackingActive;
@@ -818,11 +860,26 @@ export function TerminalView({
     }
 
     const nativeEvent = e.nativeEvent as ZoomAdjustedMouseEvent;
+    // Only a native/OSC52 selection with a matching unchanged drag range may
+    // override the clicked token. Clipboard fallback is for text actions only.
+    const drag = referenceDragRef.current;
+    const cell = term ? terminalCellAtClick(term, clickX, clickY) : null;
+    if (term && drag && cell && !term.getSelectionPosition() && drag.text) {
+      const first = drag.start.y * term.cols + drag.start.x;
+      const last = drag.end.y * term.cols + drag.end.x;
+      const offset = cell.y * term.cols + cell.x;
+      const unchanged = drag.lines.length > 0 && drag.lines.every((line, index) => term.buffer.active.getLine(Math.min(drag.start.y, drag.end.y) + index)?.translateToString(true) === line);
+      if (unchanged && offset >= Math.min(first, last) && offset <= Math.max(first, last)) {
+        const references = findReferences(drag.text.trim(), true);
+        reference = references.length === 1 ? references[0] : null;
+      }
+    }
     setContextMenu({
       x: (nativeEvent.spawneaOriginalClientX ?? e.clientX) / terminalZoom,
       y: (nativeEvent.spawneaOriginalClientY ?? e.clientY) / terminalZoom,
       hasSelection: Boolean(sel && sel.trim().length > 0),
       selectionText: sel,
+      reference,
     });
   };
 
@@ -888,6 +945,7 @@ export function TerminalView({
   }, [session.serverId, isRetryingHost, showToast]);
 
   return (
+    <>
     <div
       onClick={handleContainerClick}
       className={`relative h-full flex flex-col rounded-lg border border-[#30363d] bg-[#090d13] font-mono text-xs shadow-inner overflow-hidden ${
@@ -1011,6 +1069,7 @@ export function TerminalView({
             y={contextMenu.y}
             uiZoom={terminalZoom}
             hasSelection={contextMenu.hasSelection}
+            referenceActions={<ReferenceActions reference={contextMenu.reference} context={referenceContext} sessionId={session.id} onPreview={openReferencePreview} onClose={() => setContextMenu(null)} onError={showToast} />}
             onCopy={handleCopy}
             onPaste={handlePaste}
             onOpenInEditor={handleOpenInEditor}
@@ -1183,5 +1242,7 @@ export function TerminalView({
         )}
       </div>
     </div>
+    {referencePreview?.sessionId === session.id && <ReferencePreview key={`${session.id}:${referencePreview.path}`} path={referencePreview.path} sessionId={session.id} onClose={() => setReferencePreview(null)} />}
+    </>
   );
 }

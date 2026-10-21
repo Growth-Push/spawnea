@@ -144,6 +144,23 @@ describe('ArtifactGallery Component', () => {
     expect(addBlacklistMock).toHaveBeenCalledWith('screenshot.png');
   });
 
+  it('closes a reference preview on session switch without requesting its path for the new session', async () => {
+    const getLocalReferenceContent = vi.fn().mockResolvedValue({ path: '/repo/TO_DELETE_README.md', content: 'preview', isBinary: false, isTruncated: false, sizeBytes: 7, mimeType: 'text/plain' });
+    window.spawneaApi.getLocalReferenceContext = vi.fn().mockResolvedValue({ workspacePath: '/repo', homePath: '/fictional-host-home', persistedWorkspacePath: '/repo' });
+    window.spawneaApi.getArtifactContent = vi.fn();
+    window.spawneaApi.getLocalReferenceContent = getLocalReferenceContent;
+    const { rerender } = render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
+    fireEvent.contextMenu(screen.getByTestId('artifact-card-art-2'), { clientX: 100, clientY: 100 });
+    await screen.findByRole('menuitem', { name: 'Open in Artifact Preview' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open in Artifact Preview' }));
+    await screen.findByTestId('artifact-preview-modal');
+    await waitFor(() => expect(getLocalReferenceContent).toHaveBeenCalledWith('sess-1', '/repo/TO_DELETE_README.md'));
+    const requestCount = getLocalReferenceContent.mock.calls.length;
+    rerender(<ArtifactGallery sessionId="sess-2" artifacts={[]} onRefresh={vi.fn()} />);
+    expect(screen.queryByTestId('artifact-preview-modal')).toBeNull();
+    expect(getLocalReferenceContent).toHaveBeenCalledTimes(requestCount);
+  });
+
   it('requires confirmation before clearing and refreshes after accepting', async () => {
     const confirmMock = vi.fn().mockReturnValue(false);
     vi.stubGlobal('confirm', confirmMock);

@@ -27,6 +27,7 @@ import { SessionManager } from './session-manager.js';
 import { SessionSupervisor } from './session-supervisor.js';
 import { NotificationBroker } from './notification-broker.js';
 import { ArtifactManager } from './artifact-manager.js';
+import { openWorkspaceHtml } from './open-workspace-html.js';
 import { LocalDiscoveryService } from './local-discovery-service.js';
 import { AgentControlService } from './agent-control-service.js';
 import { ControlGateway } from './control-gateway.js';
@@ -854,6 +855,21 @@ function registerIpcHandlers(
       throw err;
     }
   });
+
+  ipcMain.handle('session:getLocalReferenceContext', (_event, sessionId: string) => artManager.getLocalReferenceContext(sessionId));
+  ipcMain.handle('session:getLocalReferencePaths', (_event, sessionId: string, reference: string) => artManager.getLocalReferencePaths(sessionId, reference));
+  ipcMain.handle('session:getLocalReferenceContent', (_event, sessionId: string, reference: string) => artManager.getLocalReferenceContent(sessionId, reference));
+  ipcMain.handle('session:openLocalReference', (_event, sessionId: string, reference: string, browser: boolean) =>
+    artManager.withLocalReference(sessionId, reference, async (path, mimeType, internal) => {
+      if (browser === true) {
+        if (!internal || mimeType !== 'text/html') throw new Error('Only workspace HTML files can be opened in the browser');
+        await openWorkspaceHtml(path);
+      } else {
+        const error = await shell.openPath(path);
+        if (error) throw new Error(`Unable to open file: ${error}`);
+      }
+    })
+  );
 
   // Terminal Snippet & Text Artifact Handlers
   ipcMain.handle('terminal:openSnippetInEditor', async (_event, text: string) => {
