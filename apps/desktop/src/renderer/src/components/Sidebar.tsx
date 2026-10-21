@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type {
   Session,
   Server,
@@ -193,6 +194,94 @@ export function summarizeChildStatuses(children: readonly Session[]): ChildStatu
 
 const NEEDS_INPUT_EDGE = 'border-l-4 border-l-violet-500 hover:border-l-violet-500';
 const NEEDS_INPUT_EDGE_THIN = 'border-l-[3px] border-l-violet-500 hover:border-l-violet-500';
+
+function CompactSessionCard({ sessionId, children }: {
+  sessionId: string;
+  children: [React.ReactElement, React.ReactElement<React.HTMLAttributes<HTMLDivElement> & React.RefAttributes<HTMLDivElement>>];
+}): React.JSX.Element {
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const [anchorVisible, setAnchorVisible] = useState(true);
+  const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
+  const open = hovered || focused;
+  // Portal into the zoomed UI root so the popup keeps the global UI zoom; its
+  // fixed coordinates are then in root-local (unzoomed) CSS pixels.
+  const zoom = Number(portalRoot?.dataset.uiZoom) || 1;
+  const contains = (target: EventTarget | null) => target instanceof Node
+    && Boolean(anchorRef.current?.contains(target) || popupRef.current?.contains(target));
+
+  useLayoutEffect(() => {
+    setPortalRoot(anchorRef.current?.closest<HTMLElement>('[data-ui-zoom]') ?? document.body);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const anchor = anchorRef.current;
+      const popup = popupRef.current;
+      if (!anchor || !popup) return;
+      const rect = anchor.getBoundingClientRect();
+      const list = anchor.closest('[data-testid="session-list"]')?.getBoundingClientRect();
+      setAnchorVisible(!list || (rect.bottom > list.top && rect.top < list.bottom));
+      setPosition({
+        left: Math.max(0, Math.min(rect.right / zoom, window.innerWidth / zoom - popup.offsetWidth)),
+        top: Math.max(8, Math.min(rect.top / zoom, window.innerHeight / zoom - popup.offsetHeight - 8)),
+      });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    const observer = new ResizeObserver(update);
+    if (anchorRef.current) observer.observe(anchorRef.current);
+    if (popupRef.current) observer.observe(popupRef.current);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+      observer.disconnect();
+    };
+  }, [open, zoom]);
+
+  return (
+    <div
+      ref={anchorRef}
+      data-testid={`session-compact-item-${sessionId}`}
+      className="relative group/compact flex justify-center py-1"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={(event) => { if (!contains(event.relatedTarget)) setHovered(false); }}
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={(event) => { if (!contains(event.relatedTarget)) setFocused(false); }}
+      onKeyDown={(event) => {
+        const controls = popupRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)');
+        const trigger = anchorRef.current?.querySelector('button');
+        if (event.key === 'Tab' && controls?.length && anchorVisible) {
+          if (!event.shiftKey && event.target === trigger) {
+            event.preventDefault();
+            controls[0].focus();
+          } else if (event.shiftKey && event.target === controls[0]) {
+            event.preventDefault();
+            trigger?.focus();
+          } else if (!event.shiftKey && event.target === controls[controls.length - 1]) {
+            // Resume the sidebar's normal tab order after the portal's controls.
+            trigger?.focus();
+          }
+        }
+      }}
+    >
+      {children[0]}
+      {portalRoot && createPortal(React.cloneElement(children[1], {
+        ref: popupRef,
+        style: {
+          display: open && anchorVisible ? 'flex' : 'none',
+          position: 'fixed', left: position.left, top: position.top,
+          maxHeight: `calc(${100 / zoom}vh - 16px)`, maxWidth: `${100 / zoom}vw`, overflowY: 'auto',
+        },
+      }), portalRoot)}
+    </div>
+  );
+}
 
 const STORAGE_KEY_GROUPING = 'spawnea:sidebar:grouping';
 const STORAGE_KEY_STATUS_FILTER = 'spawnea:sidebar:statusFilter';
@@ -1418,11 +1507,7 @@ export function Sidebar({
     const formattedPath = formatSessionPath(displayPath);
 
     return (
-      <div
-        key={session.id}
-        data-testid={`session-compact-item-${session.id}`}
-        className="relative group/compact flex justify-center py-1"
-      >
+      <CompactSessionCard key={session.id} sessionId={session.id}>
         <button
           type="button"
           data-testid={`session-item-${session.id}`}
@@ -1506,7 +1591,7 @@ export function Sidebar({
         {/* Floating Hover Popup Card */}
         <div
           data-testid={`session-popup-${session.id}`}
-          className="hidden group-hover/compact:flex group-focus-within/compact:flex flex-col gap-1.5 absolute left-[52px] top-0 ml-2 w-72 p-2.5 rounded-lg border border-emerald-500/50 bg-[#161b22] shadow-2xl z-50 pointer-events-auto backdrop-blur-md"
+          className="flex-col gap-1.5 w-72 p-2.5 rounded-lg border border-emerald-500/50 bg-[#161b22] shadow-2xl z-50 pointer-events-auto backdrop-blur-md"
           onClick={() => onSelectSession(session.id)}
         >
           {/* Row 1: [IconHost] [IconProvider]  branch  [IconStatus] [Shortcut] */}
@@ -1673,7 +1758,7 @@ export function Sidebar({
             </div>
           )}
         </div>
-      </div>
+      </CompactSessionCard>
     );
   };
 
