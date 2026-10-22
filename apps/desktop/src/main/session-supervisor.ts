@@ -19,6 +19,12 @@ import type { SessionManager } from './session-manager.js';
 import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
 import type { ArtifactManager } from './artifact-manager.js';
+import {
+  buildFeedbackPayload,
+  FEEDBACK_CAPTURE_FAILED_REASON,
+  feedbackDecision,
+  feedbackRulesConfig,
+} from './state-feedback.js';
 
 /** Terminal lines used for status detection (unchanged). */
 const STATUS_DETECTION_TAIL_LINES = 50;
@@ -167,10 +173,12 @@ export class SessionSupervisor {
     let artifactTailLines: string[] = [];
 
     let harnessName: string | undefined = undefined;
+    let harnessCommand: string | undefined = undefined;
     if (session.agentId) {
       try {
         const agent = await this.repos.agents.findById(session.agentId);
         harnessName = agent?.harness;
+        harnessCommand = agent?.command;
       } catch {
         // Fall back to paneCurrentCommand
       }
@@ -231,7 +239,7 @@ export class SessionSupervisor {
       tailLines,
     };
 
-    const result = this.stateDetector.detectStatus(signals, harnessName);
+    const result = this.stateDetector.detectStatus(signals, harnessName, { harnessCommand });
 
     if (generation !== this.pollingGeneration) {
       return result;
@@ -388,10 +396,12 @@ export class SessionSupervisor {
     }
 
     let harnessName: string | undefined = undefined;
+    let harnessCommand: string | undefined = undefined;
     if (session.agentId) {
       try {
         const agent = await this.repos.agents.findById(session.agentId);
         harnessName = agent?.harness;
+        harnessCommand = agent?.command;
       } catch {
         // Fall back
       }
@@ -401,14 +411,13 @@ export class SessionSupervisor {
     const ptyMetrics = this.ptyBroker.getMetrics(ptyChannelId);
     const isPtyAttached = ptyMetrics !== undefined;
 
-    let hostReachable = true;
     let tmuxSessionExists = false;
     let paneExists = false;
     let paneDead = false;
     let paneCurrentCommand: string | undefined = undefined;
     let panePid: number | undefined = undefined;
     let tailLines: string[] = [];
-
+    let captureFailed = false;
 
     try {
       const host = await this.sessionManager.getHostAdapter(session.serverId);
@@ -433,12 +442,32 @@ export class SessionSupervisor {
         serverId: session.serverId,
         error: err,
       });
-      hostReachable = false;
+      captureFailed = true;
+    }
+
+    const base = {
+      sessionId: session.id,
+      sessionName: session.name,
+      harness: harnessName || paneCurrentCommand,
+      worktreePath: session.worktreePath,
+      branch: session.branch,
+      rulesConfig: feedbackRulesConfig(this.stateDetector.rules),
+      capturedAt: new Date().toISOString(),
+    };
+
+    if (captureFailed) {
+      // Unlike status polling, a report does not turn a failed capture into a
+      // detected state: without evidence there is no status, source, or confidence.
+      return {
+        ...base,
+        capture: { status: 'failed', reason: FEEDBACK_CAPTURE_FAILED_REASON },
+        tailLines: [],
+      };
     }
 
     const signals: SessionSignals = {
       sessionId,
-      hostReachable,
+      hostReachable: true,
       tmuxSessionExists,
       paneExists,
       paneDead,
@@ -451,21 +480,18 @@ export class SessionSupervisor {
       tailLines,
     };
 
-    const result = this.stateDetector.detectStatus(signals, harnessName);
+    const result = this.stateDetector.detectStatus(signals, harnessName, { harnessCommand });
 
     return {
-      sessionId: session.id,
-      sessionName: session.name,
-      harness: harnessName || paneCurrentCommand,
-      worktreePath: session.worktreePath,
-      branch: session.branch,
+      ...base,
+      capture: { status: 'captured' },
       detectedStatus: result.status,
       confidence: result.confidence,
       source: result.source,
       reason: result.reason,
       detectedPrompt: result.detectedPrompt,
+      decision: feedbackDecision(result),
       tailLines,
-      capturedAt: new Date().toISOString(),
     };
   }
 
@@ -491,23 +517,8 @@ export class SessionSupervisor {
     const filename = `state-feedback-${safeSessionId}-${timestamp}.json`;
     const filePath = join(feedbackDir, filename);
 
-    const fixturePayload = {
-      schemaVersion: '1.0.0',
-      sessionId: report.sessionId,
-      sessionName: report.sessionName,
-      harness: report.harness,
-      worktreePath: report.worktreePath,
-      branch: report.branch,
-      detectedStatus: report.detectedStatus,
-      detectedSource: report.detectedSource,
-      detectedConfidence: report.detectedConfidence,
-      detectedPrompt: report.detectedPrompt,
-      detectionReason: report.detectionReason,
-      expectedStatus: report.expectedStatus,
-      userNotes: report.userNotes || '',
-      tailLines: report.tailLines || [],
-      timestamp: report.timestamp || new Date().toISOString(),
-    };
+    // The rules configuration is this process's own; a renderer-supplied value is ignored.
+    const fixturePayload = buildFeedbackPayload(report, feedbackRulesConfig(this.stateDetector.rules));
 
     const fixtureJson = JSON.stringify(fixturePayload, null, 2);
     await writeFile(filePath, fixtureJson, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
@@ -516,8 +527,9 @@ export class SessionSupervisor {
     this.logger.info('Saved state detection feedback report fixture', {
       filePath,
       sessionId: report.sessionId,
-      detectedStatus: report.detectedStatus,
+      observedStatus: report.observedStatus,
       expectedStatus: report.expectedStatus,
+      capture: report.capture?.status,
     });
 
     return {

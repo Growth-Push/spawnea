@@ -1,0 +1,205 @@
+# Spawnea factory state rules.
+#
+# Each harness has an ordered list of rules. A rule reports one state
+# (working, needs_input, idle, or error) when any of its patterns matches the
+# evaluated window: the last lines of the rendered terminal screen after the
+# harness-specific preparation step. The first matching rule wins.
+#
+# Patterns are JavaScript regular expressions compiled case-insensitive and
+# multiline, so ^ and $ match at every line. Use (?-i:...) for a
+# case-sensitive part. [^\S\n] matches spaces, tabs, and the non-breaking
+# spaces some harnesses draw, without crossing into the next line. Write patterns in single quotes so backslashes stay
+# literal; double a single quote to include it.
+#
+# A user file at <userData>/state-rules.yaml uses the same format. Its rules
+# for a harness are evaluated before these; a harness only defined there is
+# added. Changes apply when Spawnea restarts. See docs/state-rules.md.
+#
+# The generic harness applies to sessions whose harness has no rules of its
+# own. Its rules are anchored so other harnesses can reuse them by alias.
+version: 1
+harnesses:
+  generic:
+    rules:
+      - &generic_needs_input
+        state: needs_input
+        patterns:
+          - '\[y/n\]|\(y/n\)|\[yes/no\]|\(yes/no\)'
+          - '\b(?:proceed|confirm|approve|continue|apply)\s*\?'
+          - 'do you want to (?:continue|proceed|run|execute|apply|install|overwrite)'
+          - 'allow (?:this|the) (?:tool|action|command|execution|operation)'
+          - '(?:select|enter|choose) (?:an? )?(?:option|choice|number|item|selection):'
+          - 'choose \[[0-9]+-[0-9]+\]:'
+          - 'press (?:enter|return|space) to (?:continue|proceed)'
+          - '(?:enter|input) (?:value|path|query|name|prompt|message):[^\S\n]*$'
+      - &generic_working
+        state: working
+        patterns:
+          - '^[^\S\n]*[•*·-]?[^\S\n]*(?:working|generating|executing|processing|analyzing)\b'
+          - '\breading (?:file|files|context|directory)\b'
+          - '^[^\S\n]*[✻✽][^\S\n]+[A-Za-z][A-Za-z -]*…'
+      - &generic_error
+        state: error
+        patterns:
+          - 'Exit status [1-9]\d*|exited with code [1-9]\d*|failed with exit code [1-9]\d*'
+          - 'ERR_PNPM_[A-Z_]+|ELIFECYCLE\s+Command failed'
+          - 'Uncaught (?:Exception|TypeError|ReferenceError|Error):|FATAL:\s+|Traceback \(most recent call last\):'
+          - 'command not found:|is not recognized as an internal or external command'
+      - &generic_idle
+        state: idle
+        patterns:
+          # user@host:path$ and a bare prompt symbol ($, #, or %).
+          - '^[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+:[^$#%\n]+[$#%][^\S\n]*$'
+          - '^(?:\([^)\n]+\)[^\S\n]*)?[a-zA-Z0-9_.-]+[$#%][^\S\n]*$'
+
+  claude:
+    rules:
+      # Permission, trust, and question dialogs.
+      - state: needs_input
+        patterns:
+          - '(?:Enter to (?:select|confirm)|↑/↓ to navigate)[^\n]*·[^\S\n]*Esc to cancel'
+          - '^[^\S\n]*❯[^\S\n]*1\.[^\S\n]+Yes\b'
+          - '(?:Allow|Run|Execute)[^\S\n]+[^\n]*?\?[^\S\n]*\(y/n\)'
+          - 'Do you want to run:[\s\S]*?\(y/n\)'
+      - *generic_needs_input
+      # Interrupt hint and every frame of the column-0 spinner. Indented
+      # transcript and draft lines (such as Markdown bullets) are not spinners.
+      - state: working
+        patterns:
+          - '^[^\S\n]*⏵⏵[^\n]*?\b(?:esc\s+to\s+(?:interrupt|cancel)|Ctrl\+C\s+(?:to\s+)?cancel)\b'
+          - '^[·✢✳✶✻✽*] [A-Za-z][A-Za-z -]*…(?=[^\S\n]*(?:\(|$))'
+          # Status-only spinner lines without an ellipsis, such as
+          # `✻ Waiting for API response · will retry in 2m 40s`. The turn
+          # completion marker is `· done` and is excluded.
+          - '^[·✢✳✶✻✽*][^\S\n]+[A-Za-z][^\n·]*·(?![^\S\n]*done\b)'
+      - *generic_working
+      - *generic_error
+      # Turn completion marker, the empty input box, and the first-run placeholder.
+      - state: idle
+        patterns:
+          - '^[^\S\n]*[✻✽][^\S\n]+[A-Za-z][A-Za-z -]*[^\S\n]+for[^\S\n]+\d+(?:\.\d+)?[smh](?:[^\S\n]+\d+(?:\.\d+)?[smh])*[^\S\n]*·[^\S\n]*done\b'
+          - '^[^\S\n]*[>❯][^\S\n]*$'
+          - '^[^\S\n]*[>❯][^\S\n]*Try[^\S\n]+"'
+      - *generic_idle
+
+  codex:
+    rules:
+      # Approvals, plan confirmation, questionnaires, menus, and queued questions.
+      - state: needs_input
+        patterns:
+          - 'Allow\s*/\s*Deny|\[A\]llow\s*/\s*\[D\]eny|^[^\S\n]*[>›❯][^\S\n]*(?:\d+\.[^\S\n]*)?(?:Allow|Deny)\b|^[^\S\n]*Approval required:'
+          - '^[^\S\n]*[>›❯][^\S\n]*(?:approve|confirm|proceed\s+with|accept|apply)\s+(?:the\s+|this\s+)?plan\b|(?:approve|confirm|proceed\s+with|accept|apply)\s+(?:the\s+|this\s+)?plan[^\S\n]*(?:\?|\[y/n\]|\(y/n\))'
+          - 'Question\s+\d+\s*(?:/|of)\s*\d+'
+          - '^[^\S\n]*[>›❯][^\S\n]*\d+\.[^\S\n]+[^\n]+[\s\S]*?(?:enter\s+(?:to\s+)?submit|ctrl\+\]\s*skip|shift\s*[+-]\s*→\s*main\s*prompt)'
+          - '^[^\S\n]*[>›❯][^\S\n]+(?!(?:Ask (?:Codex|anything)|Type|Send\b))[^\n]+[\s\S]*?(?:↑/↓|arrow\s+keys?|enter\s+(?:to\s+)?(?:select|confirm|submit|continue)|to\s+navigate|ctrl\+\]\s*skip|shift\s*[+-]\s*→\s*main\s*prompt)'
+          - 'Please confirm one option|Which should I proceed with|Choose one of the following'
+          - '-[^\S\n]+[A-Z]:[^\S\n]+[^\n]+\n[^\S\n]*-[^\S\n]+[A-Z]:'
+          - 'Queued\s+follow-up\s+inputs?|shift\s*[+-]\s*(?:←|→|<[-–]|left|right)\s+to\s+answer|^[^\S\n]*\?[^\S\n]*\d+[^\S\n]+questions?\b'
+          # Menu footers alone, so a long menu still matches when its header
+          # and selected option have scrolled out of the window.
+          - 'enter to submit (?:all|answer)\b|←/→ to navigate questions|^[^\S\n]*Press enter to confirm\b'
+      - *generic_needs_input
+      # Live status line with elapsed time and interrupt hint, or a spinner.
+      - state: working
+        patterns:
+          - '^[^\S\n]*(?:•|Working\b)[^\n]*\besc\s+to\s+interrupt\b'
+          - '\([^\S\n]*\d[^()\n]*•[^\S\n]*esc to interrupt[^\S\n]*\)'
+          - '[\u2800-\u28FF]'
+      # Unresolved turn failure. Interrupt notices share the glyph.
+      - state: error
+        patterns:
+          - '^■[^\S\n]+(?![^\n]*\binterrupted\b)\S'
+      # Ready prompt and completion marker.
+      - state: idle
+        patterns:
+          - '^[>›❯][^\S\n]*(?:Ask (?:Codex|anything)|Type|Send|What would you like|$)'
+          - 'Ask Codex to do anything'
+          - '^[^\S\n]*─[^\S\n]+Worked for\b|Worked for \d+(?:\.\d+)?(?:s|m|h)'
+      # Weaker signals only count while the ready prompt is not visible.
+      - state: needs_input
+        patterns:
+          - '^[^\S\n]*[•*·-]?[^\S\n]*¿?[^\n]+\?[^\S\n]*\n(?:[^\S\n]*[•*·-][^\S\n]+[^\n]+\n?){2,}'
+      - state: working
+        patterns:
+          - '^[^\S\n]*[•*·-]?[^\S\n]*Working\b'
+          - '^[^\S\n]*•[^\S\n]*(?:Thinking|Reasoning|Searching|Running|Executing|Exploring|Reading)\b'
+          - '^[^\S\n]*[┌╭•*·-][^\S\n]*(?:Reasoning|Thinking)\b'
+      - *generic_working
+      - *generic_error
+      - *generic_idle
+
+  hermes:
+    rules:
+      # Clarify menus, question prompts, and consultation headers.
+      - state: needs_input
+        patterns:
+          - 'Hermes(?:\s+Agent)?\s+needs your input|to select,\s*Enter to (?:confirm|lock)|Tab next question'
+          - '^[^\S\n]*\?[^\S\n]*[>❯›][^a-zA-Z0-9\n]*$'
+          - '^[^\S\n]*[❓❔][^\S\n]*(?:Q\d+|QN\d+|Pregunta[^\S\n]*\d+|Question[^\S\n]*\d+)[^\S\n]*[-—:]?[^\S\n]*\S'
+          # First-run setup choices.
+          - '↑↓ navigate[^\S\n]+ENTER/SPACE select'
+      - *generic_needs_input
+      # Interrupt footer, running stopwatch, and progress verbs.
+      - state: working
+        patterns:
+          - 'msg=interrupt|/steer|/queue|Ctrl\+C cancel|[|│][^\S\n]*⏱[^\S\n]*\d+[smh]?'
+          - 'enter interrupt · tab queue|type to redirect this turn|·[^\S\n]*⏱[^\S\n]*\d'
+          - '\b(?:formulating|pondering|reviewing|searching|executing|synthesizing|generating)\.{2,3}'
+      - *generic_working
+      - *generic_error
+      # Completed-turn checkmark in the metrics bar and the ready prompt.
+      - state: idle
+        patterns:
+          - '^[^\S\n]*[⚕☤][^\n]*[|│·][^\S\n]*✓[^\S\n]*\d+(?:ms|[smh])(?:[^\S\n]|$)'
+          - '^[a-zA-Z0-9_.\-/]+[^\S\n]*>[^\S\n]*(?!msg=interrupt|/queue|/bg|/steer|Ctrl\+C)'
+          - '^[>›❯][^\S\n]*(?:Ask (?:Hermes|anything)|$)'
+      - *generic_idle
+
+  antigravity:
+    rules:
+      # Questionnaires, permission menus, numbered choices, and questions.
+      - state: needs_input
+        patterns:
+          - 'Question \d+/\d+:'
+          - '(?:Requesting permission for:|Do you want to proceed\?|Accept this (?:file )?edit\?)[\s\S]*?>\s*1\.\s+Yes'
+          - '(?:↑/↓|[\u2191\u2193/]+)[^\S\n]*Navigate'
+          - '>[^\S\n]*1\.[^\S\n]+[^\n]+\n[^\S\n]*2\.[^\S\n]+'
+          - '^[^\S\n]*\?[^\S\n]+[A-Z0-9][^\n]+\?[^\S\n]*$'
+          - 'Accept this (?:file )?edit\?'
+      # Rotating braille spinner and the cancel footer of a running turn.
+      - state: working
+        patterns:
+          - '[\u2800-\u28FF]'
+          - '^esc to cancel\b'
+      - *generic_error
+      - state: idle
+        patterns:
+          - '^[^\S\n]*[>›]|\?[^\S\n]*for shortcuts|Ask Antigravity'
+      - *generic_idle
+
+  grok:
+    rules:
+      # Question card.
+      - state: needs_input
+        patterns:
+          - 'Waiting on answers\b'
+          - 'Tab:\s*next answer'
+      # Spinner, active entries, stop button, and cancel hint of a running turn.
+      - state: working
+        patterns:
+          - '^(?:[^\S\n]|[│|┃])*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:[^\S\n]|$)'
+          - '^(?:[^\S\n]|[│|┃])*[◆●▶][^\S\n]+(?!Recap\b)\S'
+          - '(?-i:\b(?:Running|Responding|Generating)\b)'
+          - 'esc to interrupt|send a message to interrupt'
+          - '\[stop\][^\S\n]*$'
+          - 'Ctrl\+c:cancel'
+      # Completion marker, empty composer, and idle shortcut bar.
+      - state: idle
+        patterns:
+          - '^[^\S\n]*Worked for[^\S\n]+\d[\d.smh ]*$'
+          - '[│|][^\S\n]*[❯›>][^\S\n]*[│|][^\S\n]*$'
+          - 'Shift\+Tab:[^\S\n]*mode[^\n]*shortcuts'
+      - *generic_needs_input
+      - *generic_working
+      - *generic_error
+      - *generic_idle

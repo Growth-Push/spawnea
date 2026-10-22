@@ -58,6 +58,7 @@ describe('HarnessStatusAdapterRegistry', () => {
       harnessId: 'vendor/grok',
       displayName: 'Vendor Grok',
       evaluateStatus: grok.evaluateStatus.bind(grok),
+      evaluationWindow: grok.evaluationWindow.bind(grok),
     };
     scopedRegistry.register(custom);
     expect(scopedRegistry.getAdapter('vendor/grok')).toBe(custom);

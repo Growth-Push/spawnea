@@ -48,7 +48,7 @@ describe('CodexStatusAdapter', () => {
     const res = adapter.evaluateStatus(signals);
 
     expect(res.status).toBe('needs_input');
-    expect(res.confidence).toBe(0.98);
+    expect(res.matchedRule).toMatchObject({ file: 'factory', harness: 'codex' });
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Question 2/2');
   });
@@ -100,7 +100,7 @@ describe('CodexStatusAdapter', () => {
 
     const res = adapter.evaluateStatus(signals);
     expect(res.status).toBe('working');
-    expect(res.confidence).toBe(0.98);
+    expect(res.matchedRule).toMatchObject({ file: 'factory', harness: 'codex' });
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Working');
   });
@@ -1131,5 +1131,34 @@ describe('CodexStatusAdapter', () => {
       const res = evaluate([...toolOutput, 'Approval required: Codex wants to execute the following command:', '  git push origin main', '❯ 1. Allow once', '  2. Deny']);
       expect(res.status).toBe('needs_input');
     });
+  });
+});
+
+describe('CodexStatusAdapter long menus', () => {
+  const adapter = new CodexStatusAdapter();
+
+  it('detects a questionnaire whose header and selected option are outside the window', () => {
+    const options = Array.from({ length: 7 }, (_, index) => [
+      `${index === 0 ? '›' : ' '} ${index + 1}. Format ${index + 1}`,
+      `     A one-sentence description of format ${index + 1}.`,
+    ]).flat();
+    const tailLines = [
+      'Question 1/1',
+      'Which config format should the demo use?',
+      ...options,
+      'tab to add notes | enter to submit answer | esc to interrupt',
+    ];
+    expect(tailLines.length).toBeGreaterThan(15);
+    const res = adapter.evaluateStatus({
+      sessionId: 'codex-long-menu',
+      hostReachable: true,
+      tmuxSessionExists: true,
+      paneExists: true,
+      paneDead: false,
+      isPtyAttached: false,
+      paneCurrentCommand: 'codex',
+      tailLines,
+    });
+    expect(res.status).toBe('needs_input');
   });
 });

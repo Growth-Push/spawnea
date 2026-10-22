@@ -4,6 +4,9 @@ import type {
   Server,
   Agent,
   SessionStatus,
+  StateFeedbackCapture,
+  StateFeedbackDecision,
+  StateFeedbackRulesConfig,
   StateFeedbackSnapshot,
   StateFeedbackReport,
   StateFeedbackResult,
@@ -87,6 +90,30 @@ const STATUS_OPTIONS: {
   },
 ];
 
+/** Saved when the snapshot request itself fails; the error is shown, not saved. */
+const SNAPSHOT_REQUEST_FAILED_REASON = 'Snapshot request to the desktop app failed';
+
+function suggestedExpectedStatus(status: SessionStatus): SessionStatus {
+  return status === 'needs_input' ? 'idle' : 'needs_input';
+}
+
+function describeDecision(decision: StateFeedbackDecision): string {
+  switch (decision.kind) {
+    case 'rule':
+      return `${decision.rule.file} rule ${decision.rule.harness} #${decision.rule.position}`;
+    case 'fallback':
+      return 'No rule matched (activity fallback)';
+    case 'connection':
+      return 'Connection or process state';
+  }
+}
+
+const RULES_CONFIG_LABELS: Record<StateFeedbackRulesConfig['source'], string> = {
+  factory: 'Factory rules',
+  merged: 'User and factory rules',
+  user_invalid: 'Factory rules (user file invalid)',
+};
+
 export function StateFeedbackModal({
   isOpen,
   uiZoom = 1,
@@ -97,6 +124,7 @@ export function StateFeedbackModal({
 }: StateFeedbackModalProps): React.JSX.Element | null {
   const [snapshot, setSnapshot] = useState<StateFeedbackSnapshot | null>(null);
   const [isLoadingSnapshot, setIsLoadingSnapshot] = useState(false);
+  /** Shown when the snapshot could not be requested; the report can still be saved. */
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
 
   const [expectedStatus, setExpectedStatus] = useState<SessionStatus>('needs_input');
@@ -134,44 +162,24 @@ export function StateFeedbackModal({
       setIsLoadingSnapshot(true);
       setSnapshotError(null);
       try {
-        if (window.spawneaApi?.getStateSnapshot) {
-          const res = await window.spawneaApi.getStateSnapshot(session.id);
-          setSnapshot(res);
-          // Suggest an alternate expected status by default
-          if (res.detectedStatus === 'idle') {
-            setExpectedStatus('needs_input');
-          } else if (res.detectedStatus === 'working') {
-            setExpectedStatus('needs_input');
-          } else if (res.detectedStatus === 'needs_input') {
-            setExpectedStatus('idle');
-          } else {
-            setExpectedStatus('needs_input');
-          }
-        } else {
-          // Fallback if running outside desktop API bridge
-          setSnapshot({
-            sessionId: session.id,
-            sessionName: session.name,
-            harness: agent?.harness || 'claude',
-            worktreePath: session.worktreePath,
-            branch: session.branch,
-            detectedStatus: session.status,
-            confidence: 0.75,
-            source: 'tmux',
-            reason: 'Simulated feedback snapshot',
-            tailLines: ['Terminal output lines...', 'Confirm changes? [y/N] '],
-            capturedAt: new Date().toISOString(),
-          });
+        if (!window.spawneaApi?.getStateSnapshot) {
+          throw new Error('The desktop API is unavailable');
         }
+        const res = await window.spawneaApi.getStateSnapshot(session.id);
+        setSnapshot(res);
+        // Suggest an alternate expected status by default
+        setExpectedStatus(suggestedExpectedStatus(res.detectedStatus ?? session.status));
       } catch (err: any) {
+        setSnapshot(null);
         setSnapshotError(err.message || 'Failed to capture live session snapshot');
+        setExpectedStatus(suggestedExpectedStatus(session.status));
       } finally {
         setIsLoadingSnapshot(false);
       }
     };
 
     fetchSnapshot();
-  }, [isOpen, session?.id, agent?.harness]);
+  }, [isOpen, session?.id]);
 
   if (!isOpen || !session) return null;
 
@@ -180,20 +188,32 @@ export function StateFeedbackModal({
     setIsSubmitting(true);
     setSubmitError(null);
 
+    // Detection fields come only from a captured snapshot; nothing is filled in
+    // when the capture failed. The main process adds the rules configuration.
+    const capture: StateFeedbackCapture =
+      snapshot?.capture ?? { status: 'failed', reason: SNAPSHOT_REQUEST_FAILED_REASON };
+    const captured = snapshot !== null && capture.status === 'captured';
     const report: StateFeedbackReport = {
       sessionId: session.id,
       sessionName: session.name,
       harness: snapshot?.harness || agent?.harness || agent?.command,
       worktreePath: session.worktreePath,
       branch: session.branch,
-      detectedStatus: snapshot?.detectedStatus || session.status,
-      detectedSource: snapshot?.source || 'tmux',
-      detectedConfidence: snapshot?.confidence || 0.7,
-      detectedPrompt: snapshot?.detectedPrompt,
-      detectionReason: snapshot?.reason || '',
+      observedStatus: session.status,
+      capture,
+      ...(captured
+        ? {
+            detectedStatus: snapshot.detectedStatus,
+            detectedSource: snapshot.source,
+            detectedConfidence: snapshot.confidence,
+            detectedPrompt: snapshot.detectedPrompt,
+            detectionReason: snapshot.reason,
+            decision: snapshot.decision,
+          }
+        : {}),
       expectedStatus,
       userNotes: userNotes.trim(),
-      tailLines: snapshot?.tailLines || [],
+      tailLines: captured ? snapshot.tailLines : [],
       timestamp: new Date().toISOString(),
     };
 
@@ -266,14 +286,6 @@ export function StateFeedbackModal({
               <Loader2 className="w-6 h-6 animate-spin text-purple-400" />
               <span>Capturing terminal snapshot and current state signals...</span>
             </div>
-          ) : snapshotError ? (
-            <div className="p-4 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium">Failed to capture session snapshot</p>
-                <p className="text-rose-200/90 mt-0.5">{snapshotError}</p>
-              </div>
-            </div>
           ) : submitResult ? (
             /* Success Feedback Card */
             <div className="space-y-4 py-2 animate-in fade-in duration-200" data-testid="feedback-success-card">
@@ -310,19 +322,55 @@ export function StateFeedbackModal({
             </div>
           ) : (
             <>
+              {(snapshotError || snapshot?.capture.status === 'failed') && (
+                <div
+                  className="p-4 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2"
+                  data-testid="feedback-capture-failed"
+                >
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-medium">Failed to capture session snapshot</p>
+                    <p className="text-rose-200/90 mt-0.5">
+                      {snapshotError || (snapshot?.capture.status === 'failed' ? snapshot.capture.reason : '')}
+                    </p>
+                    <p className="text-rose-200/70 mt-1">
+                      The report can still be saved with the displayed and expected status, but without a detected status, source, confidence, or terminal tail.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Context Summary */}
               <div className="bg-[#0d1117] border border-[#30363d] rounded-lg p-3.5 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Current Detection</span>
-                    <StatusBadge status={snapshot?.detectedStatus || session.status} />
+                    <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Displayed Status</span>
+                    <StatusBadge status={session.status} />
                   </div>
-                  {snapshot && (
-                    <span className="text-[11px] font-mono text-zinc-500">
-                      Confidence: {Math.round(snapshot.confidence * 100)}% ({snapshot.source})
-                    </span>
+                  {snapshot?.detectedStatus && (
+                    <div className="flex items-center gap-2" data-testid="feedback-detected-status">
+                      <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Detected Now</span>
+                      <StatusBadge status={snapshot.detectedStatus} />
+                    </div>
                   )}
                 </div>
+
+                {snapshot?.decision && (
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-zinc-500">
+                    <span data-testid="feedback-decision">Decided by: {describeDecision(snapshot.decision)}</span>
+                    {snapshot.confidence !== undefined && snapshot.source && (
+                      <span>
+                        Confidence: {Math.round(snapshot.confidence * 100)}% ({snapshot.source})
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {snapshot?.rulesConfig && (
+                  <div className="text-[11px] font-mono text-zinc-500" data-testid="feedback-rules-config">
+                    Rules in use: {RULES_CONFIG_LABELS[snapshot.rulesConfig.source]}
+                  </div>
+                )}
 
                 {snapshot?.reason && (
                   <div className="text-xs text-zinc-300 bg-[#161b22] px-3 py-1.5 rounded border border-[#21262d]">
@@ -358,7 +406,7 @@ export function StateFeedbackModal({
                   className="text-xs text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2"
                   data-testid="feedback-sensitive-content-warning"
                 >
-                  This report includes a recent terminal tail and your notes. It may contain sensitive text. Review it before saving; the report stays local and is not uploaded.
+                  This report includes a recent terminal tail, your notes, the session's worktree path and branch, and which state rule decided the status. It may contain sensitive text. Review it before saving; the report stays local and is not uploaded.
                 </p>
               </div>
 
@@ -446,7 +494,7 @@ export function StateFeedbackModal({
               type="button"
               data-testid="feedback-modal-submit-btn"
               onClick={handleSubmit}
-              disabled={isSubmitting || isLoadingSnapshot || !!snapshotError}
+              disabled={isSubmitting || isLoadingSnapshot}
               className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded-lg transition-colors shadow-sm cursor-pointer"
             >
               {isSubmitting ? (

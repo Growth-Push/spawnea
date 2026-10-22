@@ -94,12 +94,21 @@ interface TrackedTurn {
   outputChanges: number;
   promptDelimiterPairs: number;
   submissionUncertain?: boolean;
+  /** Digest of the last evaluated status window and when it last changed. */
+  windowFingerprint?: string;
+  windowStableSinceMs?: number;
 }
 
 const MAX_RETAINED_TURN_BYTES = 262_144;
 const DEFAULT_TURN_READ_BYTES = 32_768;
 const MAX_TURN_READ_BYTES = 131_072;
 const MAX_TURN_WAIT_MS = 30_000;
+/**
+ * A turn whose status comes from the quiet fallback (no rule matched) is
+ * completed only after it produced output and the evaluated window stayed
+ * identical for this long, measured by elapsed time rather than by checks.
+ */
+export const STABLE_SCREEN_COMPLETION_MS = 30_000;
 
 export interface AgentControlServiceOptions {
   repositories: Repositories;
@@ -1296,10 +1305,9 @@ export class AgentControlService {
         continue;
       }
 
-      const promptDetection = detectPromptInTail([line], { harness: turn.harness });
+      const promptDetection = detectPromptInTail([line], { harness: turn.harness, rules: this.stateDetector.rules });
       if (
-        promptDetection.kind === 'idle_prompt' ||
-        promptDetection.kind === 'shell_prompt' ||
+        promptDetection.kind === 'idle' ||
         /^[>›$#%]\s*$/.test(line) ||
         /^[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+:[^$#%]*[$#%]?\s*$/.test(line) ||
         stripped === ''
@@ -1334,13 +1342,22 @@ export class AgentControlService {
       tailLines,
     }, turn.harness);
 
-    const liveStatus = (liveStatusResult.confidence && liveStatusResult.confidence >= 0.8)
-      ? liveStatusResult.status
-      : undefined;
-
+    // A rule match is evidence from this capture. The quiet fallback only
+    // sees this capture, so the supervisor's status (which also reflects PTY
+    // activity and the foreground command) stands in for it.
+    const matchedRule = liveStatusResult.matchedRule !== undefined;
     const effectiveStatus = (session.status === 'error' || session.status === 'disconnected')
       ? session.status
-      : (liveStatus ?? session.status);
+      : (matchedRule ? liveStatusResult.status : session.status);
+    const ruleIdle = matchedRule && effectiveStatus === 'idle';
+    const fallbackIdle = !matchedRule && effectiveStatus === 'idle';
+
+    const now = Date.now();
+    if (turn.windowStableSinceMs === undefined || liveStatusResult.windowFingerprint !== turn.windowFingerprint) {
+      turn.windowFingerprint = liveStatusResult.windowFingerprint;
+      turn.windowStableSinceMs = now;
+    }
+    const windowStableMs = now - turn.windowStableSinceMs;
 
     if (effectiveStatus === 'working' && !turn.submissionUncertain) {
       turn.observedWorking = true;
@@ -1350,6 +1367,8 @@ export class AgentControlService {
     const hasResponseDelimiter = delimiterPairs > turn.promptDelimiterPairs;
     const hasOutput = this.hasResponseOutput(turn, nextOutput);
 
+    // A turn ends only on positive evidence: a response delimiter, an idle
+    // rule (including completion markers), process exit, or a stable screen.
     let nextStatus: Exclude<ControlTurnStatus, 'unchanged'>;
 
     if (hasResponseDelimiter) {
@@ -1362,7 +1381,7 @@ export class AgentControlService {
       nextStatus = 'failed';
     } else if (effectiveStatus === 'needs_input') {
       nextStatus = 'needs_input';
-    } else if (hasOutput && (effectiveStatus === 'done' || effectiveStatus === 'idle')) {
+    } else if (hasOutput && (effectiveStatus === 'done' || ruleIdle)) {
       turn.submissionUncertain = false;
       nextStatus = 'completed';
     } else if (turn.submissionUncertain) {
@@ -1371,14 +1390,10 @@ export class AgentControlService {
       nextStatus = 'working';
     } else if (effectiveStatus === 'done') {
       nextStatus = 'completed';
-    } else if (effectiveStatus === 'idle') {
-      if (turn.observedWorking) {
-        nextStatus = 'completed';
-      } else if (hasOutput) {
-        nextStatus = 'completed';
-      } else {
-        nextStatus = 'unknown';
-      }
+    } else if (ruleIdle) {
+      nextStatus = turn.observedWorking ? 'completed' : 'unknown';
+    } else if (fallbackIdle) {
+      nextStatus = hasOutput && windowStableMs >= STABLE_SCREEN_COMPLETION_MS ? 'completed' : 'unknown';
     } else {
       nextStatus = turn.status === 'working' ? 'working' : 'unknown';
     }

@@ -158,7 +158,10 @@ text delivery succeeds but Enter cannot be confirmed, the response reports
 `spawnea_get_turn` takes a `turnId` and returns bounded output after the initial
 or supplied cursor, a replacement cursor, version, `truncated`, and
 `cursorExpired`. `waitMs` is bounded to 30 seconds and wakes on output or when the
-turn reaches `needs_input`, `completed`, or `failed`. `compact` output applies the
+turn reaches `needs_input`, `completed`, or `failed`. A turn completes on a
+response delimiter, an `idle` state rule, process exit, or a screen that stayed
+unchanged for at least 30 seconds after producing output; a quiet screen that no
+rule recognizes is otherwise reported as `unknown` (see [State Rules](state-rules.md)). `compact` output applies the
 harness adapter's extraction; `raw` returns captured terminal output. Turns,
 cursors, idempotency caches, and Agent Context records are volatile and are lost
 when Spawnea restarts.

@@ -52,8 +52,8 @@ Rather than installing proprietary daemons, event hooks, or background webhooks 
 
 1. **Transient Activity Metrics**: The PTY stream records lightweight activity timestamps (`lastOutputAt`, `lastInputAt`) and recent byte rates to detect active output streaming.
 2. **Pane Inspection**: Spawnea periodically queries tmux for foreground process state (`tmux list-panes` format fields: PID, current command, dead/alive flag).
-3. **Bounded Tail Inspection**: To detect interactive prompts, Spawnea captures a small, bounded in-memory snapshot of the active tmux pane (via `tmux capture-pane -p -S -25`).
-4. **State Adapters**: Adapters in [`packages/state/src/adapters/`](../packages/state/src/adapters/) parse the captured lines against known patterns for tools like Codex, Hermes, Antigravity, or generic shell prompts.
+3. **Bounded Tail Inspection**: To detect interactive prompts, Spawnea captures a small, bounded in-memory snapshot of the active tmux pane (via `tmux capture-pane -p -S -50`).
+4. **State Rules**: Harness adapters in [`packages/state/src/adapters/`](../packages/state/src/adapters/) trim the captured lines by context, and ordered YAML [state rules](state-rules.md) evaluate the last 10 lines of the result. An optional local user rules file (`<userData>/state-rules.yaml`) is read once at startup; Spawnea never uploads it. Status results carry the matched line, the deciding rule's file, harness, and position, and only a digest of the evaluated window, never its text.
 
 This design guarantees that any machine with standard `tmux` can run sessions without installing Spawnea code.
 
@@ -68,7 +68,7 @@ Spawnea treats developer terminal output with strict privacy boundaries:
 - **Live Terminal Streams**: Characters received from the host are forwarded directly to the `@xterm/xterm` canvas for interactive display.
 - **No Automatic Transcripts**: Spawnea does **not** record complete session transcripts, log keystrokes, or maintain a persistent history of all terminal output.
 - **No Cloud Uploads**: Terminal data is never uploaded to any remote Spawnea server, telemetry service, or third party. Spawnea is 100% local-first.
-- **In-Memory Tail Buffers**: The 25-line tail captured for status detection is inspected in memory and discarded on the next polling cycle; it is not written to disk.
+- **In-Memory Tail Buffers**: The 50-line tail captured for status detection is inspected in memory and discarded on the next polling cycle; it is not written to disk.
 
 ### What Spawnea Persists Locally
 
@@ -78,7 +78,7 @@ Operational data needed to manage sessions is stored strictly on your local mach
 2. **Session Metadata**: Session identifiers, creation timestamps, target hosts, worktree paths, and normalized status states in a local SQLite database (`better-sqlite3`).
 3. **Application Logs**: Bounded, rotating diagnostic logs stored under the private application user-data directory. Explicit `SPAWNEA_LOG_FILE` overrides are respected and should point to a private location. Logs contain structured operational metadata, not command strings or terminal transcripts.
 4. **Session Artifacts**: Files or images explicitly uploaded by the user or identified in the session artifact directory.
-5. **Explicit Feedback Reports**: If you explicitly choose to submit a diagnostic feedback report (via the state feedback dialog), a recent tail snapshot is packaged for that specific report. The report can contain sensitive terminal text and user notes. It remains locally in the application user-data `feedback` directory until manually removed; Spawnea does not upload it. `SPAWNEA_FEEDBACK_DIR` replaces that default directory and must point to a private local directory.
+5. **Explicit Feedback Reports**: If you explicitly choose to submit a diagnostic feedback report (via the state feedback dialog), a recent tail snapshot is packaged for that specific report. The report can contain sensitive terminal text and user notes. It also records the displayed and expected status, which state rule (file, harness, and position) or fallback decided the detected status, and which rules configuration was in use; it never includes rule patterns, the user rules file path, or validation error text. If the snapshot capture fails, the report is saved without a detected status, source, confidence, or terminal tail rather than with guessed values. See [State Rules](state-rules.md#report-wrong-state). The file and directory use private permissions (`0600` and `0700`). It remains locally in the application user-data `feedback` directory until manually removed; Spawnea does not upload it. `SPAWNEA_FEEDBACK_DIR` replaces that default directory and must point to a private local directory.
 
 Fatal process handlers also apply the structured redaction rules before writing to the console. Arbitrary exception text cannot be guaranteed to be free of every possible secret, so users should treat diagnostic output as private.
 
@@ -98,4 +98,5 @@ independent.
 - [`docs/architecture.md`](architecture.md): Complete architecture specification and process boundaries.
 - [`packages/hosts/src/ssh-host.ts`](../packages/hosts/src/ssh-host.ts): SSH host adapter and strict `known_hosts` verifier.
 - [`packages/hosts/src/tmux-session.ts`](../packages/hosts/src/tmux-session.ts): `tmux` management and bounded tail capture.
-- [`packages/state/src/adapters/`](../packages/state/src/adapters/): Status detection adapters and regex heuristics.
+- [`packages/state/src/adapters/`](../packages/state/src/adapters/): Status detection adapters (context preparation steps and the decision order).
+- [`packages/state/src/rules/state-rules.yaml`](../packages/state/src/rules/state-rules.yaml): Factory state rules.

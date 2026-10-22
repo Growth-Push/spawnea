@@ -60,7 +60,7 @@ import {
   type ManagedWorktreeIdentity,
   type ResolvedValueLease,
 } from '@spawnea/hosts';
-import { StateDetector, detectAgentSessionId } from '@spawnea/state';
+import { detectAgentSessionId } from '@spawnea/state';
 import type { CatalogManager } from './catalog-manager.js';
 import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
@@ -87,7 +87,6 @@ export interface SessionManagerOptions {
   ptyBroker: PtyBroker;
   profile?: string;
   hostAdapterFactory?: (serverId: string) => Promise<HostAdapter>;
-  stateDetector?: StateDetector;
   logger?: Logger;
   hostHealthChecker?: HostHealthChecker;
   onePasswordResolver?: OnePasswordResolver;
@@ -101,7 +100,6 @@ export class SessionManager {
   private readonly profile?: string;
   private readonly tmuxManager: TmuxManager;
   private readonly gitService: GitService;
-  private readonly stateDetector: StateDetector;
   private readonly hostHealthChecker: HostHealthChecker;
   private readonly customHostFactory?: (serverId: string) => Promise<HostAdapter>;
   private readonly logger: Logger;
@@ -141,7 +139,6 @@ export class SessionManager {
     this.onePasswordResolver = options.onePasswordResolver || new OnePasswordResolver();
     this.tmuxManager = new TmuxManager(this.logger.child('tmux'));
     this.gitService = new GitService(this.logger.child('git'));
-    this.stateDetector = options.stateDetector || new StateDetector();
     this.hostHealthChecker =
       options.hostHealthChecker ||
       new HostHealthChecker({

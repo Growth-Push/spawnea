@@ -1,0 +1,45 @@
+
+  >_ OpenAI Codex (v0.163.0)
+     /srv/code/demo
+
+
+› Ask me exactly one multiple-choice question right now with your request_user_input tool, before doing anything else: which of these 7 config formats should a
+  tiny demo use: YAML, TOML, JSON, JSON5, INI, HCL, XML. One short description per option. Do not read files.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Question 1/1 (1 unanswered)
+  Which config format should the tiny demo use?
+
+  › 1. YAML               Readable indentation-based format with comments.
+    2. TOML               Compact sections and typed values for human-edited config.
+    3. JSON               Strict, widely supported format without comments.
+    4. JSON5              JSON-style syntax with comments and trailing commas.
+    5. INI                Simple sections and key-value pairs.
+    6. HCL                Block-based format designed for structured configuration.
+    7. XML                Tagged, explicit structure that is verbose but extensible.
+    8. None of the above  Optionally, add details in notes (tab)
+
+  tab to add notes | enter to submit answer | esc to interrupt
+

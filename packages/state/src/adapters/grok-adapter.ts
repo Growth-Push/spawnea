@@ -1,344 +1,80 @@
-import type { SessionSignals, SessionStatusResult } from '@spawnea/domain';
-import type { HarnessStatusAdapter, HarnessStatusAdapterOptions } from './types.js';
-import { GenericStatusAdapter } from './generic-adapter.js';
-import { stripAnsi } from '../prompt-detector.js';
-import type { PatternRule, RuleCategory } from '../rules/types.js';
+import { ruleMatchesLine } from '../rules/rule-config.js';
+import { RuleBasedStatusAdapter } from './rule-based-adapter.js';
+import type { LinePreparationContext } from './types.js';
 
+const SCROLLBAR_ROW = /^\s*█+\s*$/;
+const TRAILING_SCROLLBAR = /[\s█]+$/;
+const QUESTION_CARD_HEADER = /Tab:\s*next answer|Waiting on answers\b/i;
+const QUESTION_CARD_LINE = /Waiting on answers\b|Tab:\s*next answer|Enter:\s*submit|Type your answer here|↑\/↓\s*navigate|\(\s*[○●]\s*\)|^\s*┃/i;
+const READY_COMPOSER = /[│|]\s*[❯›>]\s*[│|]\s*$|Shift\+Tab:\s*mode.*shortcuts/i;
 const COMPLETION_LINE = /^\s*Worked for\s+\d[\d.smh ]*$/i;
+const BOX_CHROME = /^[╭╮╰╯┌┐└┘─━│├┤┬┴┼]+$/;
+const MODEL_FOOTER = /Grok\s+\d+(?:\.\d+)?\b.*[╭╮╰╯│─]|[╭╮╰╯│─].*Grok\s+\d+(?:\.\d+)?\b/;
+// Welcome-panel rows, tips, update notices, the release-channel badge, and
+// the header row with the branch, working directory, and context usage.
+const WELCOME_CHROME = /^\s*[│|╭╰]|^\s*Tip:|^\s*Update: v|^\s*\[[a-z]+\]\s*$|^\s*(?:\uE0A0\s*)?[\w./-]+\s+[~/]\S*(?:\s.*\[Dashboard\])?\s*$/i;
+const RECAP_LINE = /^\s*┃/;
 
-function cleanCompletionLine(line: string): string | undefined {
-  const stripped = line.replace(/[\s█]+$/, '').trim();
-  return COMPLETION_LINE.test(stripped) ? stripped : undefined;
-}
-
-/**
- * Blank viewport rows in the Grok TUI often keep a scrollbar block, so they
- * are not empty. They must not hide the turn-completion line above them.
- */
-function isScrollbarRow(line: string): boolean {
-  return /^█+$/.test(line.trim());
-}
-
-function isBoxChrome(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.length > 0 && /^[╭╮╰╯┌┐└┘─━│├┤┬┴┼]+$/.test(trimmed);
-}
-
-function isEmptyComposer(line: string): boolean {
-  return /[│|]\s*[❯›>]\s*[│|]\s*$/.test(line.trim());
-}
-
-function isModelFooter(line: string): boolean {
-  return /Grok\s+\d+(?:\.\d+)?\b/.test(line) && /[╭╮╰╯│─]/.test(line);
-}
-
-function isIdleShortcutBar(line: string): boolean {
-  return /Shift\+Tab:\s*mode/i.test(line) && /shortcuts/i.test(line);
-}
-
-function isRecapLine(line: string): boolean {
-  const stripped = line.replace(/[\s█]+$/, '').trim();
-  return /^\s*┃/.test(stripped);
-}
-
+/** Screen furniture that the TUI repaints while idle. */
 function isReadyChrome(line: string): boolean {
+  const trimmed = line.trim();
   return (
-    isScrollbarRow(line) ||
-    isBoxChrome(line) ||
-    isEmptyComposer(line) ||
-    isModelFooter(line) ||
-    isIdleShortcutBar(line) ||
-    isRecapLine(line)
-  );
-}
-
-function isWelcomeContent(line: string): boolean {
-  const insidePanel = line.includes('│') || line.includes('|');
-  const content = line.replace(/[│|]/g, '').trim();
-  return /^[\u2800-\u28FF\s]+$/.test(content) ||
-    /^[\u2800-\u28FF\s]*(?:Grok Build\s+\d|Grok\s+\d+(?:\.\d+)?\s+is here|Select ['"]Grok)/i.test(content) ||
-    (insidePanel && /^(?:New worktree|Resume session|Changelog|Quit)\b/i.test(content)) ||
-    /^Update: v/i.test(content);
-}
-
-function hasReadyComposer(lines: string[]): boolean {
-  return lines.some((line) => isEmptyComposer(line) || isIdleShortcutBar(line) || isModelFooter(line));
-}
-
-function isQuestionCardLine(line: string): boolean {
-  return (
-    /Waiting on answers\b/i.test(line) ||
-    /Tab:\s*next answer/i.test(line) ||
-    /Enter:\s*submit/i.test(line) ||
-    /Type your answer here/i.test(line) ||
-    /↑\/↓\s*navigate/i.test(line) ||
-    /\(\s*[○●]\s*\)/.test(line) ||
-    /^\s*┃/.test(line)
-  );
-}
-
-function isActiveWork(line: string): boolean {
-  if (/Waiting on answers\b/i.test(line)) {
-    return false;
-  }
-  const normalized = line.replace(/^[\s│|┃]+|[\s│|┃]+$/g, '');
-  if (/^\s*[◆◂]?\s*Recap\b/i.test(normalized)) {
-    return false;
-  }
-  return (
-    /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\s|$)/.test(normalized) ||
-    /^\s*[◆●▶]\s+\S/.test(normalized) ||
-    /\b(?:Running|Responding|Generating)\b/.test(line) ||
-    /esc to interrupt|send a message to interrupt/i.test(line)
+    BOX_CHROME.test(trimmed) ||
+    READY_COMPOSER.test(line) ||
+    MODEL_FOOTER.test(line) ||
+    WELCOME_CHROME.test(line) ||
+    RECAP_LINE.test(line) ||
+    COMPLETION_LINE.test(line)
   );
 }
 
 /**
- * The question card replaces the ready composer at the bottom of the screen.
- * A card that has already scrolled above that composer is no longer current.
+ * Grok: blank viewport rows keep a scrollbar block, which is removed first.
+ * The question card replaces the ready composer at the bottom; a card that
+ * has scrolled above the composer, or that later activity follows, is no
+ * longer current. A `Worked for` line ends the previous turn.
  */
-function currentQuestionLine(lines: string[]): string | undefined {
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (isScrollbarRow(line)) {
-      continue;
-    }
-    if (isIdleShortcutBar(line) || isEmptyComposer(line)) {
-      return undefined;
-    }
-    if (/Tab:\s*next answer/i.test(line) || /Waiting on answers\b/i.test(line)) {
-      const resumed = lines
-        .slice(i + 1)
-        .some((later) => !isScrollbarRow(later) && !isQuestionCardLine(later) && !isReadyChrome(later) && isActiveWork(later));
-      if (resumed) {
-        return undefined;
-      }
-      const waiting = lines
-        .slice(Math.max(0, i - 40), i + 1)
-        .reverse()
-        .find((earlier) => /Waiting on answers\b/i.test(earlier));
-      return (waiting ?? line).trim();
-    }
-  }
-  return undefined;
-}
-
-export class GrokStatusAdapter implements HarnessStatusAdapter {
+export class GrokStatusAdapter extends RuleBasedStatusAdapter {
   readonly harnessId = 'grok';
   readonly displayName = 'Grok Status Adapter';
-  private readonly generic = new GenericStatusAdapter();
 
-  evaluateStatus(
-    signals: SessionSignals,
-    options: HarnessStatusAdapterOptions = {}
-  ): SessionStatusResult {
-    if (
-      !signals.hostReachable ||
-      !signals.tmuxSessionExists ||
-      signals.paneDead ||
-      signals.exitCode !== undefined
-    ) {
-      return this.generic.evaluateStatus(signals, options);
-    }
+  prepareLines(rawLines: string[], { rules }: LinePreparationContext): string[] {
+    let lines = rawLines
+      .filter((line) => !SCROLLBAR_ROW.test(line))
+      .map((line) => line.replace(TRAILING_SCROLLBAR, ''));
 
-    const customStatus = this.evaluateCustomRules(signals.tailLines || [], options.customRules);
-    if (customStatus) {
-      return customStatus;
-    }
-
-    const grokTail = this.evaluateTail(signals.tailLines || []);
-    if (grokTail) {
-      return grokTail;
-    }
-
-    return this.generic.evaluateStatus(signals, options);
-  }
-
-  /**
-   * Caller rules keep the confidence and prompt they configure. Built-in Grok
-   * states run only when none of those rules match.
-   */
-  private evaluateCustomRules(
-    tailLines: string[],
-    customRules: PatternRule[] | undefined
-  ): SessionStatusResult | undefined {
-    if (!customRules || customRules.length === 0) {
-      return undefined;
-    }
-
-    const lines = tailLines
-      .map((line) => stripAnsi(line).trimEnd())
-      .filter((line) => line.trim().length > 0);
-    if (lines.length === 0) {
-      return undefined;
-    }
-
-    const applicable = customRules.filter((rule) => {
-      if (!rule.harness) {
-        return true;
+    let card = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (QUESTION_CARD_HEADER.test(lines[i])) {
+        card = i;
+        break;
       }
-      return rule.harness.toLowerCase() === this.harnessId;
-    });
-    const categories: RuleCategory[] = [
-      'confirmation',
-      'choice',
-      'question',
-      'working',
-      'error',
-      'idle_prompt',
-      'shell_prompt',
-    ];
-    const combined = lines.join('\n');
-    const lastLine = lines[lines.length - 1];
-
-    for (const category of categories) {
-      for (const rule of applicable) {
-        if (rule.category !== category) {
-          continue;
-        }
-        const reg = compileRulePattern(rule.pattern);
-        if (!matchesPattern(reg, combined) && !matchesPattern(reg, lastLine)) {
-          continue;
-        }
-        let promptLine = lastLine.trim();
-        for (let i = lines.length - 1; i >= 0; i--) {
-          if (matchesPattern(reg, lines[i])) {
-            promptLine = lines[i].trim();
-            break;
-          }
-        }
-        return statusFromCategory(category, rule.confidence ?? 0.85, promptLine);
+    }
+    if (card >= 0) {
+      const workingRules = rules.filter((rule) => rule.state === 'working');
+      const later = lines.slice(card + 1);
+      const replaced = later.some((line) => READY_COMPOSER.test(line));
+      const resumed = later.some((line) =>
+        !QUESTION_CARD_LINE.test(line) && workingRules.some((rule) => ruleMatchesLine(rule, line))
+      );
+      if (replaced || resumed) {
+        lines = later;
       }
     }
 
-    return undefined;
-  }
-
-  private evaluateTail(tailLines: string[]): SessionStatusResult | undefined {
-    const lines = tailLines
-      .map((line) => stripAnsi(line).trimEnd())
-      .filter((line) => line.trim().length > 0);
-    if (lines.length === 0) {
-      return undefined;
-    }
-
-    const questionLine = currentQuestionLine(lines);
-    if (questionLine) {
-      return {
-        status: 'needs_input',
-        confidence: 0.97,
-        source: 'terminal_prompt',
-        detectedPrompt: questionLine,
-        reason: `Grok is waiting for an answer: ${questionLine}`,
-        updatedAt: new Date(),
-      };
-    }
-
-    if (!hasReadyComposer(lines)) {
-      return undefined;
-    }
-
-    let lastCompletion = -1;
-    let completionLine: string | undefined;
-    for (let i = 0; i < lines.length; i++) {
-      const match = cleanCompletionLine(lines[i]);
-      if (match) {
-        lastCompletion = i;
-        completionLine = match;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (COMPLETION_LINE.test(lines[i])) {
+        lines = lines.slice(i);
+        break;
       }
     }
-
-    const afterCompletion = lastCompletion >= 0 ? lines.slice(lastCompletion + 1) : lines;
-    const substantive = afterCompletion.filter((line) => !isReadyChrome(line));
-    if (substantive.some((line) => isActiveWork(line))) {
-      const activeLine = [...substantive].reverse().find((line) => isActiveWork(line)) ?? substantive.at(-1);
-      return {
-        status: 'working',
-        confidence: 0.95,
-        source: 'terminal_prompt',
-        detectedPrompt: activeLine,
-        reason: `Grok turn still active: ${activeLine}`,
-        updatedAt: new Date(),
-      };
+    // The composer is always repainted, so it only shows a ready Grok when
+    // nothing newer than the last completion (or the welcome panel) is on
+    // screen. Otherwise it and the older marker are removed, and other rules
+    // or the fallback decide.
+    if (lines.some((line) => !isReadyChrome(line))) {
+      return lines.filter((line) => !READY_COMPOSER.test(line) && !COMPLETION_LINE.test(line));
     }
-
-    // The TUI repaints the whole screen while idle, so recent PTY bytes are not
-    // evidence of work once the ready composer is the latest content.
-    const welcomeScreen = lastCompletion < 0 &&
-      substantive.some((line) => /Grok Build\s+\d/i.test(line)) &&
-      substantive.every(isWelcomeContent);
-    if ((substantive.length === 0 || welcomeScreen) &&
-      (lastCompletion >= 0 || afterCompletion.some((line) => isIdleShortcutBar(line) || isEmptyComposer(line)))) {
-      return {
-        status: 'idle',
-        confidence: completionLine ? 0.96 : 0.9,
-        source: 'terminal_prompt',
-        detectedPrompt: completionLine ?? afterCompletion.find((line) => isIdleShortcutBar(line) || isEmptyComposer(line)),
-        reason: completionLine
-          ? `Grok turn finished: ${completionLine}`
-          : 'Grok ready composer is waiting for input',
-        updatedAt: new Date(),
-      };
-    }
-
-    return undefined;
+    return lines;
   }
-}
-
-function compileRulePattern(pattern: PatternRule['pattern']): RegExp {
-  if (typeof pattern === 'string') {
-    return new RegExp(pattern, 'i');
-  }
-  // Global and sticky flags advance lastIndex, so a later line can miss.
-  return new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ''));
-}
-
-function matchesPattern(reg: RegExp, value: string): boolean {
-  reg.lastIndex = 0;
-  return reg.test(value);
-}
-
-function statusFromCategory(
-  category: RuleCategory,
-  confidence: number,
-  promptLine: string
-): SessionStatusResult {
-  if (category === 'confirmation' || category === 'choice' || category === 'question') {
-    return {
-      status: 'needs_input',
-      confidence,
-      source: 'terminal_prompt',
-      detectedPrompt: promptLine,
-      reason: `Terminal prompt requires user input: ${promptLine}`,
-      updatedAt: new Date(),
-    };
-  }
-  if (category === 'working') {
-    return {
-      status: 'working',
-      confidence,
-      source: 'terminal_prompt',
-      detectedPrompt: promptLine,
-      reason: `Active work in progress: ${promptLine}`,
-      updatedAt: new Date(),
-    };
-  }
-  if (category === 'error') {
-    return {
-      status: 'error',
-      confidence,
-      source: 'terminal_prompt',
-      detectedPrompt: promptLine,
-      reason: `Execution error detected in terminal: ${promptLine}`,
-      updatedAt: new Date(),
-    };
-  }
-  return {
-    status: 'idle',
-    confidence,
-    source: 'terminal_prompt',
-    detectedPrompt: promptLine,
-    reason: `Agent prompt ready/idle: ${promptLine}`,
-    updatedAt: new Date(),
-  };
 }

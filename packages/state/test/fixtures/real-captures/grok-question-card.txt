@@ -1,0 +1,45 @@
+
+  main /s/c/demo                                                                                                         19K / 256K │ [Dashboard]
+
+
+     ❯ Before doing anything, ask me a multiple-choice question with your question tool: which color do I prefer (red, green, blue). Do nothing     11:27 AM
+       else.
+
+
+     ◆ Thought for 2.7s
+
+     I'll ask that now.                                                                                                                             11:27 AM   █
+                                                                                                                                                               █
+     ◆ Ask Which color do you prefer?                                                                                                                          █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+                                                                                                                                                               █
+
+   ◆ Waiting on answers for Which color do you prefer?                                                                                      5.5s ⇣19.6k [stop]
+
+  ┃
+  ┃  Which color do you prefer?
+  ┃
+  ┃
+  ┃  1 (○) Red    You prefer red.                                                                                                                            █
+  ┃  2 (○) Green  You prefer green.                                                                                                                          █
+  ┃  3 (○) Blue   You prefer blue.                                                                                                                           █
+  ┃  z (○) Type your answer here
+  ┃
+  ┃  ↑/↓ navigate · y copy                                                                                                                    Enter:submit
+  ┃
+
+  Tab:next answer  │  Esc:scrollback  │  Shift+x:dismiss
+

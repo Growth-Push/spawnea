@@ -123,7 +123,7 @@ describe('HermesStatusAdapter', () => {
     expect(res.status).toBe('needs_input');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).not.toContain('example-model');
-    expect(res.reason).toContain('interactive input');
+    expect(res.matchedRule).toMatchObject({ file: 'factory', harness: 'hermes' });
   });
 
   it('keeps needs_input when the choice menu is newer than a progress verb', () => {

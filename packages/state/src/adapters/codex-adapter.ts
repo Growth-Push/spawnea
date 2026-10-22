@@ -1,12 +1,6 @@
-import type {
-  SessionSignals,
-  SessionStatusResult,
-} from '@spawnea/domain';
-import type {
-  HarnessStatusAdapter,
-  HarnessStatusAdapterOptions,
-} from './types.js';
-import { codexSignalLines, detectPromptInTail, stripAnsi } from '../prompt-detector.js';
+import type { StateRuleMatch } from '../rules/rule-config.js';
+import { codexSignalLines } from '../terminal-lines.js';
+import { RuleBasedStatusAdapter } from './rule-based-adapter.js';
 
 // Codex prints transcript entries, turn failures, and submitted prompts at
 // column 0. Wrapped text, quoted content, and draft continuation lines are
@@ -53,323 +47,48 @@ function findLatestCodexFailure(lines: string[]): CodexTurnFailure | undefined {
   return undefined;
 }
 
-export class CodexStatusAdapter implements HarnessStatusAdapter {
+const CODEX_COMPLETION = /(?:^\s*─\s+Worked for\b|Worked for \d+(?:\.\d+)?(?:s|m|h))/i;
+
+/**
+ * Codex: status comes only from live transcript and UI lines. Tool content and
+ * the unsent draft are removed first (over the whole tail, so a long tool
+ * block keeps its opener). A `Worked for` marker or a turn failure ends the
+ * previous turn; only newer lines remain. An unresolved failure keeps its
+ * line so the error rule can report it.
+ */
+export class CodexStatusAdapter extends RuleBasedStatusAdapter {
   readonly harnessId = 'codex';
   readonly displayName = 'OpenAI Codex Adapter';
+  // An unresolved failure stays an error while Codex redraws its ready prompt.
+  protected readonly trimsSupersededErrors = false;
 
-  evaluateStatus(
-    signals: SessionSignals,
-    options: HarnessStatusAdapterOptions = {}
-  ): SessionStatusResult {
-    const now = Date.now();
-    const activeOutputWindowMs = options.activeOutputWindowMs || 3000;
-
-    // 1. Host unreachable -> disconnected
-    if (!signals.hostReachable) {
-      return {
-        status: 'disconnected',
-        confidence: 1.0,
-        source: 'tmux',
-        reason: 'Remote host is unreachable',
-        updatedAt: new Date(),
-      };
-    }
-
-    // If host is reachable but tmux session does not exist, session has ended/stopped
-    if (!signals.tmuxSessionExists) {
-      return {
-        status: 'done',
-        confidence: 1.0,
-        source: 'tmux',
-        reason: 'Persistent tmux session has ended or was terminated on host',
-        updatedAt: new Date(),
-      };
-    }
-
-    // 2. Process exit / pane dead
-    if (signals.paneDead || signals.exitCode !== undefined) {
-      if (signals.exitCode === 0) {
-        return {
-          status: 'done',
-          confidence: 1.0,
-          source: 'process_exit',
-          reason: 'Process completed with exit code 0',
-          updatedAt: new Date(),
-        };
-      }
-      return {
-        status: 'error',
-        confidence: 1.0,
-        source: 'process_exit',
-        reason:
-          signals.exitCode !== undefined
-            ? `Process exited with error code ${signals.exitCode}`
-            : 'Pane is dead / terminated unexpectedly',
-        updatedAt: new Date(),
-      };
-    }
-
-    // 3. Terminal tail heuristics (capture-pane inspection) - Primary real-time source
-    const tailLines = signals.tailLines || [];
-    if (tailLines.length > 0) {
-      const cleaned = tailLines.map((l) => stripAnsi(l).trimEnd());
-      const nonEmptyLines = cleaned.filter((l) => l.trim().length > 0);
-      // Every decision below reads live transcript and UI lines only.
-      // Filter before the inspection window so a long tool block keeps its opener.
-      const recentLines = codexSignalLines(nonEmptyLines).slice(-30);
-      // Turn completion & active turn slicing:
-      // If a completion marker ('Worked for ...') is present, lines prior to it belong to a finished turn.
-      // Filter them out so historical prompts (e.g. previous questions, approvals) do not leak into the current turn.
-      const activeStatusPattern = /^\s*(?:•|Working\b)[^\n]*\besc\s+to\s+interrupt\b/i;
-      const completionPattern = /(?:^\s*─\s+Worked for\b|Worked for \d+(?:\.\d+)?(?:s|m|h))/i;
-      const lastActiveStatusIndex = [...recentLines].reverse().findIndex((line) => activeStatusPattern.test(line));
-      const lastCompletionIndex = [...recentLines].reverse().findIndex((line) => completionPattern.test(line));
-      const activeStatusIndex = lastActiveStatusIndex === -1 ? -1 : recentLines.length - 1 - lastActiveStatusIndex;
-      const completionIndex = lastCompletionIndex === -1 ? -1 : recentLines.length - 1 - lastCompletionIndex;
-      const hasRecentCompletion = completionIndex >= 0 && completionIndex > activeStatusIndex;
-      // A turn failure also ends the previous turn: only newer lines can show work or input.
-      const failure = findLatestCodexFailure(recentLines.slice(completionIndex + 1));
-      const failureIndex = failure ? completionIndex + 1 + failure.index : -1;
-      const turnStart = Math.max(completionIndex, failureIndex);
-      const hasInterruptFooter = activeStatusIndex >= 0 && activeStatusIndex > turnStart;
-
-      const activeLines = turnStart >= 0
-        ? (recentLines.slice(turnStart + 1).length > 0
-            ? recentLines.slice(turnStart + 1)
-            : [recentLines[turnStart]])
-        : recentLines;
-      const combinedTail = activeLines.join('\n');
-
-      const hasCodexIdlePrompt =
-        /(?:^[>›❯]\s*(?:Ask (?:Codex|anything)|Type|Send|What would you like|$)|Ask Codex to do anything)/im.test(combinedTail);
-
-      const promptResult = detectPromptInTail(activeLines, {
-        harness: 'codex',
-        customRules: options.customRules,
-        tailLinesCount: 30,
-      });
-
-      // A. NEEDS_INPUT: Interactive user prompt (e.g. [y/N], option choice, confirmation, tool approval, questionnaire, queued follow-up)
-      const hasBracketConfirm = /\[[yY]\/[nN]\]|\([yY]\/[nN]\)|\[yes\/no\]|\(yes\/no\)/i.test(combinedTail);
-      const hasProceedConfirm = /(?:do you want to (?:continue|proceed|run|execute|apply)|proceed\?|confirm\?)/i.test(combinedTail);
-      const hasOptionConfirm = /(?:Please confirm one option|Which should I proceed with|Choose one of the following)/i.test(combinedTail);
-      const hasBulletOption = /-\s+[A-Z]:\s+[^\n]+\n\s*-\s+[A-Z]:/i.test(combinedTail);
-      const hasToolApproval =
-        /(?:Allow\s*\/\s*Deny|\[A\]llow\s*\/\s*\[D\]eny|(?:^|\n)\s*[>›❯]\s*(?:\d+\.\s*)?(?:Allow|Deny)\b|^\s*Approval required:)/im.test(
-          combinedTail
-        );
-      const hasPlanConfirm =
-        /(?:^|\n)\s*[>›❯]\s*(?:approve|confirm|proceed\s+with|accept|apply)\s+(?:the\s+|this\s+)?plan\b|(?:approve|confirm|proceed\s+with|accept|apply)\s+(?:the\s+|this\s+)?plan\s*(?:\?|\[[yY]\/[nN]\]|\([yY]\/[nN]\))/i.test(
-          combinedTail
-        );
-      const hasArrowMenu =
-        /(?:^|\n)\s*[>›❯]\s+(?!(?:Ask (?:Codex|anything)|Type|Send\b))[^\n]+/i.test(combinedTail) &&
-        /(?:↑\/↓|arrow\s+keys?|enter\s+(?:to\s+)?(?:select|confirm|submit)|ctrl\+\]\s*skip|shift\s*[+-]\s*→\s*main\s*prompt|to\s+navigate)/i.test(
-          combinedTail
-        );
-      const hasQuestionnaire =
-        /Question\s+\d+\s*(?:\/|of)\s*\d+/i.test(combinedTail) ||
-        /(?:^|\n)\s*[>›❯]\s*\d+\.\s+[^\n]+[\s\S]*?(?:enter\s+(?:to\s+)?submit|ctrl\+\]\s*skip|shift\s*[+-]\s*→\s*main\s*prompt)/i.test(
-          combinedTail
-        );
-      const hasQueuedFollowup =
-        /(?:Queued\s+follow-up\s+inputs?|shift\s*[+-]\s*(?:←|→|<[-–]|left|right)\s+to\s+answer|(?:^|\n)\s*\?\s*\d+\s+questions?\b)/i.test(
-          combinedTail
-        );
-      const suppressBulletQuestion = hasCodexIdlePrompt && !hasQueuedFollowup;
-      const hasBulletListOptions =
-        !suppressBulletQuestion &&
-        /(?:^|\n)\s*[•*·-]?\s*[¿]?[^\n]+\?\s*\n(?:\s*[•*·-]\s+[^\n]+\n?){2,}/.test(combinedTail);
-
-      if (
-        hasBracketConfirm ||
-        hasProceedConfirm ||
-        hasOptionConfirm ||
-        hasBulletOption ||
-        hasBulletListOptions ||
-        hasToolApproval ||
-        hasPlanConfirm ||
-        hasArrowMenu ||
-        hasQuestionnaire ||
-        hasQueuedFollowup ||
-        promptResult.kind === 'confirmation' ||
-        promptResult.kind === 'choice' ||
-        (promptResult.kind === 'question' &&
-          !(suppressBulletQuestion && promptResult.matchedRuleId === 'codex-question-bullet-options'))
-      ) {
-        let promptLine = promptResult.promptLine || activeLines[activeLines.length - 1];
-        if (!promptResult.promptLine) {
-          for (let i = activeLines.length - 1; i >= 0; i--) {
-            const l = activeLines[i].trim();
-            if (
-              /\[[yY]\/[nN]\]|proceed|confirm|option|Allow|Deny|plan|Question|shift.*answer|queued.*input|enter.*submit|ctrl\+\]/i.test(l) ||
-              l.startsWith('-') ||
-              l.startsWith('❯') ||
-              l.startsWith('›')
-            ) {
-              promptLine = l;
-              break;
-            }
-          }
-        }
-        return {
-          status: 'needs_input',
-          confidence: promptResult.confidence ?? 0.95,
-          source: 'terminal_prompt',
-          detectedPrompt: promptLine,
-          reason: `Codex terminal prompt requires user input: ${promptLine}`,
-          updatedAt: new Date(),
-        };
-      }
-
-      // B. WORKING: Active working indicator, 'esc to interrupt', Braille spinner, reasoning, or active progress
-      // Matches:
-      // - • Working (1m 02s • esc to interrupt)
-      // - Working (30s • esc to interrupt)
-      // - Working (30s)
-      // - esc to interrupt / ctrl+c to cancel
-      // - • Thinking, • Searching, • Running, • Reasoning, • Exploring, • Reading
-      // - Braille / CLI spinners (⠋, ⠙, ⠹, etc. or [\u2800-\u28FF])
-      // - Active reasoning headers (┌ Reasoning, Thinking..., etc.)
-      const hasWorkingStatus = /(?:^|\n)\s*[•*·-]?\s*Working\b[^\n]*/i.test(combinedTail);
-      const hasBrailleSpinner = /(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|[\u2800-\u28FF])/.test(combinedTail);
-      const hasActiveProgressBullets = /(?:^|\n)\s*•\s*(?:Working|Thinking|Reasoning|Searching|Running|Executing|Exploring|Reading)\b[^\n]*/i.test(combinedTail);
-      const hasReasoningHeader = /(?:^|\n)\s*[┌╭•*·-]\s*(?:Reasoning|Thinking)\b[^\n]*/i.test(combinedTail);
-
-      // Codex keeps the ready prompt visible while showing the transcript from
-      // the previous turn. A historical "Working" or "Reasoning" line must not keep the
-      // session marked as working after Codex has returned to the input bar.
-      // The interrupt footer/spinner are the stronger indicators that the
-      // current turn is still active.
-      const hasActiveWorkingStatus =
-        !hasRecentCompletion &&
-        (hasInterruptFooter ||
-          hasBrailleSpinner ||
-          ((!hasCodexIdlePrompt) && (hasWorkingStatus || hasActiveProgressBullets || hasReasoningHeader)));
-      const idlePromptLine = [...recentLines].reverse().find((line) =>
-        /(?:^[>›❯]\s*(?:Ask (?:Codex|anything)|Type|Send|What would you like|$)|Ask Codex to do anything)/i.test(line)
-      );
-
-      if (
-        hasActiveWorkingStatus ||
-        hasInterruptFooter ||
-        hasBrailleSpinner ||
-        ((hasActiveProgressBullets || hasReasoningHeader) && !hasCodexIdlePrompt) ||
-        (promptResult.kind === 'working' && !hasCodexIdlePrompt)
-      ) {
-        let promptLine = promptResult.promptLine || 'Working...';
-        if (!promptResult.promptLine || promptResult.kind !== 'working') {
-          for (let i = recentLines.length - 1; i >= 0; i--) {
-            const l = recentLines[i].trim();
-            if (
-              /Working\b|esc to interrupt|ctrl\+c|Thinking\b|Reasoning\b|Running\b|Searching\b/i.test(l) ||
-              /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|[\u2800-\u28FF]/.test(l)
-            ) {
-              promptLine = l;
-              break;
-            }
-          }
-        }
-        return {
-          status: 'working',
-          confidence: 0.98,
-          source: 'terminal_prompt',
-          detectedPrompt: promptLine,
-          reason: `Codex active work in progress: ${promptLine}`,
-          updatedAt: new Date(),
-        };
-      }
-
-      // C. ERROR: The redisplayed ready prompt does not resolve the latest turn failure.
-      if (failure && !failure.resolved) {
-        return {
-          status: 'error',
-          confidence: 0.9,
-          source: 'terminal_prompt',
-          detectedPrompt: failure.message,
-          reason: `Codex turn failed: ${failure.message}`,
-          updatedAt: new Date(),
-        };
-      }
-
-      // D. IDLE: Ready prompt (e.g. › Ask Codex to do anything) when NOT working and NOT waiting for queued input
-      if (
-        !hasQueuedFollowup &&
-        !hasActiveWorkingStatus &&
-        (hasCodexIdlePrompt ||
-          hasRecentCompletion ||
-          promptResult.kind === 'idle_prompt' ||
-          promptResult.kind === 'shell_prompt')
-      ) {
-        return {
-          status: 'idle',
-          confidence: promptResult.confidence ?? 0.92,
-          source: 'terminal_prompt',
-          detectedPrompt: idlePromptLine || promptResult.promptLine,
-          reason: `Codex ready prompt active: ${idlePromptLine || promptResult.promptLine}`,
-          updatedAt: new Date(),
-        };
-      }
-
-      // E. ERROR: Fatal execution error
-      if (promptResult.kind === 'error') {
-        return {
-          status: 'error',
-          confidence: promptResult.confidence ?? 0.85,
-          source: 'terminal_prompt',
-          detectedPrompt: promptResult.promptLine,
-          reason: `Execution error detected in Codex terminal: ${promptResult.promptLine}`,
-          updatedAt: new Date(),
-        };
+  prepareLines(lines: string[]): string[] {
+    const signal = codexSignalLines(lines);
+    let completion = -1;
+    for (let i = signal.length - 1; i >= 0; i--) {
+      if (CODEX_COMPLETION.test(signal[i])) {
+        completion = i;
+        break;
       }
     }
-
-    // 4. Active PTY streaming
-    const msSinceOutput = signals.lastOutputAt ? now - signals.lastOutputAt.getTime() : Infinity;
-    const isActivelyStreaming =
-      signals.lastOutputAt !== undefined && msSinceOutput <= activeOutputWindowMs;
-
-    if (isActivelyStreaming) {
-      return {
-        status: 'working',
-        confidence: 0.75,
-        source: 'pty_activity',
-        reason: `Active PTY output (${signals.recentOutputBytes || 0} bytes recently)`,
-        updatedAt: new Date(),
-      };
+    const failure = findLatestCodexFailure(signal.slice(completion + 1));
+    if (failure) {
+      const failureIndex = completion + 1 + failure.index;
+      return failure.resolved ? signal.slice(failureIndex + 1) : signal.slice(failureIndex);
     }
-
-    // 8. Foreground command fallback
-    const cmd = (signals.paneCurrentCommand || '').toLowerCase();
-    const isShell = cmd === 'bash' || cmd === 'zsh' || cmd === 'sh' || cmd === 'fish' || cmd === 'tmux';
-
-    if (isShell) {
-      return {
-        status: 'idle',
-        confidence: 0.7,
-        source: 'tmux',
-        reason: `Shell '${signals.paneCurrentCommand}' is active at prompt`,
-        updatedAt: new Date(),
-      };
+    if (completion >= 0) {
+      const after = signal.slice(completion + 1);
+      return after.length > 0 ? after : [signal[completion]];
     }
+    return signal;
+  }
 
-    const isHarness = cmd === 'codex' || cmd === 'codex-cli' || cmd === 'node';
-    if (cmd && !isShell && !isHarness) {
-      return {
-        status: 'working',
-        confidence: 0.65,
-        source: 'process',
-        reason: `Subcommand '${signals.paneCurrentCommand}' is executing`,
-        updatedAt: new Date(),
-      };
+  protected describeMatch(match: StateRuleMatch): { detectedPrompt: string; reason: string } {
+    const failure = match.rule.state === 'error' ? match.line.match(CODEX_TURN_FAILURE) : null;
+    if (failure) {
+      const message = failure[1].trim();
+      return { detectedPrompt: message, reason: `Codex turn failed: ${message}` };
     }
-
-    return {
-      status: 'idle',
-      confidence: 0.5,
-      source: 'tmux',
-      reason: 'Codex session is quiet and waiting for input',
-      updatedAt: new Date(),
-    };
+    return super.describeMatch(match);
   }
 }
