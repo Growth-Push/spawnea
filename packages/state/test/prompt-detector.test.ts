@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { stripAnsi, detectPromptInTail } from '../src/prompt-detector.js';
+import { stripAnsi, detectPromptInTail, codexSignalLines } from '../src/prompt-detector.js';
+import { loadStateRules } from '../src/rules/load-state-rules.js';
+
+function userRules(yaml: string) {
+  return loadStateRules({ userFilePath: '/fictional/user-data/state-rules.yaml', readFile: () => yaml }).ruleSet;
+}
 
 describe('prompt-detector', () => {
   it('strips ANSI color and cursor codes cleanly', () => {
@@ -17,10 +22,9 @@ describe('prompt-detector', () => {
       '⏵⏵ auto mode on · esc to interrupt',
     ];
 
-    const result = detectPromptInTail(tail, { harness: 'zsh', tailLinesCount: 20 });
+    const result = detectPromptInTail(tail, { harness: 'zsh' });
 
     expect(result.kind).toBe('working');
-    expect(result.matchedRuleId).toBe('generic-agent-spinner-status');
     expect(result.promptLine).toContain('Wibbling');
   });
 
@@ -32,10 +36,10 @@ describe('prompt-detector', () => {
       'Do you want to proceed? [y/N]',
     ];
 
-    const result = detectPromptInTail(tail, { harness: 'zsh', tailLinesCount: 20 });
+    const result = detectPromptInTail(tail, { harness: 'zsh' });
 
     expect(result.isPrompt).toBe(true);
-    expect(result.kind).toBe('confirmation');
+    expect(result.kind).toBe('needs_input');
     expect(result.promptLine).toContain('Do you want to proceed? [y/N]');
   });
 
@@ -47,7 +51,7 @@ describe('prompt-detector', () => {
     ];
     const res1 = detectPromptInTail(tail1);
     expect(res1.isPrompt).toBe(true);
-    expect(res1.kind).toBe('confirmation');
+    expect(res1.kind).toBe('needs_input');
     expect(res1.promptLine).toContain('Do you want to continue? [y/N]');
 
     const tail2 = [
@@ -56,7 +60,7 @@ describe('prompt-detector', () => {
     ];
     const res2 = detectPromptInTail(tail2);
     expect(res2.isPrompt).toBe(true);
-    expect(res2.kind).toBe('confirmation');
+    expect(res2.kind).toBe('needs_input');
   });
 
   it('detects choice selection prompts', () => {
@@ -68,7 +72,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail);
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('choice');
+    expect(res.kind).toBe('needs_input');
     expect(res.promptLine).toContain('Select an option:');
   });
 
@@ -87,8 +91,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'antigravity' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('choice');
-    expect(res.matchedRuleId).toBe('antigravity-questionnaire-menu');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects the canonical Antigravity tool permission prompt', () => {
@@ -106,8 +109,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'antigravity' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('confirmation');
-    expect(res.matchedRuleId).toBe('antigravity-permission-prompt');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects the canonical Antigravity file edit acceptance prompt', () => {
@@ -125,8 +127,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'antigravity' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('confirmation');
-    expect(res.matchedRuleId).toBe('antigravity-permission-prompt');
+    expect(res.kind).toBe('needs_input');
     expect(res.promptLine).toBe('Accept this file edit?');
   });
 
@@ -144,7 +145,6 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'antigravity' });
     expect(res.kind).toBe('working');
-    expect(res.matchedRuleId).toBe('antigravity-working-braille-spinner');
   });
 
   it('detects the canonical Antigravity idle ready prompt', () => {
@@ -155,8 +155,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'antigravity' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('antigravity-idle-prompt');
+    expect(res.kind).toBe('idle');
   });
 
   it('detects Codex CLI option prompt', () => {
@@ -170,8 +169,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('choice');
-    expect(res.matchedRuleId).toBe('codex-confirm-options');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects Codex Plan mode questionnaires as a choice prompt', () => {
@@ -187,18 +185,19 @@ describe('prompt-detector', () => {
     const res = detectPromptInTail(tail, { harness: 'codex' });
 
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('choice');
-    expect(res.matchedRuleId).toBe('codex-questionnaire');
+    expect(res.kind).toBe('needs_input');
     expect(res.promptLine).toContain('Question 2/2');
   });
 
-  it('does not treat a questionnaire navigation footer as Codex working activity', () => {
+  it('treats a questionnaire navigation footer as a Codex input request, not working activity', () => {
     const res = detectPromptInTail(
       ['tab to add notes | enter to submit all | ←/→ to navigate questions | esc to interrupt'],
       { harness: 'codex' }
     );
 
-    expect(res.kind).toBe('none');
+    // The footer alone identifies an open questionnaire whose header and
+    // selected option may be outside the evaluation window.
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects Codex CLI active working progress and interrupt line', () => {
@@ -213,7 +212,6 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.kind).toBe('working');
-    expect(res.matchedRuleId).toBe('codex-working-status');
     expect(res.promptLine).toContain('Working');
   });
 
@@ -224,8 +222,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('codex-idle-prompt');
+    expect(res.kind).toBe('idle');
   });
 
   it('detects modern Codex tool approval prompt (Allow / Deny)', () => {
@@ -238,8 +235,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('confirmation');
-    expect(res.matchedRuleId).toBe('codex-tool-approval');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects modern Codex interactive arrow selection menu with ❯', () => {
@@ -251,8 +247,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('choice');
-    expect(res.matchedRuleId).toBe('codex-arrow-selection');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects modern Codex CLI Braille spinner as active working', () => {
@@ -263,7 +258,6 @@ describe('prompt-detector', () => {
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(false);
     expect(res.kind).toBe('working');
-    expect(res.matchedRuleId).toBe('codex-working-spinner');
   });
 
   it('detects modern Codex reasoning header as active working', () => {
@@ -274,7 +268,6 @@ describe('prompt-detector', () => {
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(false);
     expect(res.kind).toBe('working');
-    expect(res.matchedRuleId).toBe('codex-working-reasoning');
   });
 
   it('detects modern Codex plan confirmation', () => {
@@ -284,8 +277,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('confirmation');
-    expect(res.matchedRuleId).toBe('codex-plan-confirmation');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects modern Codex idle input prompt with ❯ and Ask anything', () => {
@@ -295,8 +287,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('codex-idle-prompt');
+    expect(res.kind).toBe('idle');
   });
 
   it('detects modern Codex v0.160+ queued follow-up question requiring shift+← to answer', () => {
@@ -317,8 +308,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('question');
-    expect(res.matchedRuleId).toBe('codex-queued-followup');
+    expect(res.kind).toBe('needs_input');
     expect(res.promptLine).toMatch(/shift\+← to answer|\? 1 question/);
   });
 
@@ -330,8 +320,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('question');
-    expect(res.matchedRuleId).toBe('codex-queued-followup');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects modern Codex queued follow-up with multiple questions and minute/hour durations', () => {
@@ -342,8 +331,7 @@ describe('prompt-detector', () => {
     ];
     const resMin = detectPromptInTail(tailMinutes, { harness: 'codex' });
     expect(resMin.isPrompt).toBe(true);
-    expect(resMin.kind).toBe('question');
-    expect(resMin.matchedRuleId).toBe('codex-queued-followup');
+    expect(resMin.kind).toBe('needs_input');
 
     const tailHours = [
       '• Queued follow-up inputs',
@@ -352,8 +340,7 @@ describe('prompt-detector', () => {
     ];
     const resHr = detectPromptInTail(tailHours, { harness: 'codex' });
     expect(resHr.isPrompt).toBe(true);
-    expect(resHr.kind).toBe('question');
-    expect(resHr.matchedRuleId).toBe('codex-queued-followup');
+    expect(resHr.kind).toBe('needs_input');
   });
 
   it('detects modern Codex question with bullet options', () => {
@@ -364,8 +351,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('question');
-    expect(res.matchedRuleId).toBe('codex-question-bullet-options');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects modern Codex v0.160+ open questionnaire menu after pressing shift-left', () => {
@@ -384,8 +370,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('choice');
-    expect(res.matchedRuleId).toBe('codex-questionnaire-menu');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects modern Codex queued question with no time suffix', () => {
@@ -396,8 +381,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('question');
-    expect(res.matchedRuleId).toBe('codex-queued-followup');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects modern Codex queued question with ascii arrow shift+<- to answer', () => {
@@ -408,8 +392,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('question');
-    expect(res.matchedRuleId).toBe('codex-queued-followup');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects modern Codex questionnaire when option 2 or 3 is selected', () => {
@@ -423,8 +406,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'codex' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('choice');
-    expect(res.matchedRuleId).toBe('codex-questionnaire-menu');
+    expect(res.kind).toBe('needs_input');
     expect(res.promptLine).toContain('Microservices');
   });
 
@@ -435,8 +417,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'hermes' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('hermes-idle-prompt');
+    expect(res.kind).toBe('idle');
   });
 
   it('detects command execution errors in terminal tail', () => {
@@ -456,7 +437,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail);
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('shell_prompt');
+    expect(res.kind).toBe('idle');
   });
 
   it('detects a multilingual Hermes interactive question/choice prompt', () => {
@@ -470,8 +451,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'hermes' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('choice');
-    expect(res.matchedRuleId).toBe('hermes-needs-input-menu');
+    expect(res.kind).toBe('needs_input');
   });
 
   it('detects the Hermes Agent choice menu while the metrics stopwatch is still painted', () => {
@@ -489,10 +469,9 @@ describe('prompt-detector', () => {
       '──────────────────────────────────────────────────────────────────',
       '? ❯',
     ];
-    const res = detectPromptInTail(tail, { harness: 'hermes', tailLinesCount: 20 });
+    const res = detectPromptInTail(tail, { harness: 'hermes' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('choice');
-    expect(res.matchedRuleId).toBe('hermes-needs-input-menu');
+    expect(res.kind).toBe('needs_input');
     expect(res.promptLine).not.toContain('example-model');
   });
 
@@ -503,7 +482,6 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'hermes' });
     expect(res.kind).toBe('working');
-    expect(res.matchedRuleId).toBe('hermes-working-progress-verbs');
     expect(res.promptLine).toBe('formulating...');
   });
 
@@ -514,8 +492,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'hermes' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('question');
-    expect(res.matchedRuleId).toBe('hermes-question-prompt');
+    expect(res.kind).toBe('needs_input');
     expect(res.promptLine).toBe('? ❯');
   });
 
@@ -530,10 +507,9 @@ describe('prompt-detector', () => {
       ' ⚕ gpt-5.6-sol │ 112K/272K │ [████░░░░░░] 41% │ ✓ 0s',
       '❯ Ask anything, or type / for commands…',
     ];
-    const res = detectPromptInTail(tail, { harness: 'hermes', tailLinesCount: 20 });
+    const res = detectPromptInTail(tail, { harness: 'hermes' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('question');
-    expect(res.matchedRuleId).toBe('hermes-question-header');
+    expect(res.kind).toBe('needs_input');
     expect(res.promptLine).toContain('❓ Q3 — Precedencia del modelo');
   });
 
@@ -545,8 +521,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'hermes' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('hermes-idle-completion-checkmark');
+    expect(res.kind).toBe('idle');
   });
 
   it('detects the generic Hermes metrics bar without relying on its input prompt', () => {
@@ -554,23 +529,22 @@ describe('prompt-detector', () => {
       '⚕ model │ 28K/128K │ [██░░░░░░░░] 22% │ ◎ 79.3% │ ◷ 7.0s │ ↑ 27 t/s │ 🗜️ 2 │ 1h456m │ ⏲ 3m 45s │ ✓40m',
     ], { harness: 'hermes' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('hermes-idle-completion-checkmark');
+    expect(res.kind).toBe('idle');
   });
 
   it('accepts millisecond completion durations and rejects incomplete Hermes bars', () => {
     const withMilliseconds = detectPromptInTail([
       '⚕ model │ 28K/128K │ ✓9ms',
     ], { harness: 'hermes' });
-    expect(withMilliseconds.matchedRuleId).toBe('hermes-idle-completion-checkmark');
+    expect(withMilliseconds.kind).toBe('idle');
 
     const withoutMetricsPrefix = detectPromptInTail(['│ ✓9ms'], { harness: 'hermes' });
-    expect(withoutMetricsPrefix.matchedRuleId).not.toBe('hermes-idle-completion-checkmark');
+    expect(withoutMetricsPrefix.kind).not.toBe('idle');
 
     const withoutCompletionCheckmark = detectPromptInTail([
       '⚕ model │ 28K/128K │ ⏲ 3m 45s',
     ], { harness: 'hermes' });
-    expect(withoutCompletionCheckmark.matchedRuleId).not.toBe('hermes-idle-completion-checkmark');
+    expect(withoutCompletionCheckmark.kind).not.toBe('idle');
   });
 
   it('detects Hermes active execution interrupt footer', () => {
@@ -581,7 +555,6 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'hermes' });
     expect(res.kind).toBe('working');
-    expect(res.matchedRuleId).toBe('hermes-working-footer');
   });
 
   it('does not classify historical spinner as working if a shell prompt follows', () => {
@@ -592,8 +565,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail);
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('shell_prompt');
-    expect(res.matchedRuleId).toBe('generic-shell-prompt-ps1');
+    expect(res.kind).toBe('idle');
   });
 
   it('lets a later shell prompt supersede an earlier failed command and spinner', () => {
@@ -605,20 +577,19 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail);
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('shell_prompt');
-    expect(res.matchedRuleId).toBe('generic-shell-prompt-ps1');
+    expect(res.kind).toBe('idle');
   });
 
-  it('lets a later idle prompt supersede a historical spinner when agent has completed', () => {
+  it('keeps a live Claude spinner working although the input prompt is drawn below it', () => {
+    // Real Claude screens always draw the input prompt below the live spinner;
+    // the turn ends with the `· done` marker instead.
     const tail = [
       '✻ Generating test files…',
       'Done generating test files.',
       '> Try "npm test"',
     ];
     const res = detectPromptInTail(tail, { harness: 'claude' });
-    expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('claude-idle-prompt');
+    expect(res.kind).toBe('working');
   });
 
   it('lets a later idle prompt supersede an earlier failed command when agent is waiting for input', () => {
@@ -629,8 +600,7 @@ describe('prompt-detector', () => {
     ];
     const res = detectPromptInTail(tail, { harness: 'claude' });
     expect(res.isPrompt).toBe(true);
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('claude-idle-prompt');
+    expect(res.kind).toBe('idle');
   });
 
   it.each(['Cooked', 'Crunched', 'Cogitated', 'Brewed'])('detects Claude %s turn completion with a draft and auto mode footer', (verb) => {
@@ -646,12 +616,11 @@ describe('prompt-detector', () => {
       '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #7 · ← for agents',
       '',
     ], { harness: 'claude' });
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('claude-idle-turn-completion');
+    expect(res.kind).toBe('idle');
   });
 
   it('detects a Claude completion marker without an input bar', () => {
-    expect(detectPromptInTail(['✻ Brewed for 18s · done 11:42 AM'], { harness: 'claude' }).kind).toBe('idle_prompt');
+    expect(detectPromptInTail(['✻ Brewed for 18s · done 11:42 AM'], { harness: 'claude' }).kind).toBe('idle');
   });
 
   it.each(['accept edits on', 'bypass permissions on'])('preserves Claude completion with the %s footer', (mode) => {
@@ -662,8 +631,7 @@ describe('prompt-detector', () => {
       '────────────────────────',
       `⏵⏵ ${mode} (shift+tab to cycle)`,
     ], { harness: 'claude' });
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('claude-idle-turn-completion');
+    expect(res.kind).toBe('idle');
   });
 
   it.each(['accept edits on', 'bypass permissions on'])('detects active interrupt hints in the %s footer', (mode) => {
@@ -686,8 +654,7 @@ describe('prompt-detector', () => {
       '────────────────────────',
       '⏵⏵ auto mode on (shift+tab to cycle)',
     ], { harness: 'claude' });
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('claude-idle-turn-completion');
+    expect(res.kind).toBe('idle');
   });
 
   it('rejects newer Claude output outside the input separators', () => {
@@ -700,7 +667,8 @@ describe('prompt-detector', () => {
       '● Read(src/index.ts)',
       '⏵⏵ auto mode on (shift+tab to cycle)',
     ], { harness: 'claude' });
-    expect(res.kind).not.toBe('idle_prompt');
+    // The completion marker no longer applies; the empty input box still does.
+    expect(res.promptLine).not.toContain('· done');
   });
 
   it.each([
@@ -710,11 +678,62 @@ describe('prompt-detector', () => {
     ['❯ Start another task', 'Error: connection refused'],
   ])('does not reuse Claude completion after newer activity: %j', (...suffix) => {
     const res = detectPromptInTail(['✻ Brewed for 18s · done 11:42 AM', ...suffix], { harness: 'claude' });
-    expect(res.kind).not.toBe('idle_prompt');
+    expect(res.kind).not.toBe('idle');
+  });
+
+  it('rejects transcript output between the input box and a status line', () => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 27s · done 12:16 PM',
+      '────────────────────────',
+      '❯ Review the change',
+      '────────────────────────',
+      '● Read(src/index.ts)',
+      '   user  …/projects/example  main',
+      '⏵⏵ auto mode on (shift+tab to cycle)',
+    ], { harness: 'claude' });
+    expect(res.promptLine).not.toContain('· done');
+  });
+
+  it.each(['·', '✢', '*', '✳', '✶', '✻', '✽'])('detects the %s Claude spinner frame above an empty input box', (glyph) => {
+    const res = detectPromptInTail([
+      `${glyph} Hyperspacing… (53s · ↓ 1.3k tokens)`,
+      '────────────────────────',
+      '❯ ',
+      '────────────────────────',
+      '⏵⏵ auto mode on · ← for agents',
+    ], { harness: 'claude' });
+    expect(res.kind).toBe('working');
+  });
+
+  it.each(['  * Loading…', '  · Loading…', '* Loading… is shown while files load'])('does not treat transcript text %j as a Claude spinner', (line) => {
+    const res = detectPromptInTail(['● Example documentation:', line, '❯', '⏵⏵ auto mode on'], { harness: 'claude' });
+    expect(res.kind).toBe('idle');
+  });
+
+  it.each([
+    ['needs_input', 'Do you want to proceed? [y/N]'],
+    ['error', 'Uncaught Error: Authentication failed'],
+  ])('lets a newer %s below the input box invalidate Claude completion', (kind, line) => {
+    const res = detectPromptInTail([
+      '✻ Brewed for 8s · done 11:35 AM',
+      '────────────────────────',
+      '❯ draft',
+      '────────────────────────',
+      line,
+    ], { harness: 'claude' });
+    expect(res.kind).toBe(kind);
+  });
+
+  it('bounds the Claude status line below the input box', () => {
+    const box = ['✻ Brewed for 8s · done 11:35 AM', '────────────────────────', '❯ draft', '────────────────────────'];
+    expect(detectPromptInTail([...box, 'user main ctx 12%', 'second status row', '⏵⏵ auto mode on'], { harness: 'claude' }).promptLine)
+      .toContain('· done');
+    expect(detectPromptInTail([...box, 'first new line', 'second new line', 'third new line', '⏵⏵ auto mode on'], { harness: 'claude' }).promptLine)
+      .not.toContain('· done');
   });
 
   it('recognizes the empty modern Claude input prompt', () => {
-    expect(detectPromptInTail(['❯\u00a0', '⏵⏵ auto mode on (shift+tab to cycle)'], { harness: 'claude' }).kind).toBe('idle_prompt');
+    expect(detectPromptInTail(['❯\u00a0', '⏵⏵ auto mode on (shift+tab to cycle)'], { harness: 'claude' }).kind).toBe('idle');
   });
 
   it.each(['esc to interrupt', 'Esc to cancel', 'Ctrl+C cancel'])('detects Claude active interrupt footer without a spinner: %s', (hint) => {
@@ -725,7 +744,6 @@ describe('prompt-detector', () => {
       `⏵⏵ auto mode on · ${hint}`,
     ], { harness: 'claude' });
     expect(res.kind).toBe('working');
-    expect(res.matchedRuleId).toBe('claude-working-interrupt');
   });
 
   it('detects Claude interrupt footer without a previous completion marker', () => {
@@ -738,8 +756,7 @@ describe('prompt-detector', () => {
       'esc to interrupt cancels the current turn',
       '> Try "npm test"',
     ], { harness: 'claude' });
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('claude-idle-prompt');
+    expect(res.kind).toBe('idle');
   });
 
   it('does not treat interrupt text inside a draft as active work without a completion marker', () => {
@@ -757,30 +774,71 @@ describe('prompt-detector', () => {
     expect(detectPromptInTail(['✻ Brewed for 18s · done 11:42 AM'], { harness: 'shell' }).kind).toBe('none');
   });
 
-  it.each(['confirmation', 'working', 'error'] as const)('preserves custom Claude %s rules after completion', (category) => {
+  it.each(['needs_input', 'working', 'error'] as const)('lets a user Claude %s rule decide newer output after completion', (state) => {
+    const rules = userRules(`harnesses:\n  claude:\n    rules:\n      - state: ${state}\n        patterns: ['Review pending']\n`);
     const res = detectPromptInTail([
       '✻ Brewed for 27s · done 12:16 PM',
-      '❯ Review pending',
+      'Review pending',
       '⏵⏵ auto mode on (shift+tab to cycle)',
-    ], {
-      harness: 'claude',
-      customRules: [{ id: 'review-pending', name: 'Review pending', category, harness: 'claude', pattern: /Review pending/, confidence: 1 }],
-    });
-    expect(res.kind).toBe(category);
-    expect(res.matchedRuleId).toBe('review-pending');
+    ], { harness: 'claude', rules });
+    expect(res.kind).toBe(state);
+    expect(res.matchedRule).toEqual({ file: 'user', harness: 'claude', position: 1 });
   });
 
-  it('does not reuse a custom Claude prompt from before completion', () => {
+  it('does not reuse a user Claude rule match from before completion', () => {
+    const rules = userRules("harnesses:\n  claude:\n    rules:\n      - state: needs_input\n        patterns: ['Review pending']\n");
     const res = detectPromptInTail([
       'Review pending',
       '✻ Brewed for 27s · done 12:16 PM',
       '❯ Continue',
-    ], {
-      harness: 'claude',
-      customRules: [{ id: 'review-pending', name: 'Review pending', category: 'confirmation', harness: 'claude', pattern: /Review pending/, confidence: 1 }],
-    });
-    expect(res.kind).toBe('idle_prompt');
-    expect(res.matchedRuleId).toBe('claude-idle-turn-completion');
+    ], { harness: 'claude', rules });
+    expect(res.kind).toBe('idle');
+    expect(res.matchedRule?.file).toBe('factory');
+    expect(res.promptLine).toContain('· done');
+  });
+
+  it('keeps only live Codex transcript and UI lines as signals', () => {
+    expect(codexSignalLines([
+      '• Ran a probe',
+      '  └ Do you want to proceed? [y/N]',
+      '    Worked for 12s',
+      '  Worked for 3m 10s • 10:10 AM',
+      '› Explain this log:',
+      '  • Working (4s • esc to interrupt)',
+      '  ← for agents · ? for shortcuts',
+    ])).toEqual(['• Ran', '  Worked for 3m 10s • 10:10 AM', '›']);
+    expect(codexSignalLines(['■ Failure', '› Ask Codex to do anything', '  footer'])).toEqual(['■ Failure', '› Ask Codex to do anything']);
+    expect(codexSignalLines(["• Running printf '[y/N]' (1m 05s • esc to interrupt)", "• Ran printf '(5s • esc to interrupt)'"]))
+      .toEqual(['• Running (1m 05s • esc to interrupt)', '• Ran']);
+    expect(codexSignalLines(['Choose:', '› 1. First', '  2. Second', '  enter to submit'])).toEqual(['Choose:', '› 1. First', '  2. Second', '  enter to submit']);
+  });
+
+  it('keeps a long Codex tool block quoted beyond the inspection window', () => {
+    const res = detectPromptInTail([
+      '• Ran a diagnostic',
+      '  └ Diagnostic output',
+      ...Array(35).fill('    Ordinary tool output'),
+      '    Do you want to proceed? [y/N]',
+      '› Ask Codex to do anything',
+    ], { harness: 'codex' });
+    expect(res.kind).not.toBe('needs_input');
+  });
+
+  it('keeps an indented Codex approval dialog after a submitted prompt', () => {
+    const res = detectPromptInTail([
+      '› run tests',
+      '  Would you like to run the following command?',
+      '  › 1. Yes, proceed (y)',
+      '    2. No, and tell Codex what to do differently (esc)',
+      '  Press enter to confirm',
+    ], { harness: 'codex' });
+    expect(res.kind).not.toBe('none');
+    expect(res.kind).not.toBe('idle');
+  });
+
+  it('does not let a quoted Codex completion in the draft end the turn', () => {
+    const res = detectPromptInTail(['Do you want to proceed? [y/N]', '› Explain this log:', '  Worked for 12s'], { harness: 'codex' });
+    expect(res.kind).toBe('needs_input');
   });
 
   it('returns none for ordinary output', () => {

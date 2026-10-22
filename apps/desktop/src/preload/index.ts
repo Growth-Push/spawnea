@@ -12,6 +12,7 @@ import type {
   AdoptSessionInput,
   DiscoveredTmuxSession,
   CatalogState,
+  StateRulesStatus,
   CatalogReloadResult,
   AddProjectToCatalogInput,
   HostTestResult,
@@ -59,6 +60,7 @@ export const api = {
 
   // Operational Catalog
   getCatalog: (): Promise<CatalogState> => ipcRenderer.invoke('catalog:get'),
+  getStateRulesStatus: (): Promise<StateRulesStatus | null> => ipcRenderer.invoke('stateRules:getStatus'),
   reloadCatalog: (): Promise<CatalogReloadResult> => ipcRenderer.invoke('catalog:reload'),
   addProjectToCatalog: (input: AddProjectToCatalogInput): Promise<CatalogReloadResult> =>
     ipcRenderer.invoke('catalog:addProject', input),
@@ -93,6 +95,10 @@ export const api = {
     projectPath: string,
     preferredBranch?: string
   ): Promise<GitBranchDiscoveryResult> => ipcRenderer.invoke('projects:discoverBranches', serverId, projectPath, preferredBranch),
+  discoverProjectWorktrees: (
+    serverId: string,
+    projectPath: string
+  ): Promise<Array<{ path: string; branch?: string }>> => ipcRenderer.invoke('projects:discoverWorktrees', serverId, projectPath),
   chooseProjectPath: (serverId: string, currentPath?: string): Promise<{ path?: string; canceled: boolean; error?: string }> =>
     ipcRenderer.invoke('projects:choosePath', serverId, currentPath),
 
@@ -225,8 +231,16 @@ export const api = {
     ipcRenderer.invoke('session:clearArtifacts', sessionId),
   saveArtifactAs: (sessionId: string, artifactId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:saveArtifactAs', sessionId, artifactId),
-  openArtifactInOs: (sessionId: string, artifactId: string): Promise<boolean> =>
+  openArtifactInOs: (sessionId: string, artifactId: string): Promise<import('@spawnea/domain').ArtifactOpenResult> =>
     ipcRenderer.invoke('session:openArtifactInOs', sessionId, artifactId),
+  getLocalReferenceContext: (sessionId: string): Promise<{ workspacePath: string; homePath: string; persistedWorkspacePath: string } | null> =>
+    ipcRenderer.invoke('session:getLocalReferenceContext', sessionId),
+  getLocalReferencePaths: (sessionId: string, reference: string): Promise<{ fullPath: string; relativePath: string }> =>
+    ipcRenderer.invoke('session:getLocalReferencePaths', sessionId, reference),
+  getLocalReferenceContent: (sessionId: string, reference: string): Promise<import('@spawnea/domain').FileContentResult> =>
+    ipcRenderer.invoke('session:getLocalReferenceContent', sessionId, reference),
+  openLocalReference: (sessionId: string, reference: string, browser: boolean): Promise<void> =>
+    ipcRenderer.invoke('session:openLocalReference', sessionId, reference, browser),
   openSnippetInEditor: (text: string): Promise<boolean> =>
     ipcRenderer.invoke('terminal:openSnippetInEditor', text),
   createArtifactFromText: (
@@ -307,6 +321,19 @@ export const api = {
     };
     ipcRenderer.on('session:statusChanged', handler);
     return () => ipcRenderer.removeListener('session:statusChanged', handler);
+  },
+  onCheckStateChanged: (
+    callback: (sessionId: string, checking: boolean) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      sessionId: string,
+      checking: boolean
+    ) => {
+      callback(sessionId, checking);
+    };
+    ipcRenderer.on('session:checkStateChanged', handler);
+    return () => ipcRenderer.removeListener('session:checkStateChanged', handler);
   },
   onHostConnectionStateChanged: (callback: (state: HostConnectionState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: HostConnectionState) => {

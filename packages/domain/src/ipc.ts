@@ -27,6 +27,7 @@ export interface CreateSessionInput {
   task: string;
   baseBranch?: string;
   useWorktree?: boolean;
+  worktreePath?: string;
   /** Exact per-session model override; omitted means the configured harness default. */
   model?: string;
 }
@@ -172,6 +173,10 @@ export interface IpcChannels {
     projectPath: string,
     preferredBranch?: string
   ) => Promise<GitBranchDiscoveryResult>;
+  'projects:discoverWorktrees': (
+    serverId: string,
+    projectPath: string
+  ) => Promise<Array<{ path: string; branch?: string }>>;
   'projects:choosePath': (
     serverId: string,
     currentPath?: string
@@ -258,7 +263,11 @@ export interface IpcChannels {
   'session:deleteArtifact': (sessionId: string, artifactId: string) => Promise<boolean>;
   'session:clearArtifacts': (sessionId: string) => Promise<number>;
   'session:saveArtifactAs': (sessionId: string, artifactId: string) => Promise<boolean>;
-  'session:openArtifactInOs': (sessionId: string, artifactId: string) => Promise<boolean>;
+  'session:openArtifactInOs': (sessionId: string, artifactId: string) => Promise<import('./index.js').ArtifactOpenResult>;
+  'session:getLocalReferenceContext': (sessionId: string) => Promise<{ workspacePath: string; homePath: string; persistedWorkspacePath: string } | null>;
+  'session:getLocalReferencePaths': (sessionId: string, reference: string) => Promise<{ fullPath: string; relativePath: string }>;
+  'session:getLocalReferenceContent': (sessionId: string, reference: string) => Promise<import('./index.js').FileContentResult>;
+  'session:openLocalReference': (sessionId: string, reference: string, browser: boolean) => Promise<void>;
 
   // PTY Streaming Events
   'pty:write': (channelId: string, data: string) => void;
@@ -268,6 +277,7 @@ export interface IpcChannels {
 
   // Attention & Status Events
   'session:statusChanged': (callback: (sessionId: string, status: SessionStatus) => void) => () => void;
+  'session:checkStateChanged': (callback: (sessionId: string, checking: boolean) => void) => () => void;
   'session:artifactCreated': (callback: (sessionId: string, artifact: Artifact) => void) => () => void;
   'session:getStateSnapshot': (sessionId: string) => Promise<StateFeedbackSnapshot>;
   'session:submitStateFeedback': (report: StateFeedbackReport) => Promise<StateFeedbackResult>;

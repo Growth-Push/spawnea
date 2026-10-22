@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
 import { createLogger, type OperationalCatalog, type Session } from '@spawnea/domain';
-import { AgentControlService } from './agent-control-service.js';
+import { AgentControlService, STABLE_SCREEN_COMPLETION_MS } from './agent-control-service.js';
 import type { SessionManager } from './session-manager.js';
 import { PromptSubmissionError } from '@spawnea/hosts';
 
@@ -907,18 +907,60 @@ describe('AgentControlService', () => {
       await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'unknown' });
     });
 
-    it('completes an idle turn when the first refresh contains response output', async () => {
+    it('does not complete a quiet fallback-idle turn until its screen stays unchanged for 30 seconds', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        const start = new Date('2026-01-05T10:00:00Z').getTime();
+        vi.setSystemTime(start);
+        await repositories.sessions.updateStatus('existing', 'idle');
+        const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review' });
+        terminalOutput += '\nReview\nCompleted response';
+
+        // No rule matches this screen, so idle comes from the fallback.
+        await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'unknown' });
+        vi.setSystemTime(start + STABLE_SCREEN_COMPLETION_MS - 1);
+        await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'unknown' });
+        vi.setSystemTime(start + STABLE_SCREEN_COMPLETION_MS);
+        await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({
+          status: 'completed',
+          output: '\nReview\nCompleted response',
+        });
+        await expect(service.sendPrompt({ target: 'existing', prompt: 'Follow-up' })).resolves.toMatchObject({
+          status: 'working',
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('restarts the stable-screen time when the evaluated window changes', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        const start = new Date('2026-01-05T11:00:00Z').getTime();
+        vi.setSystemTime(start);
+        await repositories.sessions.updateStatus('existing', 'idle');
+        const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review' });
+        terminalOutput += '\nReview\nPartial response';
+        await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'unknown' });
+
+        vi.setSystemTime(start + 20_000);
+        terminalOutput += '\nMore response';
+        await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'unknown' });
+        vi.setSystemTime(start + 20_000 + STABLE_SCREEN_COMPLETION_MS - 1);
+        await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'unknown' });
+        vi.setSystemTime(start + 20_000 + STABLE_SCREEN_COMPLETION_MS);
+        await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'completed' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('completes a turn with output as soon as an idle rule matches', async () => {
       await repositories.sessions.updateStatus('existing', 'idle');
       const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review' });
-      terminalOutput += '\nReview\nCompleted response';
+      terminalOutput += '\n› Review\n• Completed response\n  Worked for 4s • 10:00 AM\n› Ask Codex to do anything';
 
-      await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({
-        status: 'completed',
-        output: '\nReview\nCompleted response',
-      });
-      await expect(service.sendPrompt({ target: 'existing', prompt: 'Follow-up' })).resolves.toMatchObject({
-        status: 'working',
-      });
+      await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'completed' });
     });
 
     it('does not mistake response markers echoed from the prompt for child completion', async () => {

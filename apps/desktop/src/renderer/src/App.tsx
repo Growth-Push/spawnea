@@ -10,6 +10,7 @@ import type {
   AdoptSessionInput,
   OperationalCatalog,
   CatalogValidationError,
+  StateRulesStatus,
   HostSystemInfo,
   HostHealthResult,
   GitStatusResult,
@@ -30,12 +31,14 @@ import { UnadoptSessionModal } from './components/UnadoptSessionModal';
 import { FinishSessionModal } from './components/FinishSessionModal';
 import { StateFeedbackModal } from './components/StateFeedbackModal';
 import { CatalogErrorBanner } from './components/CatalogErrorBanner';
+import { StateRulesErrorBanner } from './components/StateRulesErrorBanner';
 import { QuickSwitcherModal } from './components/QuickSwitcherModal';
 import { NewProjectModal } from './components/NewProjectModal';
 import { LocalDiscoveryModal } from './components/LocalDiscoveryModal';
 import { ControlFinalizationModal } from './components/ControlFinalizationModal';
 import { AgentSetupModal } from './components/AgentSetupModal';
 import { spawneaSessionTabKey } from './product-storage';
+import { useVisibleRefresh } from './hooks/useVisibleRefresh';
 import { Terminal, Plus } from 'lucide-react';
 
 export const UI_ZOOM_STORAGE_KEY = 'spawnea:ui:zoom';
@@ -126,11 +129,13 @@ export function App(): React.JSX.Element {
   const [gitSyncBySessionId, setGitSyncBySessionId] = useState<Record<string, { ahead: number; behind: number }>>({});
   const [gitUnavailableBySessionId, setGitUnavailableBySessionId] = useState<Record<string, boolean>>({});
   const [gitRefreshNonce, setGitRefreshNonce] = useState(0);
+  const { refreshingIds, setChecking } = useVisibleRefresh();
   const [statusDetailsMap, setStatusDetailsMap] = useState<Record<string, import('@spawnea/domain').SessionStatusResult>>({});
   const [catalog, setCatalog] = useState<OperationalCatalog | null>(null);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [catalogPath, setCatalogPath] = useState<string | undefined>(undefined);
   const [catalogErrors, setCatalogErrors] = useState<CatalogValidationError[] | null>(null);
+  const [stateRulesStatus, setStateRulesStatus] = useState<StateRulesStatus | null>(null);
   const [isReloadingCatalog, setIsReloadingCatalog] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTabType>('terminal');
@@ -236,6 +241,21 @@ export function App(): React.JSX.Element {
     window.spawneaApi?.syncControlUiState?.({ activeSessionId, activeTab });
   }, [activeSessionId, activeTab]);
 
+  // State rules load once in Main and only change after a restart.
+  useEffect(() => {
+    let cancelled = false;
+    window.spawneaApi?.getStateRulesStatus?.()
+      .then((status) => {
+        if (!cancelled) setStateRulesStatus(status);
+      })
+      .catch(() => {
+        // The banner is optional; status detection keeps working without it.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -309,6 +329,10 @@ export function App(): React.JSX.Element {
         setGitRefreshNonce((current) => current + 1);
       });
       unsubs.push(unStatus);
+    }
+
+    if (window.spawneaApi?.onCheckStateChanged) {
+      unsubs.push(window.spawneaApi.onCheckStateChanged(setChecking));
     }
 
     if (window.spawneaApi?.onSessionActivate) {
@@ -1314,6 +1338,7 @@ export function App(): React.JSX.Element {
         hostInfoMap={hostInfoMap}
         hostHealthMap={hostHealthMap}
         statusDetailsMap={statusDetailsMap}
+        refreshingSessionIds={refreshingIds}
         gitDirtyBySessionId={gitDirtyBySessionId}
         gitChangeCountBySessionId={gitChangeCountBySessionId}
         activeSessionId={activeSessionId}
@@ -1371,6 +1396,8 @@ export function App(): React.JSX.Element {
             </button>
           </div>
         )}
+
+        <StateRulesErrorBanner status={stateRulesStatus} />
 
         {catalogErrors && catalogErrors.length > 0 && (
           <CatalogErrorBanner

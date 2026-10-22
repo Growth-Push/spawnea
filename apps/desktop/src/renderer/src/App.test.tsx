@@ -163,6 +163,7 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
     listServers: vi.fn().mockResolvedValue(mockServers),
     listProjects: vi.fn().mockResolvedValue(mockProjects),
     listAgents: vi.fn().mockResolvedValue(mockAgents),
+    getStateRulesStatus: vi.fn().mockResolvedValue({ source: 'factory', userFilePath: '/fictional/user-data/state-rules.yaml' }),
     getCatalog: vi.fn().mockResolvedValue({
       catalog: null,
       filePath: '/config/spawnea.yaml',
@@ -246,6 +247,7 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       suggestedBranches: ['main'],
       currentBranch: 'main',
     }),
+    discoverProjectWorktrees: vi.fn().mockResolvedValue([]),
     chooseProjectPath: vi.fn().mockResolvedValue({ canceled: true }),
     saveProject: vi.fn(),
     deleteProject: vi.fn(),
@@ -330,7 +332,11 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
     deleteArtifact: vi.fn().mockResolvedValue(true),
     clearArtifacts: vi.fn().mockResolvedValue(0),
     saveArtifactAs: vi.fn().mockResolvedValue(true),
-    openArtifactInOs: vi.fn().mockResolvedValue(true),
+    openArtifactInOs: vi.fn().mockResolvedValue({ opened: true, temporaryCopy: false }),
+    getLocalReferenceContext: vi.fn().mockResolvedValue(null),
+    getLocalReferencePaths: vi.fn(),
+    getLocalReferenceContent: vi.fn(),
+    openLocalReference: vi.fn().mockResolvedValue(undefined),
     openSnippetInEditor: vi.fn().mockResolvedValue(true),
     createArtifactFromText: vi.fn().mockResolvedValue({
       id: 'art-1',
@@ -362,10 +368,13 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       harness: 'claude',
       worktreePath: '/workspace/spawnea',
       branch: 'main',
+      capture: { status: 'captured' },
       detectedStatus: 'working',
-      confidence: 0.8,
+      confidence: 0.65,
       source: 'process',
       reason: 'Active process',
+      decision: { kind: 'fallback' },
+      rulesConfig: { source: 'factory' },
       tailLines: ['Line 1', 'Line 2'],
       capturedAt: new Date().toISOString(),
     }),
@@ -392,6 +401,7 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       maxAttempts: 5,
     }),
     onHostConnectionStateChanged: vi.fn().mockReturnValue(() => {}),
+    onCheckStateChanged: vi.fn().mockReturnValue(() => {}),
     onSessionReconnected: vi.fn().mockReturnValue(() => {}),
     onSessionActivate: vi.fn().mockReturnValue(() => {}),
     getHostHealth: vi.fn().mockResolvedValue({}),
@@ -470,6 +480,37 @@ describe('App Desktop Shell', () => {
     // Default first session active in ContextBar & Sidebar
     expect(screen.getAllByText('feat/jwt-auth').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Backend API').length).toBeGreaterThan(0);
+  });
+
+  it('shows the state rules banner with file, harness, and position when user rules are invalid', async () => {
+    window.spawneaApi = createMockSpawneaApi({
+      getStateRulesStatus: vi.fn().mockResolvedValue({
+        source: 'user_invalid',
+        userFilePath: '/fictional/user-data/state-rules.yaml',
+        error: { file: 'state-rules.yaml', harness: 'claude', position: 2, line: 7, message: '"state" must be one of working, needs_input, idle, error' },
+      }),
+    });
+
+    render(<App />);
+
+    const banner = await screen.findByTestId('state-rules-error-banner');
+    expect(banner.textContent).toContain('Factory rules are in use');
+    const detail = screen.getByTestId('state-rules-error-detail').textContent ?? '';
+    expect(detail).toContain('/fictional/user-data/state-rules.yaml');
+    expect(detail).toContain('harness "claude", rule 2, line 7');
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss state rules error' }));
+    expect(screen.queryByTestId('state-rules-error-banner')).toBeNull();
+  });
+
+  it('does not show the state rules banner for factory or merged rules', async () => {
+    window.spawneaApi = createMockSpawneaApi({
+      getStateRulesStatus: vi.fn().mockResolvedValue({ source: 'merged', userFilePath: '/fictional/user-data/state-rules.yaml' }),
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('Active Sessions (2)')).toBeDefined());
+    expect(screen.queryByTestId('state-rules-error-banner')).toBeNull();
   });
 
   it('switches active session when clicked in the sidebar', async () => {

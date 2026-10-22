@@ -18,14 +18,18 @@ import {
   type Session,
   type LogLevel,
   type ArtifactDirection,
+  type ArtifactOpenResult,
+  type StateRulesStatus,
 } from '@spawnea/domain';
 import { CatalogManager } from './catalog-manager.js';
+import { initializeStateRules } from './state-rules.js';
 import { SessionContextStore } from './session-context-store.js';
 import { PtyBroker } from './pty-broker.js';
 import { SessionManager } from './session-manager.js';
 import { SessionSupervisor } from './session-supervisor.js';
 import { NotificationBroker } from './notification-broker.js';
 import { ArtifactManager } from './artifact-manager.js';
+import { openWorkspaceHtml } from './open-workspace-html.js';
 import { LocalDiscoveryService } from './local-discovery-service.js';
 import { AgentControlService } from './agent-control-service.js';
 import { ControlGateway } from './control-gateway.js';
@@ -114,6 +118,7 @@ let sessionSupervisor: SessionSupervisor | null = null;
 let notificationBroker: NotificationBroker | null = null;
 let localDiscoveryService: LocalDiscoveryService | null = null;
 let agentControlService: AgentControlService | null = null;
+let stateRulesStatus: StateRulesStatus | null = null;
 let controlGateway: ControlGateway | null = null;
 let mainWindowRef: BrowserWindow | null = null;
 let shutdownPromise: Promise<void> | null = null;
@@ -354,6 +359,7 @@ function registerIpcHandlers(
   }
 
   // Operational Catalog Handlers
+  ipcMain.handle('stateRules:getStatus', async () => stateRulesStatus);
   ipcMain.handle('catalog:get', async () => sanitizeCatalogStateForRenderer(catManager.getState()));
   ipcMain.handle('catalog:reload', async () => {
     const result = catManager.reload();
@@ -425,6 +431,11 @@ function registerIpcHandlers(
     'projects:discoverBranches',
     async (_event, serverId: string, projectPath: string, preferredBranch?: string) =>
       sessManager.discoverProjectBranches(serverId, projectPath, preferredBranch)
+  );
+  ipcMain.handle(
+    'projects:discoverWorktrees',
+    async (_event, serverId: string, projectPath: string) =>
+      sessManager.discoverProjectWorktrees(serverId, projectPath)
   );
   ipcMain.handle('projects:choosePath', async (_event, serverId: string, currentPath?: string) => {
     const server = await repos.servers.findById(serverId);
@@ -832,25 +843,37 @@ function registerIpcHandlers(
     }
   });
 
-  ipcMain.handle('session:openArtifactInOs', async (_event, sessionId: string, artifactId: string) => {
+  ipcMain.handle('session:openArtifactInOs', async (_event, sessionId: string, artifactId: string): Promise<ArtifactOpenResult> => {
     try {
-      const artifact = await repos.artifacts.findById(artifactId);
-      if (!artifact) return false;
-      const content = await artManager.getArtifactContentForExport(sessionId, artifactId);
-      if (content.isTruncated) {
-        throw new Error(`Artifact '${artifact.filename}' exceeds the configured file limit and cannot be opened completely`);
+      const target = await artManager.resolveArtifactOpenTarget(sessionId, artifactId);
+      try {
+        const openError = await shell.openPath(target.path);
+        if (openError) throw new Error(`Unable to open artifact: ${openError}`);
+      } catch (openFailure) {
+        if (target.temporaryCopy) await artManager.discardTemporaryCopy(target.path);
+        throw openFailure;
       }
-      if (content.cachedLocalPath && existsSync(content.cachedLocalPath)) {
-        const openError = await shell.openPath(content.cachedLocalPath);
-        if (openError) throw new Error(`Unable to open artifact '${artifact.filename}': ${openError}`);
-        return true;
-      }
-      throw new Error(`Artifact '${artifact.filename}' could not be cached locally for opening`);
+      return { opened: true, temporaryCopy: target.temporaryCopy };
     } catch (err) {
       logger.error('Failed to handle session:openArtifactInOs', err, { sessionId, artifactId });
       throw err;
     }
   });
+
+  ipcMain.handle('session:getLocalReferenceContext', (_event, sessionId: string) => artManager.getLocalReferenceContext(sessionId));
+  ipcMain.handle('session:getLocalReferencePaths', (_event, sessionId: string, reference: string) => artManager.getLocalReferencePaths(sessionId, reference));
+  ipcMain.handle('session:getLocalReferenceContent', (_event, sessionId: string, reference: string) => artManager.getLocalReferenceContent(sessionId, reference));
+  ipcMain.handle('session:openLocalReference', (_event, sessionId: string, reference: string, browser: boolean) =>
+    artManager.withLocalReference(sessionId, reference, async (path, mimeType, internal) => {
+      if (browser === true) {
+        if (!internal || mimeType !== 'text/html') throw new Error('Only workspace HTML files can be opened in the browser');
+        await openWorkspaceHtml(path);
+      } else {
+        const error = await shell.openPath(path);
+        if (error) throw new Error(`Unable to open file: ${error}`);
+      }
+    })
+  );
 
   // Terminal Snippet & Text Artifact Handlers
   ipcMain.handle('terminal:openSnippetInEditor', async (_event, text: string) => {
@@ -1058,6 +1081,11 @@ app.whenReady().then(async () => {
       await seedInitialDataIfEmpty(repositories);
     }
 
+    // Loaded once; catalog reloads and file edits do not change the rules
+    // until Spawnea restarts.
+    const stateRules = initializeStateRules(app.getPath('userData'), logger.child('state-rules'));
+    stateRulesStatus = stateRules.status;
+
     const sessionsDir = join(app.getPath('userData'), 'sessions');
     contextStore = new SessionContextStore({ storeDir: sessionsDir, logger });
     ptyBroker = new PtyBroker(logger.child('pty'));
@@ -1074,6 +1102,7 @@ app.whenReady().then(async () => {
       repositories,
       sessionManager,
       logger: logger.child('control'),
+      stateDetector: stateRules.detector,
       getActiveCatalog: () => catalogManager?.getActiveCatalog() ?? null,
       notifyNavigate: (state) => {
         if (!mainWindowRef || mainWindowRef.isDestroyed()) return false;
@@ -1098,6 +1127,10 @@ app.whenReady().then(async () => {
       sessionManager,
       cacheDir: artifactsCacheDir,
       logger: logger.child('artifacts'),
+    });
+    void artifactManager.removeTemporaryCopies();
+    artifactManager.removeDetectedArtifactCaches().catch((error: unknown) => {
+      logger.warn('Could not clean legacy artifact cache', { error });
     });
 
     notificationBroker = new NotificationBroker({
@@ -1131,6 +1164,7 @@ app.whenReady().then(async () => {
       contextStore,
       ptyBroker,
       artifactManager,
+      stateDetector: stateRules.detector,
       logger: logger.child('supervisor'),
       feedbackDir: join(app.getPath('userData'), 'feedback'),
       pollIntervalMs: statusCheckIntervalMs,

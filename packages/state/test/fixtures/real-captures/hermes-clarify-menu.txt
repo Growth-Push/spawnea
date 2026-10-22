@@ -1,0 +1,38 @@
+
+Welcome to Hermes Agent! Type your message or /help for commands.
+✦ Tip: MATRIX_DEVICE_ID pins a stable device ID for E2EE — without it, keys rotate every start and historic decrypt breaks.
+
+💾 curator: auto: 2 archived; llm: skipped (consolidation off)
+
+
+────────────────────────────────────────
+❯ Run this shell command and wait for it to finish: python3 -c "import time; time.sleep(45); print(42)". Then reply with the printed number only.
+────────────────────────────────────────
+
+💻 $ python3 -c "import time; time.sleep(45); print(42)"  46.1s
+
+────────────────────────────────────────
+☤ Hermes
+42
+────────────────────────────────────────
+
+─ 50.3s · ran 1 command · 11:27 AM
+
+
+────────────────────────────────────────
+❯ Use your clarify tool to ask me a multiple-choice question: which color do I prefer (red, green, blue). Do nothing else.
+────────────────────────────────────────
+╭─ Hermes Agent needs your input ────────────────╮
+│ 1 question                                     │
+│ ▸ Which color do you prefer?                   │
+│   ❯ 1. Red (Recommended)                       │
+│     2. Green                                   │
+│     3. Blue                                    │
+│     4. Other (type your answer)                │
+╰────────────────────────────────────────────────╯
+
+  ↑/↓ to select, Enter to lock, Tab next question  (3571s)
+── ⠴ ❓ Which color do you prefer? · 30s · ↓ 37 tok ─────────────────────────────────────────────────────────────────────────────── Run delayed Python command ─
+? ❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☤ gpt-5.6-luna · 14K/272K · [░░░░░░░░░░] 5% · ◎ 65.8% · ◷ 1.7s · ↑ 19 t/s · 2m · ⏱ 30s · …/srv/code/demo (main)

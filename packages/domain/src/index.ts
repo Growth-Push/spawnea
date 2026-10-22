@@ -43,6 +43,39 @@ export interface SessionSignals {
   exitCode?: number;
 }
 
+/** Which state-rules file supplied a rule. */
+export type StateRuleFile = 'factory' | 'user';
+
+/**
+ * Identifies a configured state rule by file, harness, and 1-based position in
+ * that file's ordered rule list for the harness.
+ */
+export interface StateRuleReference {
+  file: StateRuleFile;
+  harness: string;
+  position: number;
+}
+
+/** Which state-rules configuration is active for this application run. */
+export type StateRulesConfigSource = 'factory' | 'merged' | 'user_invalid';
+
+export interface StateRulesError {
+  /** File name of the invalid state-rules file. */
+  file: string;
+  harness?: string;
+  /** 1-based rule position within the harness. */
+  position?: number;
+  /** 1-based YAML line when the error has a source location. */
+  line?: number;
+  message: string;
+}
+
+export interface StateRulesStatus {
+  source: StateRulesConfigSource;
+  userFilePath: string;
+  error?: StateRulesError;
+}
+
 export interface SessionStatusResult {
   status: SessionStatus;
   confidence: number;
@@ -50,7 +83,44 @@ export interface SessionStatusResult {
   detectedPrompt?: string;
   reason: string;
   updatedAt: Date;
+  /** The state rule that decided the status, when one matched. */
+  matchedRule?: StateRuleReference;
+  /** True when no rule matched and the activity fallback decided the status. */
+  fallback?: boolean;
+  /** Opaque digest of the evaluated terminal window; never the text itself. */
+  windowFingerprint?: string;
 }
+
+/**
+ * What decided a detected status: a configured rule, the activity fallback, or
+ * the connection and process step, which uses no rules.
+ */
+export type StateFeedbackDecision =
+  | { kind: 'rule'; rule: StateRuleReference }
+  | { kind: 'fallback' }
+  | { kind: 'connection' };
+
+/**
+ * State-rules configuration in use when a report was captured. Only the error
+ * location is kept: no file path, message, or pattern text.
+ */
+export interface StateFeedbackRulesConfig {
+  source: StateRulesConfigSource;
+  error?: {
+    file: string;
+    harness?: string;
+    position?: number;
+    line?: number;
+  };
+}
+
+/**
+ * Whether the terminal snapshot was captured. When it failed, the report has
+ * no detected status, source, confidence, or decision instead of guessed ones.
+ */
+export type StateFeedbackCapture =
+  | { status: 'captured' }
+  | { status: 'failed'; reason: string };
 
 export interface StateFeedbackSnapshot {
   sessionId: string;
@@ -58,11 +128,15 @@ export interface StateFeedbackSnapshot {
   harness?: string;
   worktreePath?: string;
   branch?: string;
-  detectedStatus: SessionStatus;
-  confidence: number;
-  source: StatusSource;
-  reason: string;
+  capture: StateFeedbackCapture;
+  /** Detection fields are absent when the capture failed. */
+  detectedStatus?: SessionStatus;
+  confidence?: number;
+  source?: StatusSource;
+  reason?: string;
   detectedPrompt?: string;
+  decision?: StateFeedbackDecision;
+  rulesConfig: StateFeedbackRulesConfig;
   tailLines: string[];
   capturedAt: string;
 }
@@ -73,11 +147,18 @@ export interface StateFeedbackReport {
   harness?: string;
   worktreePath?: string;
   branch?: string;
-  detectedStatus: SessionStatus;
-  detectedSource: StatusSource;
-  detectedConfidence: number;
+  /** Status Spawnea displayed when the user opened the report. */
+  observedStatus: SessionStatus;
+  capture: StateFeedbackCapture;
+  /** Detection fields are absent when the capture failed. */
+  detectedStatus?: SessionStatus;
+  detectedSource?: StatusSource;
+  detectedConfidence?: number;
   detectedPrompt?: string;
-  detectionReason: string;
+  detectionReason?: string;
+  decision?: StateFeedbackDecision;
+  /** Filled in by the main process when the report is saved. */
+  rulesConfig?: StateFeedbackRulesConfig;
   expectedStatus: SessionStatus;
   userNotes?: string;
   tailLines: string[];
@@ -206,6 +287,13 @@ export interface Artifact {
   mimeType: string;
   sizeBytes: number;
   createdAt: Date;
+}
+
+/** Outcome of opening an artifact in the OS default app. */
+export interface ArtifactOpenResult {
+  opened: boolean;
+  /** True when the app opened a temporary copy because the original is on a remote host. */
+  temporaryCopy: boolean;
 }
 
 export interface FileEntry {

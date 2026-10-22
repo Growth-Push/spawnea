@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
 import { MockHostAdapter } from '@spawnea/hosts';
+import { loadStateRules, StateDetector } from '@spawnea/state';
 import type { StateFeedbackReport } from '@spawnea/domain';
 import { CatalogManager } from './catalog-manager.js';
 import { SessionContextStore } from './session-context-store.js';
@@ -123,8 +124,11 @@ describe('SessionSupervisor - State Feedback & Misclassification Reporting', () 
     expect(snapshot.harness).toBe('claude');
     expect(snapshot.worktreePath).toBe(session.worktreePath);
     expect(snapshot.branch).toBe(session.branch);
+    expect(snapshot.capture).toEqual({ status: 'captured' });
     expect(snapshot.detectedStatus).toBe('needs_input');
     expect(snapshot.detectedPrompt).toBeDefined();
+    expect(snapshot.decision).toMatchObject({ kind: 'rule', rule: { file: 'factory', harness: 'claude' } });
+    expect(snapshot.rulesConfig).toEqual({ source: 'factory' });
     expect(snapshot.tailLines.length).toBeGreaterThan(0);
     expect(snapshot.capturedAt).toBeDefined();
   });
@@ -144,6 +148,8 @@ describe('SessionSupervisor - State Feedback & Misclassification Reporting', () 
       harness: 'claude',
       worktreePath: '/workspace/spawnea',
       branch: 'fix/parser',
+      observedStatus: 'idle',
+      capture: { status: 'captured' },
       detectedStatus: 'idle',
       detectedSource: 'terminal_prompt',
       detectedConfidence: 0.75,
@@ -167,7 +173,10 @@ describe('SessionSupervisor - State Feedback & Misclassification Reporting', () 
 
     const savedContent = JSON.parse(readFileSync(result.filePath, 'utf-8'));
     expect(savedContent.sessionId).toBe(report.sessionId);
+    expect(savedContent.schemaVersion).toBe('2.0.0');
+    expect(savedContent.observedStatus).toBe('idle');
     expect(savedContent.detectedStatus).toBe('idle');
+    expect(savedContent.rulesConfig).toEqual({ source: 'factory' });
     expect(savedContent.expectedStatus).toBe('needs_input');
     expect(savedContent.userNotes).toBe(report.userNotes);
     expect(savedContent.tailLines).toEqual(report.tailLines);
@@ -189,6 +198,8 @@ describe('SessionSupervisor - State Feedback & Misclassification Reporting', () 
       harness: 'claude',
       worktreePath: '/workspace/spawnea',
       branch: 'fix/parser',
+      observedStatus: 'idle',
+      capture: { status: 'captured' },
       detectedStatus: 'idle',
       detectedSource: 'terminal_prompt',
       detectedConfidence: 0.75,
@@ -199,5 +210,166 @@ describe('SessionSupervisor - State Feedback & Misclassification Reporting', () 
     }, feedbackDir)).rejects.toMatchObject({ code: 'EEXIST' });
 
     expect(readFileSync(existingPath, 'utf8')).toBe('existing report');
+  });
+  describe('decision and rules configuration', () => {
+    const userDir = () => join(tempDir, 'user-data');
+
+    function useStateRules(yaml: string): void {
+      const { ruleSet } = loadStateRules({
+        userFilePath: join(userDir(), 'state-rules.yaml'),
+        readFile: () => yaml,
+      });
+      supervisor = new SessionSupervisor({
+        repositories: repos,
+        sessionManager,
+        contextStore,
+        ptyBroker,
+        stateDetector: new StateDetector({ rules: ruleSet }),
+      });
+    }
+
+    async function createClaudeSession() {
+      return sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Decision snapshot',
+      });
+    }
+
+    function mockPane(tail: string): void {
+      mockHost.customRules.push(
+        { pattern: 'tmux list-panes -t', response: { stdout: '%0:1234:0:claude\n', stderr: '', exitCode: 0 } },
+        { pattern: 'tmux capture-pane -p -t', response: { stdout: tail, stderr: '', exitCode: 0 } }
+      );
+    }
+
+    it('reports the activity fallback when no rule matches', async () => {
+      const session = await createClaudeSession();
+      mockPane('Reading project structure...\nPlanning the change\n');
+
+      const snapshot = await supervisor.captureFeedbackSnapshot(session.id);
+
+      expect(snapshot.decision).toEqual({ kind: 'fallback' });
+      expect(snapshot.detectedStatus).toBe('idle');
+    });
+
+    it('reports the connection step when the tmux session has ended', async () => {
+      const session = await createClaudeSession();
+      mockHost.customRules.push({
+        pattern: 'tmux has-session -t',
+        response: { stdout: '', stderr: 'no server', exitCode: 1 },
+      });
+
+      const snapshot = await supervisor.captureFeedbackSnapshot(session.id);
+
+      expect(snapshot.capture).toEqual({ status: 'captured' });
+      expect(snapshot.detectedStatus).toBe('done');
+      expect(snapshot.decision).toEqual({ kind: 'connection' });
+    });
+
+    it('reports a winning user rule and the merged configuration', async () => {
+      useStateRules([
+        'harnesses:',
+        '  claude:',
+        '    rules:',
+        '      - state: working',
+        '        patterns:',
+        "          - 'Confirm changes\\?'",
+      ].join('\n'));
+      const session = await createClaudeSession();
+      mockPane('Generating solution...\nConfirm changes? [y/N] \n');
+
+      const snapshot = await supervisor.captureFeedbackSnapshot(session.id);
+
+      expect(snapshot.detectedStatus).toBe('working');
+      expect(snapshot.decision).toEqual({ kind: 'rule', rule: { file: 'user', harness: 'claude', position: 1 } });
+      expect(snapshot.rulesConfig).toEqual({ source: 'merged' });
+    });
+
+    it('does not invent a status, source, confidence, or decision when the capture fails', async () => {
+      const session = await createClaudeSession();
+      vi.spyOn(sessionManager, 'getHostAdapter').mockRejectedValue(new Error('ssh: connect to host example-host port 22: refused'));
+
+      const snapshot = await supervisor.captureFeedbackSnapshot(session.id);
+
+      expect(snapshot.capture).toEqual({ status: 'failed', reason: 'Host or tmux communication failed during capture' });
+      expect(snapshot.detectedStatus).toBeUndefined();
+      expect(snapshot.source).toBeUndefined();
+      expect(snapshot.confidence).toBeUndefined();
+      expect(snapshot.reason).toBeUndefined();
+      expect(snapshot.decision).toBeUndefined();
+      expect(snapshot.tailLines).toEqual([]);
+      expect(snapshot.rulesConfig).toEqual({ source: 'factory' });
+      expect(JSON.stringify(snapshot)).not.toContain('example-host');
+    });
+
+    it('saves a failed capture without detection fields, even if the renderer sent some', async () => {
+      const result = await supervisor.saveFeedbackReport({
+        sessionId: 'sess-failed',
+        sessionName: 'Failed capture',
+        harness: 'claude',
+        observedStatus: 'working',
+        capture: { status: 'failed', reason: 'Host or tmux communication failed during capture' },
+        detectedStatus: 'idle',
+        detectedSource: 'tmux',
+        detectedConfidence: 0.7,
+        detectionReason: 'guessed',
+        decision: { kind: 'fallback' },
+        expectedStatus: 'needs_input',
+        tailLines: ['stale terminal text'],
+        timestamp: new Date().toISOString(),
+      }, feedbackDir);
+
+      const saved = JSON.parse(readFileSync(result.filePath, 'utf-8'));
+      expect(saved.capture).toEqual({ status: 'failed', reason: 'Host or tmux communication failed during capture' });
+      expect(saved.observedStatus).toBe('working');
+      expect(saved.expectedStatus).toBe('needs_input');
+      for (const key of ['detectedStatus', 'detectedSource', 'detectedConfidence', 'detectionReason', 'decision']) {
+        expect(saved).not.toHaveProperty(key);
+      }
+      expect(saved.tailLines).toEqual([]);
+    });
+
+    it('stamps its own rules configuration and keeps only the invalid file location', async () => {
+      useStateRules([
+        'harnesses:',
+        '  claude:',
+        '    rules:',
+        '      - state: working',
+        '        patterns: [\'secret-pattern-(\']',
+      ].join('\n'));
+
+      const report = {
+        sessionId: 'sess-invalid',
+        sessionName: 'Invalid user rules',
+        harness: 'claude',
+        observedStatus: 'idle',
+        capture: { status: 'captured' },
+        detectedStatus: 'idle',
+        detectedSource: 'terminal_prompt',
+        detectedConfidence: 0.9,
+        detectionReason: 'Claude: idle by factory rule claude #6: >',
+        decision: { kind: 'rule', rule: { file: 'factory', harness: 'claude', position: 6, pattern: 'leak' } },
+        rulesConfig: { source: 'merged' },
+        userFilePath: join(userDir(), 'state-rules.yaml'),
+        expectedStatus: 'needs_input',
+        tailLines: ['>'],
+        timestamp: new Date().toISOString(),
+      } as unknown as StateFeedbackReport;
+
+      const result = await supervisor.saveFeedbackReport(report, feedbackDir);
+      const saved = JSON.parse(readFileSync(result.filePath, 'utf-8'));
+
+      expect(saved.rulesConfig).toEqual({
+        source: 'user_invalid',
+        error: { file: 'state-rules.yaml', harness: 'claude', position: 1, line: expect.any(Number) },
+      });
+      expect(saved.decision).toEqual({ kind: 'rule', rule: { file: 'factory', harness: 'claude', position: 6 } });
+      expect(saved).not.toHaveProperty('userFilePath');
+      expect(result.fixtureJson).not.toContain('secret-pattern');
+      expect(result.fixtureJson).not.toContain(userDir());
+      expect(result.fixtureJson).not.toContain('leak');
+    });
   });
 });

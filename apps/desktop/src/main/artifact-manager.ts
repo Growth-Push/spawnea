@@ -1,4 +1,4 @@
-import { join, basename, dirname } from 'node:path';
+import { join, basename, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { mkdir, writeFile, readFile, rm, rename, readdir, stat as localStat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -9,20 +9,25 @@ import type {
 
   HostAdapter,
   Logger,
+  Session,
 } from '@spawnea/domain';
 import {
   assertSafeFilename,
   createLogger,
+  isPathContained,
   relativeContainedPath,
   resolveContainedPath,
 } from '@spawnea/domain';
+import { LocalHostAdapter } from '@spawnea/hosts';
 import type { Repositories } from '@spawnea/db';
 import type { SessionManager } from './session-manager.js';
 
 import {
   DEFAULT_BLACKLIST_PATTERNS,
   detectOutputArtifacts,
+  isExternalArtifactFilename,
   matchesBlacklistPattern,
+  validateExternalArtifactContent,
 } from '@spawnea/state';
 
 export interface ArtifactManagerOptions {
@@ -30,11 +35,18 @@ export interface ArtifactManagerOptions {
   sessionManager: SessionManager;
   cacheDir: string;
   blacklistFilePath?: string;
+  /** Directory for temporary copies of remote artifacts opened in the OS default app. */
+  openCopiesDir?: string;
   logger?: Logger;
   maxFileBytes?: number;
   maxCacheBytes?: number;
   maxPreviewBytes?: number;
 }
+
+const EXTERNAL_VALIDATION_BYTES = 8192;
+const HOST_COMMAND_TIMEOUT_MS = 5000;
+const REJECTED_CANDIDATE_TTL_MS = 60_000;
+const REJECTED_CANDIDATE_MAX_ENTRIES = 500;
 
 export const DEFAULT_ARTIFACT_LIMITS = {
   maxFileBytes: 50 * 1024 * 1024,
@@ -47,6 +59,10 @@ export class ArtifactManager {
   private readonly sessionManager: SessionManager;
   private readonly cacheDir: string;
   private readonly blacklistFilePath: string;
+  private readonly openCopiesDir: string;
+  private readonly hostHomes = new Map<string, string>();
+  /** Recently rejected candidates (session + requested path) -> expiry time. */
+  private readonly rejectedCandidates = new Map<string, number>();
   private readonly logger: Logger;
   private readonly maxFileBytes: number;
   private readonly maxCacheBytes: number;
@@ -62,6 +78,7 @@ export class ArtifactManager {
     this.cacheDir = options.cacheDir;
     this.blacklistFilePath =
       options.blacklistFilePath || join(dirname(options.cacheDir), 'artifact-blacklist.json');
+    this.openCopiesDir = options.openCopiesDir || join(dirname(options.cacheDir), 'artifact-open-copies');
     this.logger = options.logger || createLogger('ArtifactManager');
     this.maxFileBytes = options.maxFileBytes ?? DEFAULT_ARTIFACT_LIMITS.maxFileBytes;
     this.maxCacheBytes = options.maxCacheBytes ?? DEFAULT_ARTIFACT_LIMITS.maxCacheBytes;
@@ -385,8 +402,7 @@ export class ArtifactManager {
 
   private async promoteFileUnlocked(
     sessionId: string,
-    relativeOrAbsolutePath: string,
-    allowMetadataOnly = false
+    relativeOrAbsolutePath: string
   ): Promise<Artifact> {
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) {
@@ -409,70 +425,27 @@ export class ArtifactManager {
 
       const host = await this.sessionManager.getHostAdapter(session.serverId);
 
-      // Verify file exists on remote host
+      // Verify file exists on the host
       const rstat = await host.stat(targetPath);
       if (rstat.isDirectory) {
         throw new Error(`Cannot promote directory '${filename}' to an artifact`);
       }
 
-      // Check if already registered
       const existing = await this.repos.artifacts.findBySessionId(sessionId);
       const matched = existing.find((a) => a.remotePath === persistedTargetPath);
       if (matched) {
-        if (matched.cachedLocalPath && existsSync(matched.cachedLocalPath)) {
-          this.logger.info('Artifact already registered, returning existing record', {
-            sessionId,
-            filename,
-            id: matched.id,
-          });
-          return matched;
-        }
-
-        // Retry explicit promotion for metadata-only records instead of reporting a false success.
-        this.assertFileWithinLimit(rstat.size, 'promote');
-        const retryBytes = await host.readFileRaw(targetPath, this.maxFileBytes + 1);
-        const retryStat = await host.stat(targetPath);
-        if (retryStat.isDirectory || retryStat.size !== retryBytes.length || retryBytes.length > this.maxFileBytes) {
-          throw new Error(`Artifact '${filename}' changed while being read or exceeds the ${formatBytes(this.maxFileBytes)} per-file cache limit`);
-        }
-        const retryCachePath = this.getCachePath(sessionId, `${persistedTargetPath}|output|${matched.id}`, filename);
-        await mkdir(dirname(retryCachePath), { recursive: true });
-        await this.withCacheWrite(retryBytes.length, () => writeFile(retryCachePath, retryBytes));
-        return await this.repos.artifacts.save({ ...matched, cachedLocalPath: retryCachePath, sizeBytes: retryStat.size });
+        return matched;
       }
 
-      const cachedLocalPath = this.getCachePath(sessionId, `${persistedTargetPath}|output`, filename);
-
-      let persistedSize = rstat.size;
-      await this.withArtifactTransferSlot(async () => {
-        try {
-          this.assertFileWithinLimit(rstat.size, 'promote');
-
-          const cachedBytes = await host.readFileRaw(targetPath, this.maxFileBytes + 1);
-          const postReadStat = await host.stat(targetPath);
-          if (postReadStat.isDirectory || postReadStat.size !== cachedBytes.length || cachedBytes.length > this.maxFileBytes) {
-            throw new Error(`Artifact '${filename}' changed while being read or exceeds the ${formatBytes(this.maxFileBytes)} per-file cache limit`);
-          }
-          persistedSize = postReadStat.size;
-          await mkdir(dirname(cachedLocalPath), { recursive: true });
-          await this.withCacheWrite(cachedBytes.length, () => writeFile(cachedLocalPath, cachedBytes));
-        } catch (err) {
-          if (!allowMetadataOnly) throw err;
-          this.logger.warn('Could not cache promoted file locally immediately', { filename, error: err });
-          await this.removeEmptyCacheDirectories(dirname(cachedLocalPath));
-        }
-      });
-
-      const mimeType = getMimeType(filename);
+      // The artifact is a pointer to the original file; no content is copied.
       const artifact: Omit<Artifact, 'createdAt'> & { createdAt?: Date } = {
         id: `art-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         sessionId,
         direction: 'output',
         remotePath: persistedTargetPath,
-        cachedLocalPath: existsSync(cachedLocalPath) ? cachedLocalPath : undefined,
         filename,
-        mimeType,
-        sizeBytes: persistedSize,
+        mimeType: getMimeType(filename),
+        sizeBytes: rstat.size,
         createdAt: new Date(),
       };
 
@@ -503,12 +476,15 @@ export class ArtifactManager {
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) return [];
 
+    const host = await this.sessionManager.getHostAdapter(session.serverId);
+    const homeDir = await this.resolveHostHome(session.serverId, host);
     const worktreePath = await this.sessionManager.resolveSessionWorktreePath(session);
     let detectedCandidates: ReturnType<typeof detectOutputArtifacts>;
     try {
       detectedCandidates = detectOutputArtifacts(lines, {
         worktreePath: worktreePath.value,
         harness,
+        homeDir,
       });
     } finally {
       worktreePath.release();
@@ -518,9 +494,19 @@ export class ArtifactManager {
       return [];
     }
 
+    // The project's real root is the same for every candidate of this chunk.
+    const rootLease = await this.sessionManager.resolveSessionWorktreePath(session);
+    let realRoot: string | null;
+    try {
+      realRoot = await this.realPath(host, rootLease.value.replace(/\/+$/, '')).catch(() => null);
+    } finally {
+      rootLease.release();
+    }
+    if (!realRoot) return [];
+
     const createdArtifacts: Artifact[] = [];
     for (const candidate of detectedCandidates) {
-      const created = await this.handleDetectedOutput(sessionId, candidate.normalizedPath);
+      const created = await this.handleDetectedOutput(sessionId, candidate.normalizedPath, realRoot);
       if (created) {
         createdArtifacts.push(created);
       }
@@ -530,86 +516,287 @@ export class ArtifactManager {
   }
 
   /**
-   * Handles detected output file from terminal stream or capture pane.
+   * Handles a detected output file from terminal stream or capture pane. The
+   * real target (after symlink resolution) decides whether it is a project
+   * file or an external one; either way the artifact only points at it.
    */
   async handleDetectedOutput(
     sessionId: string,
-    detectedPath: string
+    detectedPath: string,
+    knownRealRoot?: string
   ): Promise<Artifact | null> {
     return this.withSessionArtifactLock(sessionId, () =>
-      this.handleDetectedOutputUnlocked(sessionId, detectedPath)
+      this.handleDetectedOutputUnlocked(sessionId, detectedPath, knownRealRoot)
     );
   }
 
   private async handleDetectedOutputUnlocked(
     sessionId: string,
-    detectedPath: string
+    detectedPath: string,
+    knownRealRoot?: string
   ): Promise<Artifact | null> {
+    const rejectionKey = `${sessionId}\0${detectedPath.trim()}`;
+    if (this.isRecentlyRejected(rejectionKey)) return null;
+    const result = await this.detectOutputUnlocked(sessionId, detectedPath, knownRealRoot);
+    if (!result.skip && !result.artifact) this.rememberRejected(rejectionKey);
+    return result.artifact;
+  }
+
+  private isRecentlyRejected(key: string): boolean {
+    const expiresAt = this.rejectedCandidates.get(key);
+    if (expiresAt === undefined) return false;
+    if (expiresAt > Date.now()) return true;
+    this.rejectedCandidates.delete(key);
+    return false;
+  }
+
+  private rememberRejected(key: string): void {
+    this.rejectedCandidates.delete(key);
+    this.rejectedCandidates.set(key, Date.now() + REJECTED_CANDIDATE_TTL_MS);
+    while (this.rejectedCandidates.size > REJECTED_CANDIDATE_MAX_ENTRIES) {
+      const oldest = this.rejectedCandidates.keys().next().value;
+      if (oldest === undefined) break;
+      this.rejectedCandidates.delete(oldest);
+    }
+  }
+
+  /** `skip` marks cheap early exits (already registered by the literal path) that are not worth remembering. */
+  private async detectOutputUnlocked(
+    sessionId: string,
+    detectedPath: string,
+    knownRealRoot?: string
+  ): Promise<{ artifact: Artifact | null; skip?: boolean }> {
+    const none = { artifact: null };
     try {
       const session = await this.repos.sessions.findById(sessionId);
-      if (!session) return null;
+      if (!session) return { artifact: null, skip: true };
 
+      const host = await this.sessionManager.getHostAdapter(session.serverId);
       const worktreePath = await this.sessionManager.resolveSessionWorktreePath(session);
-      let promotablePath: string;
+      let runtimeRoot: string;
       try {
-        const runtimeRoot = worktreePath.value.replace(/\/+$/, '');
-        const targetPath = resolveContainedPath(runtimeRoot, detectedPath.trim());
-        const relativePath = relativeContainedPath(runtimeRoot, targetPath);
-        if (!relativePath) return null;
-        promotablePath = relativePath;
+        runtimeRoot = worktreePath.value.replace(/\/+$/, '');
       } finally {
         worktreePath.release();
       }
 
-      if (await this.isPathBlacklisted(promotablePath)) {
-        return null;
-      }
+      const requested = detectedPath.trim();
+      if (!requested.startsWith('/')) return none;
 
-      const host = await this.sessionManager.getHostAdapter(session.serverId);
-      const worktreeForGit = await this.sessionManager.resolveSessionWorktreePath(session);
-      try {
-        const tracked = await host.execute(
-          `git ls-files --error-unmatch -- ${quoteShellArgument(`:(literal)${promotablePath}`)}`,
-          { cwd: worktreeForGit.value }
-        );
-        if (tracked.exitCode === 0) {
-          this.logger.info('Ignoring detected versioned file', { sessionId, path: promotablePath });
-          return null;
-        }
-        if (tracked.exitCode !== 1) {
-          this.logger.warn('Could not determine whether detected file is versioned', {
-            sessionId,
-            path: promotablePath,
-            exitCode: tracked.exitCode,
-            stderr: tracked.stderr,
-          });
-          return null;
-        }
-      } finally {
-        worktreeForGit.release();
+      // Already registered paths are skipped before spawning any host process.
+      const persistedRoot = session.worktreePath.replace(/\/+$/, '');
+      const lexicalKeys = new Set([requested]);
+      if (isPathContained(runtimeRoot, requested)) {
+        const relative = relativeContainedPath(runtimeRoot, requested);
+        if (relative) lexicalKeys.add(`${persistedRoot}/${relative}`);
       }
+      const registered = await this.repos.artifacts.findBySessionId(sessionId);
+      if (registered.some((a) => lexicalKeys.has(a.remotePath))) return { artifact: null, skip: true };
 
-      // Check if already registered
-      const existing = await this.repos.artifacts.findBySessionId(sessionId);
-      const persistedTargetPath = `${session.worktreePath.replace(/\/+$/, '')}/${promotablePath}`;
-      if (existing.some((a) => a.remotePath === persistedTargetPath)) {
-        return null; // Already tracked
+      const realTarget = await this.realPath(host, requested);
+      const realRoot = knownRealRoot ?? await this.realPath(host, runtimeRoot);
+      if (!realTarget || !realRoot) return none;
+
+      if (isPathContained(realRoot, realTarget)) {
+        const relativePath = relativeContainedPath(realRoot, realTarget);
+        if (!relativePath) return none;
+        // A link to an already registered project file is registered under its real path.
+        if (registered.some((a) => a.remotePath === `${persistedRoot}/${relativePath}`)) return none;
+        return { artifact: await this.registerProjectFile(sessionId, host, relativePath) };
       }
-
-      const runtimeTargetPath = await this.sessionManager.resolvePersistedSessionPath(session, persistedTargetPath);
-      try {
-        const rstat = await host.stat(runtimeTargetPath.value).catch(() => null);
-        if (!rstat || rstat.isDirectory) {
-          return null; // Doesn't exist on host
-        }
-      } finally {
-        runtimeTargetPath.release();
-      }
-
-      return await this.promoteFileUnlocked(sessionId, promotablePath, true);
+      if (registered.some((a) => a.remotePath === realTarget)) return none;
+      return { artifact: await this.registerExternalFile(sessionId, host, realTarget) };
     } catch {
+      return none;
+    }
+  }
+
+  private async registerProjectFile(
+    sessionId: string,
+    host: HostAdapter,
+    promotablePath: string
+  ): Promise<Artifact | null> {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session) return null;
+
+    if (await this.isPathBlacklisted(promotablePath)) {
       return null;
     }
+
+    const worktreeForGit = await this.sessionManager.resolveSessionWorktreePath(session);
+    try {
+      const tracked = await host.execute(
+        `git ls-files --error-unmatch -- ${quoteShellArgument(`:(literal)${promotablePath}`)}`,
+        { cwd: worktreeForGit.value }
+      );
+      if (tracked.exitCode === 0) {
+        this.logger.info('Ignoring detected versioned file', { sessionId, path: promotablePath });
+        return null;
+      }
+      if (tracked.exitCode !== 1) {
+        this.logger.warn('Could not determine whether detected file is versioned', {
+          sessionId,
+          path: promotablePath,
+          exitCode: tracked.exitCode,
+          stderr: tracked.stderr,
+        });
+        return null;
+      }
+    } finally {
+      worktreeForGit.release();
+    }
+
+    const existing = await this.repos.artifacts.findBySessionId(sessionId);
+    const persistedTargetPath = `${session.worktreePath.replace(/\/+$/, '')}/${promotablePath}`;
+    if (existing.some((a) => a.remotePath === persistedTargetPath)) {
+      return null; // Already tracked
+    }
+
+    const runtimeTargetPath = await this.sessionManager.resolvePersistedSessionPath(session, persistedTargetPath);
+    try {
+      const rstat = await host.stat(runtimeTargetPath.value).catch(() => null);
+      if (!rstat || rstat.isDirectory) {
+        return null; // Doesn't exist on host
+      }
+    } finally {
+      runtimeTargetPath.release();
+    }
+
+    return await this.promoteFileUnlocked(sessionId, promotablePath);
+  }
+
+  /**
+   * Registers a readable, supported file outside the project as a pointer to
+   * its real path. Nothing is copied; unsupported, missing or unreadable files
+   * never become artifacts.
+   */
+  private async registerExternalFile(
+    sessionId: string,
+    host: HostAdapter,
+    realPath: string
+  ): Promise<Artifact | null> {
+    const filename = basename(realPath);
+    if (!isExternalArtifactFilename(filename) || await this.isPathBlacklisted(realPath)) {
+      return null;
+    }
+    const existing = await this.repos.artifacts.findBySessionId(sessionId);
+    if (existing.some((a) => a.remotePath === realPath)) return null;
+
+    const rstat = await host.stat(realPath).catch(() => null);
+    if (!rstat || !rstat.isFile) return null;
+    const head = await host.readFileRaw(realPath, EXTERNAL_VALIDATION_BYTES).catch(() => null);
+    if (!head || !validateExternalArtifactContent(filename, head)) return null;
+
+    this.logger.info('Registered external file as session output artifact', { sessionId, filename });
+    return await this.repos.artifacts.save({
+      id: `art-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      sessionId,
+      direction: 'output',
+      remotePath: realPath,
+      filename,
+      mimeType: getMimeType(filename),
+      sizeBytes: rstat.size,
+      createdAt: new Date(),
+    });
+  }
+
+  /** The external-file rules of registerExternalFile, applied to an already resolved real path. */
+  private async isAcceptableExternalFile(host: HostAdapter, realPath: string): Promise<boolean> {
+    const filename = basename(realPath);
+    if (!isExternalArtifactFilename(filename) || await this.isPathBlacklisted(realPath)) return false;
+    const rstat = await host.stat(realPath).catch(() => null);
+    if (!rstat || !rstat.isFile) return false;
+    const head = await host.readFileRaw(realPath, EXTERNAL_VALIDATION_BYTES).catch(() => null);
+    return head !== null && validateExternalArtifactContent(filename, head);
+  }
+
+  private async realPath(host: HostAdapter, path: string): Promise<string | null> {
+    const result = await host.execute(`realpath -- ${quoteShellArgument(path)}`, {
+      timeoutMs: HOST_COMMAND_TIMEOUT_MS,
+    });
+    const resolved = result.stdout.replace(/\r?\n$/, '');
+    return result.exitCode === 0 && resolved.startsWith('/') ? resolved : null;
+  }
+
+  /** The session host's real `$HOME`, queried once per host and then remembered. */
+  private async resolveHostHome(serverId: string, host: HostAdapter): Promise<string | undefined> {
+    const known = this.hostHomes.get(serverId);
+    if (known) return known;
+    try {
+      const result = await host.execute('printf %s "$HOME"', { timeoutMs: HOST_COMMAND_TIMEOUT_MS });
+      const home = result.stdout.trim();
+      if (result.exitCode === 0 && home.startsWith('/')) {
+        this.hostHomes.set(serverId, home);
+        return home;
+      }
+    } catch {
+      // Retry on the next poll.
+    }
+    return undefined;
+  }
+
+  /** Metadata only: no target is inspected when reference menus are displayed. */
+  async getLocalReferenceContext(sessionId: string): Promise<{ workspacePath: string; homePath: string; persistedWorkspacePath: string } | null> {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session) throw new Error('Session not found');
+    const host = await this.sessionManager.getHostAdapter(session.serverId);
+    if (!(host instanceof LocalHostAdapter)) return null;
+    const root = await this.sessionManager.resolveSessionWorktreePath(session);
+    try {
+      const homePath = await this.resolveHostHome(session.serverId, host);
+      if (!homePath) throw new Error('Session host home directory is unavailable');
+      return { workspacePath: root.value, homePath, persistedWorkspacePath: session.worktreePath };
+    } finally {
+      root.release();
+    }
+  }
+
+  async getLocalReferencePaths(sessionId: string, reference: string): Promise<{ fullPath: string; relativePath: string }> {
+    if (typeof reference !== 'string' || !reference.trim() || Array.from(reference).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
+      throw new Error('Invalid file reference');
+    }
+    const context = await this.getLocalReferenceContext(sessionId);
+    if (!context) throw new Error('File reference actions are available for local sessions only');
+    const fullPath = reference.startsWith('~/')
+      ? resolve(context.homePath, reference.slice(2))
+      : resolve(context.workspacePath, reference);
+    return { fullPath, relativePath: relative(context.workspacePath, fullPath) };
+  }
+
+  /** Explicit references bypass detection/registration, never the external-file policy. */
+  async withLocalReference<T>(sessionId: string, reference: string, action: (path: string, mimeType: string, internal: boolean) => Promise<T>): Promise<T> {
+    const { fullPath } = await this.getLocalReferencePaths(sessionId, reference);
+    const session = (await this.repos.sessions.findById(sessionId))!;
+    const host = await this.sessionManager.getHostAdapter(session.serverId);
+    const root = await this.sessionManager.resolveSessionWorktreePath(session);
+    try {
+      const realRoot = await this.realPath(host, root.value);
+      const realTarget = await this.realPath(host, fullPath);
+      if (!realRoot || !realTarget) throw new Error('File is missing or inaccessible');
+      const internal = isPathContained(realRoot, realTarget);
+      if (await this.isPathBlacklisted(fullPath) || await this.isPathBlacklisted(realTarget)) {
+        throw new Error('File is excluded by the artifact access policy');
+      }
+      if (!internal && ((!isAbsolute(reference) && !reference.startsWith('~/')) || !(await this.isAcceptableExternalFile(host, realTarget)))) {
+        throw new Error('External file reference is not supported by the artifact access policy');
+      }
+      const stat = await host.stat(realTarget);
+      if (!stat.isFile) throw new Error('Reference is not a regular file');
+      this.assertFileWithinLimit(stat.size, 'open');
+      // Check readability even for an OS open, without changing permissions.
+      await host.readFileRaw(realTarget, 1);
+      return await action(realTarget, getMimeType(basename(realTarget)), internal);
+    } finally {
+      root.release();
+    }
+  }
+
+  async getLocalReferenceContent(sessionId: string, reference: string): Promise<FileContentResult> {
+    return this.withLocalReference(sessionId, reference, async (path, mimeType) => {
+      const session = (await this.repos.sessions.findById(sessionId))!;
+      const host = await this.sessionManager.getHostAdapter(session.serverId);
+      return withDataUri(await host.readFile(path, this.maxPreviewBytes), mimeType);
+    });
   }
 
   /**
@@ -723,47 +910,184 @@ export class ArtifactManager {
       }
     }
 
-    // Fallback: read directly via host adapter and cache
+    // No usable local copy: read the original through the host. The result is
+    // never written to the artifact cache.
     const host = await this.sessionManager.getHostAdapter(session.serverId);
-    const remotePath = await this.sessionManager.resolvePersistedSessionPath(session, artifact.remotePath);
-    let result: FileContentResult;
-    let currentRemoteSize: number | undefined;
-    let resolvedRemotePath: string | undefined;
+    const remotePath = await this.resolveArtifactHostPath(session, host, artifact);
     try {
-      resolvedRemotePath = remotePath.value;
-      result = await host.readFile(resolvedRemotePath, previewLimit);
-      const postReadStat = await host.stat(resolvedRemotePath);
-      currentRemoteSize = postReadStat.size;
-      if (currentRemoteSize !== result.sizeBytes) {
+      const result = await host.readFile(remotePath.value, previewLimit).catch((error: unknown) => {
+        throw unavailableError(artifact.filename, error);
+      });
+      const postReadStat = await host.stat(remotePath.value).catch((error: unknown) => {
+        throw unavailableError(artifact.filename, error);
+      });
+      if (postReadStat.size !== result.sizeBytes) {
         throw new Error(`Artifact '${artifact.filename}' changed size while being read`);
       }
+      return { ...withDataUri(result, artifact.mimeType), path: artifact.remotePath };
     } finally {
       remotePath.release();
     }
+  }
 
-    // Never cache a preview: a truncated response must not become a seemingly complete artifact.
-    let verifiedCachePath: string | undefined;
-    if (!result.isTruncated && result.sizeBytes <= this.maxFileBytes &&
-        currentRemoteSize === result.sizeBytes && currentRemoteSize <= this.maxFileBytes) {
+  /**
+   * Resolves the host path an artifact points at. Project files resolve
+   * against the session workspace; external pointers must still be the same
+   * readable, supported file they were registered as.
+   */
+  private async resolveArtifactHostPath(
+    session: Session,
+    host: HostAdapter,
+    artifact: Artifact
+  ): Promise<{ value: string; release: () => void }> {
+    const persistedRoot = session.worktreePath.replace(/\/+$/, '');
+    if (artifact.remotePath === persistedRoot || artifact.remotePath.startsWith(`${persistedRoot}/`)) {
+      const lease = await this.sessionManager.resolvePersistedSessionPath(session, artifact.remotePath);
       try {
-        await mkdir(dirname(expectedCachedLocalPath), { recursive: true });
-        const currentSize = result.sizeBytes;
-        const cachedBytes = encodeCachedResult(result);
-        const oldSize = await localStat(expectedCachedLocalPath).then((s) => s.size).catch(() => 0);
-        await this.withCacheWrite(Math.max(0, cachedBytes.length - oldSize), () => writeFile(expectedCachedLocalPath, cachedBytes));
-        await this.repos.artifacts.save({ ...artifact, cachedLocalPath: expectedCachedLocalPath, sizeBytes: currentSize });
-        verifiedCachePath = expectedCachedLocalPath;
-        if (artifact.cachedLocalPath && artifact.cachedLocalPath !== expectedCachedLocalPath &&
-            isOwnedCachePath(this.getSessionCacheDir(sessionId), artifact.cachedLocalPath) &&
-            !(await this.cachePathIsReferenced(artifact.cachedLocalPath, artifact.id))) {
-          await rm(artifact.cachedLocalPath, { force: true });
+        // A project file may since have become a link to somewhere else: judge its real target.
+        const worktree = await this.sessionManager.resolveSessionWorktreePath(session);
+        let realRoot: string | null;
+        try {
+          realRoot = await this.realPath(host, worktree.value.replace(/\/+$/, ''));
+        } finally {
+          worktree.release();
         }
+        const realTarget = await this.realPath(host, lease.value).catch(() => null);
+        if (!realRoot || !realTarget) throw unavailableError(artifact.filename);
+        if (isPathContained(realRoot, realTarget)) return lease;
+        if (!(await this.isAcceptableExternalFile(host, realTarget))) {
+          throw unavailableError(artifact.filename);
+        }
+        return { value: realTarget, release: lease.release };
       } catch (error) {
-        this.logger.warn('Could not cache complete artifact content', { artifactId, error });
+        lease.release();
+        throw error;
       }
     }
 
-    return { ...result, path: artifact.remotePath, cachedLocalPath: verifiedCachePath };
+    const externalPath = artifact.remotePath;
+    if (!externalPath.startsWith('/') || !isExternalArtifactFilename(basename(externalPath))) {
+      throw new Error(`Artifact '${artifact.filename}' points outside the project and is not a supported type`);
+    }
+    const real = await this.realPath(host, externalPath).catch(() => null);
+    if (real !== externalPath) {
+      throw unavailableError(artifact.filename);
+    }
+    const head = await host.readFileRaw(externalPath, EXTERNAL_VALIDATION_BYTES).catch((error: unknown) => {
+      throw unavailableError(artifact.filename, error);
+    });
+    if (!validateExternalArtifactContent(basename(externalPath), head)) {
+      throw unavailableError(artifact.filename);
+    }
+    return { value: externalPath, release: () => {} };
+  }
+
+  /**
+   * Returns the file to hand to the OS "open" action. Local sessions open the
+   * original; remote sessions download a temporary copy at this moment.
+   */
+  async resolveArtifactOpenTarget(
+    sessionId: string,
+    artifactId: string
+  ): Promise<{ path: string; temporaryCopy: boolean }> {
+    return this.withSessionArtifactLock(sessionId, async () => {
+      const session = await this.repos.sessions.findById(sessionId);
+      if (!session) throw new Error(`Session '${sessionId}' not found`);
+      const artifact = await this.repos.artifacts.findById(artifactId);
+      if (!artifact || artifact.sessionId !== sessionId) {
+        throw new Error(`Artifact '${artifactId}' not found`);
+      }
+
+      const cachedPath = await this.usableCachedCopy(sessionId, artifact);
+      if (cachedPath) return { path: cachedPath, temporaryCopy: false };
+
+      const host = await this.sessionManager.getHostAdapter(session.serverId);
+      const remotePath = await this.resolveArtifactHostPath(session, host, artifact);
+      try {
+        const rstat = await host.stat(remotePath.value).catch((error: unknown) => {
+          throw unavailableError(artifact.filename, error);
+        });
+        if (!rstat.isFile) throw unavailableError(artifact.filename);
+        if (host instanceof LocalHostAdapter) {
+          return { path: remotePath.value, temporaryCopy: false };
+        }
+        this.assertFileWithinLimit(rstat.size, 'open');
+        // One stable location per artifact, overwritten on each open.
+        const copyDir = resolveContainedPath(this.openCopiesDir, artifact.id);
+        const copyPath = join(copyDir, assertSafeFilename(artifact.filename));
+        await rm(copyDir, { recursive: true, force: true });
+        await mkdir(copyDir, { recursive: true });
+        try {
+          await host.downloadFile(remotePath.value, copyPath);
+          const copied = await localStat(copyPath);
+          this.assertFileWithinLimit(copied.size, 'open');
+        } catch (error) {
+          await rm(copyDir, { recursive: true, force: true });
+          throw error;
+        }
+        return { path: copyPath, temporaryCopy: true };
+      } finally {
+        remotePath.release();
+      }
+    });
+  }
+
+  /**
+   * The artifact's own cached copy, only if it is owned by this session's
+   * cache, matches the recorded size, and is not a legacy file shared with
+   * another artifact. Anything else must be read from the host instead.
+   */
+  private async usableCachedCopy(sessionId: string, artifact: Artifact): Promise<string | null> {
+    const cachedPath = artifact.cachedLocalPath;
+    const cacheRoot = this.getSessionCacheDir(sessionId);
+    if (!cachedPath || !isOwnedCachePath(cacheRoot, cachedPath) || !existsSync(cachedPath)) return null;
+    const legacyPath = resolveContainedPath(cacheRoot, assertSafeFilename(artifact.filename));
+    if (cachedPath === legacyPath && await this.cachePathIsReferenced(cachedPath, artifact.id)) return null;
+    const cachedStat = await localStat(cachedPath).catch(() => null);
+    return cachedStat && cachedStat.isFile() && cachedStat.size === artifact.sizeBytes ? cachedPath : null;
+  }
+
+  /** Deletes a temporary copy made for opening, e.g. when the OS could not open it. */
+  async discardTemporaryCopy(copyPath: string): Promise<void> {
+    try {
+      const copyDir = dirname(resolveContainedPath(this.openCopiesDir, copyPath));
+      if (copyDir !== this.openCopiesDir) await rm(copyDir, { recursive: true, force: true });
+    } catch (error) {
+      this.logger.warn('Could not discard temporary artifact copy', { error });
+    }
+  }
+
+  /** Removes every temporary copy left by earlier runs. */
+  async removeTemporaryCopies(): Promise<void> {
+    await rm(this.openCopiesDir, { recursive: true, force: true }).catch((error: unknown) => {
+      this.logger.warn('Could not remove temporary artifact copies', { error });
+    });
+  }
+
+  /**
+   * Drops cache files Spawnea created for detected or promoted artifacts, which
+   * are now plain pointers to the original file. Upload cache entries stay.
+   */
+  async removeDetectedArtifactCaches(): Promise<number> {
+    let removed = 0;
+    const sessions = await this.repos.sessions.findAll();
+    for (const session of sessions) {
+      await this.withSessionArtifactLock(session.id, async () => {
+        const cacheRoot = this.getSessionCacheDir(session.id);
+        for (const artifact of await this.repos.artifacts.findBySessionId(session.id)) {
+          if (!artifact.cachedLocalPath || artifact.remotePath.includes('/.spawnea/artifacts/')) continue;
+          if (isOwnedCachePath(cacheRoot, artifact.cachedLocalPath)) {
+            await rm(artifact.cachedLocalPath, { force: true }).catch((error: unknown) => {
+              this.logger.warn('Could not remove legacy artifact cache', { artifactId: artifact.id, error });
+            });
+          }
+          await this.repos.artifacts.save({ ...artifact, cachedLocalPath: undefined });
+          removed++;
+        }
+        await this.removeEmptyCacheDirectories(cacheRoot);
+      });
+    }
+    return removed;
   }
 
   /**
@@ -944,14 +1268,22 @@ export class ArtifactManager {
   }
 }
 
-function quoteShellArgument(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+/** Hosts return PDF bytes as bare base64; the preview needs a data URI like the cached path gives. */
+function withDataUri(result: FileContentResult, artifactMimeType: string): FileContentResult {
+  const mimeType = result.mimeType || artifactMimeType;
+  if (result.isBinary && mimeType === 'application/pdf' && !result.content.startsWith('data:')) {
+    return { ...result, content: `data:${mimeType};base64,${result.content}` };
+  }
+  return result;
 }
 
-function encodeCachedResult(result: FileContentResult): Buffer {
-  return result.isBinary
-    ? Buffer.from(result.content.includes('base64,') ? result.content.split('base64,')[1] : result.content, 'base64')
-    : Buffer.from(result.content, 'utf8');
+function unavailableError(filename: string, cause?: unknown): Error {
+  const detail = cause instanceof Error ? `: ${cause.message}` : '';
+  return new Error(`Artifact '${filename}' is no longer available${detail}`);
+}
+
+function quoteShellArgument(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 async function readLocalPrefix(path: string, maxBytes: number): Promise<Buffer> {
@@ -1031,6 +1363,7 @@ export function getMimeType(filePath: string): string {
     case 'tsx': return 'text/typescript';
     case 'js':
     case 'jsx': return 'text/javascript';
+    case 'htm':
     case 'html': return 'text/html';
     case 'css': return 'text/css';
     case 'txt': return 'text/plain';

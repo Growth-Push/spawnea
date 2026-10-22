@@ -267,6 +267,7 @@ export function createControlOperations(
         serverId: z.string().min(1).max(200).optional(),
         baseBranch: z.string().trim().min(1).max(240).optional(),
         useWorktree: z.boolean().optional(),
+        worktreePath: z.string().trim().min(1).optional(),
         clientRequestId: z.string().min(1).max(120).optional(),
         model: z.string().regex(MODEL_ID_PATTERN).optional(),
       }),
@@ -312,7 +313,8 @@ export function createControlOperations(
           agentId: resolvedAgentId,
           task: request.task,
           baseBranch: request.baseBranch,
-          useWorktree: request.useWorktree ?? true,
+          useWorktree: request.worktreePath ? false : (request.useWorktree ?? true),
+          worktreePath: request.worktreePath,
           model: request.model,
         }, { allowRemoteHost: true });
       },

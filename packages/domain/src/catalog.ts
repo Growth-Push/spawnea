@@ -15,9 +15,11 @@ export interface CatalogProject {
   path: string;
   git_url?: string;
   base_branch?: string;
+  worktrees_dir?: string;
   worktree?: {
     enabled: boolean;
     copy_files: string[];
+    worktrees_dir?: string;
   };
   tmux?: {
     options: Record<string, string | number | boolean>;
@@ -251,6 +253,25 @@ export function isExactRepositoryRelativePath(value: string): boolean {
   return value.split('/').every((component) => component !== '' && component !== '.' && component !== '..');
 }
 
+export interface ResolvableProjectWorktreesInput {
+  worktrees_dir?: string;
+  worktree?: {
+    enabled?: boolean;
+    copy_files?: string[];
+    worktrees_dir?: string;
+  } | null;
+}
+
+/**
+ * Resolves the configured worktrees directory for a project, prioritizing
+ * `worktree.worktrees_dir` over root `worktrees_dir`.
+ */
+export function resolveProjectWorktreesDir(
+  project?: ResolvableProjectWorktreesInput | CatalogProject
+): string | undefined {
+  return project?.worktree?.worktrees_dir?.trim() || project?.worktrees_dir?.trim() || undefined;
+}
+
 // Pattern for raw private keys
 const RAW_PRIVATE_KEY_REGEX = /-----BEGIN [A-Z0-9\s_-]+PRIVATE KEY-----/i;
 
@@ -285,6 +306,7 @@ export const CatalogProjectSchema = z
     ),
     git_url: z.string().trim().min(1, 'git_url must not be empty').optional(),
     base_branch: z.string().trim().min(1, 'base_branch must not be empty').optional(),
+    worktrees_dir: z.string().trim().min(1, 'worktrees_dir must not be empty').optional(),
     worktree: z
       .object({
         enabled: z.boolean().default(false),
@@ -295,6 +317,7 @@ export const CatalogProjectSchema = z
               message: 'copy_files entries must be exact repository-relative paths without traversal or backslashes',
             })
         ).default([]),
+        worktrees_dir: z.string().trim().min(1, 'worktrees_dir must not be empty').optional(),
       })
       .strict()
       .optional(),

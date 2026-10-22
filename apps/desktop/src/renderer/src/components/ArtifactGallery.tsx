@@ -2,6 +2,7 @@ import React, { useState, useMemo, useRef, useCallback } from 'react';
 import type { Artifact } from '@spawnea/domain';
 import { ArtifactPreviewModal } from './ArtifactPreviewModal';
 import { ArtifactContextMenu } from './ArtifactContextMenu';
+import { ReferenceActions, ReferencePreview, resolveArtifactReference, useReferenceContext } from './reference-actions';
 import {
   FileCode2,
   FileText,
@@ -53,6 +54,10 @@ export function ArtifactGallery({
   const [sortField, setSortField] = useState<SortField>('date_desc');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [selectedArtifact, setSelectedArtifact] = useState<Artifact | null>(null);
+  const referenceContext = useReferenceContext(sessionId);
+  const [referencePreview, setReferencePreview] = useState<{ sessionId: string; path: string } | null>(null);
+  const openReferencePreview = useCallback((path: string) => setReferencePreview({ sessionId, path }), [sessionId]);
+  React.useEffect(() => setReferencePreview(null), [sessionId]);
   const [isUploading, setIsUploading] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -203,9 +208,10 @@ export function ArtifactGallery({
   const runOpenInOs = async (art: Artifact) => {
     if (window.spawneaApi?.openArtifactInOs) {
       try {
-        const opened = await window.spawneaApi.openArtifactInOs(sessionId, art.id);
-        if (opened) showToast('Opened in default app');
-        else showToast(`Unable to open ${art.filename}`);
+        const result = await window.spawneaApi.openArtifactInOs(sessionId, art.id);
+        if (!result.opened) showToast(`Unable to open ${art.filename}`);
+        else if (result.temporaryCopy) showToast('Opened a temporary copy; changes will not be saved to the remote file');
+        else showToast('Opened in default app');
       } catch (err) {
         showToast(`Unable to open ${art.filename}: ${err instanceof Error ? err.message : 'Unknown error'}`);
       }
@@ -645,12 +651,15 @@ export function ArtifactGallery({
       </div>
 
       {/* Floating Artifact Context Menu */}
+      {referencePreview?.sessionId === sessionId && <ReferencePreview key={`${sessionId}:${referencePreview.path}`} path={referencePreview.path} sessionId={sessionId} onClose={() => setReferencePreview(null)} />}
       {contextMenu && (
         <ArtifactContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
           uiZoom={uiZoom}
           artifact={contextMenu.artifact}
+          local={Boolean(referenceContext)}
+          referenceActions={<ReferenceActions reference={{ kind: 'file', text: resolveArtifactReference(contextMenu.artifact.remotePath, referenceContext), start: 0 }} context={referenceContext} sessionId={sessionId} onPreview={openReferencePreview} onClose={() => setContextMenu(null)} onError={showToast} />}
           isHidden={hiddenArtifactIds.has(contextMenu.artifact.id)}
           onToggleHide={() => toggleHide(contextMenu.artifact.id)}
           onAddToBlacklistExact={() => handleBlacklist(contextMenu.artifact.filename)}

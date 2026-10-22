@@ -272,7 +272,9 @@ export interface Artifact {
   id: string;
   sessionId: string;
   direction: ArtifactDirection;
+  /** Real path on the session host. Detected artifacts point at the original file. */
   remotePath: string;
+  /** Only set for uploaded or pasted inputs; detected artifacts never have a cached copy. */
   cachedLocalPath?: string;
   filename: string;
   mimeType: string;
@@ -280,6 +282,53 @@ export interface Artifact {
   createdAt: Date;
 }
 ```
+
+### Artifact pointers and external files
+
+Artifacts detected from terminal output or promoted from the workspace are
+**pointers** to the original file on the session host (host, real path, name,
+type, size). Spawnea copies no content at detection time and writes no artifact
+cache for them; previews read the original on demand and show its current state.
+A file that is deleted or no longer readable makes its preview fail as
+unavailable; there is no snapshot. Upload and paste inputs are unchanged and
+keep their cached copy. Cache files written by earlier versions for detected
+artifacts are removed at startup, while the existing records keep working.
+
+Detection scans a separate capture of the last 250 terminal lines; status
+detection keeps its own unchanged 50-line capture. The host `$HOME` is queried once per host, and paths that are already registered are skipped before any `realpath` call. The host `realpath` of every candidate decides how it is treated, so a
+symlink is judged by its real target:
+
+* Inside the project: any type already accepted is kept, and files tracked by Git
+  stay ignored.
+* Outside the project: only absolute paths and `~/` (resolved with the session
+  host's real `$HOME`) are considered; relative `../` paths are rejected. Accepted
+  types are png, jpg/jpeg, gif, webp, pdf, md, txt, yaml/yml, json, toml, csv, ini,
+  and conf. Content is validated (image/PDF signature, or non-binary UTF-8 text);
+  external SVG is not accepted. The existing exclusion list applies; no new
+  credential list exists. Missing, unreadable, or unsupported files never become
+  previews, and no permissions are escalated.
+
+"Open in default app" opens the original file for local hosts. For remote hosts it
+downloads a temporary copy at that moment and tells the user it is a copy. The copy lives in a Spawnea-owned directory at a stable path per artifact (overwritten on each open), is deleted if the download or the open fails, and any leftovers are removed at startup.
+
+The pointer model goes through the common host interface, but only local hosts are
+validated. SSH hosts are not validated for this behavior yet.
+
+### Context-aware reference actions
+
+Terminal references are recognized lexically from public xterm buffer cells, including wrapped rows and wide characters. Recognition is bounded to 64 rows per logical line; oversized wrapped lines are not recognized. A pointer-free overlay keeps references underlined without modifying PTY output or selection; the link provider supplies the hover cursor. Highlight updates are coalesced per animation frame, scan each visible logical line once, and preserve unchanged overlay nodes. Highlighting and menu display do not read target content or download files. The clicked reference wins over an unrelated selection or clipboard; a selection under the click must contain exactly one reference. Paths with spaces require quotes or a complete selection. Ambiguous selections retain text actions only, including the explicitly named snippet action.
+
+HTTP(S) references offer copying and explicit browser opening on local and remote sessions through the existing protocol-validated handler. Local terminal and Artifacts menus additionally resolve full and workspace-relative paths, preview the original through the inert artifact viewer, or explicitly open the original with the system default app. Previewing an explicit reference creates no artifact record or cache. Tracked files are eligible without changing automatic detection. `~/` uses the session host's home. External relative paths can be copied (including `../`) but not opened. Opening revalidates existence, readability, size, exclusions, real paths and the existing external type/content policy. Symlinks are resolved and their actual destinations must satisfy that policy. Workspace HTML has an explicit browser action; on Linux it queries the configured browser with `xdg-settings` and launches that desktop application with `gtk-launch`, independently of HTML file associations. Missing facilities or unsupported platforms produce an explicit error rather than falling back to a file-type handler. External HTML remains excluded and previews never execute HTML. New file actions are local-only; remote artifact downloads and temporary-copy notices are unchanged.
+
+### Markdown document previews
+
+Workspace-file and artifact previews share a read-only React Markdown renderer
+with GitHub-flavored tables, task lists, nested lists, and fenced code. Reading
+styles use 16px body text and a bounded line length, with horizontally scrollable
+tables and code blocks. Raw views and copying preserve the original source.
+Raw HTML is displayed as text, images are represented by their descriptions,
+and link destinations are shown as text without navigation. Previewing a document
+therefore does not fetch embedded media or execute document HTML.
 
 ### Named profile storage
 
@@ -300,7 +349,7 @@ The local control gateway remains a main-process adapter, not a renderer or host
 
 `SessionApplicationService` also retains a bounded, in-memory record of scoped control calls for the read-only Agent Context tab. Requests and responses are recursively bounded and secret-shaped fields are redacted. This context is deliberately lost on restart; the UI reports that loss instead of reconstructing a transcript.
 
-Root and child prompt orchestration is tracked as bounded, volatile turns in Main. Connections scoped to a root through its injected `SPAWNEA_SESSION_ID` are child-only for prompt delivery, because allowing them to write into their own tmux pane would create reentrant terminal input. Known interactive editors receive bracketed paste followed by a separate delayed Enter through PTY or tmux; callers never need a second submission key. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. Completed turns stop capturing later terminal activity. Bounded long polling wakes on output or state changes. Turns and captured output are not persisted across application restarts.
+Root and child prompt orchestration is tracked as bounded, volatile turns in Main. Connections scoped to a root through its injected `SPAWNEA_SESSION_ID` are child-only for prompt delivery, because allowing them to write into their own tmux pane would create reentrant terminal input. Known interactive editors receive bracketed paste followed by a separate delayed Enter through PTY or tmux; callers never need a second submission key. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. A turn completes only on positive evidence: a response delimiter, an `idle` state rule (including completion markers), process exit, or a stable screen, which is the fallback `idle` on a turn with output whose evaluated window stayed identical for at least 30 seconds of elapsed time. A fallback `idle` alone leaves the turn `unknown`. Completed turns stop capturing later terminal activity. Bounded long polling wakes on output or state changes. Turns and captured output are not persisted across application restarts.
 
 When a connection carries a `SPAWNEA_SESSION_ID`, the gateway performs bounded rechecks within the authentication timeout and requires that identity to resolve to an enabled, active local root (or a child session acting on itself) before exposing scoped operations. An empty identity is rejected immediately during authentication. Spawnea persists a root session's identity before launching its harness; if tmux startup fails, session and context persistence are rolled back.
 
@@ -422,18 +471,52 @@ export interface StateDetector {
 
 The domain retains event-related source values for adapter and fixture compatibility, but the current desktop supervisor supplies no harness events. The runtime path is tmux/process inspection, PTY activity, and parsed terminal output.
 
-#### Signal Precedence & Confidence
-```text
-process exit code (Confidence: 1.0)
-        ↓
-harness-specific output parser / capture-pane pattern (Confidence: 0.85)
-        ↓
-generic terminal prompt heuristics (Confidence: 0.75)
-        ↓
-PTY activity streaming (Confidence: 0.60)
-        ↓
-tmux / process liveness & foreground command (Confidence: 0.50)
+```typescript
+// Added to SessionStatusResult by the rule engine.
+interface StateRuleReference { file: 'factory' | 'user'; harness: string; position: number }
+// matchedRule?: StateRuleReference  -- the rule that decided the status
+// fallback?: boolean                -- no rule matched; the activity fallback decided
+// windowFingerprint?: string        -- digest of the evaluated window, never its text
 ```
+
+#### Decision order and configurable rules
+
+Each harness's patterns live in an ordered YAML rule list (see
+[State Rules](state-rules.md)). Spawnea bundles factory rules and combines them
+with an optional `<userData>/state-rules.yaml`: per harness, user rules are
+evaluated before factory rules, and a harness only the user defines is added. An
+invalid user file is ignored completely; the factory rules apply, the renderer
+shows a banner with the file, harness, and rule position, and the error is
+logged. Main loads, validates, and compiles the rules once at startup and shares
+one `StateDetector` (and so one rule set) between the session supervisor and the
+control service. There is no reloading, polling, or file watching; changes apply
+after a restart, and catalog reloads do not affect rules.
+
+```text
+1. connection and process: disconnected, done, error by exit code (no patterns)
+        ↓
+2. harness preparation step (TypeScript, context-dependent line trimming)
+   → evaluated window: last 10 non-blank lines
+   → ordered rules for the harness; the first matching rule wins
+        ↓
+3. fallback: PTY output within ~3 s, or a foreground command other than the
+   harness or a shell → working; otherwise idle
+```
+
+A live harness process is no longer evidence of work. Rules carry no
+confidence: rule matches report 0.9, the activity fallback 0.75 (PTY) or 0.65
+(foreground command), and the quiet fallback 0.5. The window size is a starting
+value under review with real captures.
+
+#### PTY activity and attach redraws
+
+Attaching a PTY to tmux, and resizing it, makes tmux repaint the whole screen even when the agent is idle. `PtyBroker` therefore forwards that output to the terminal but, inside a short window after registration and after each resize (2 seconds by default), does not count a brief output burst in `lastOutputAt` or `recentOutputBytes`. Typed input on the channel (text, Enter, Ctrl-C, or anything left after removing escape sequences) closes the window, so a response to it counts; the terminal's automatic replies to tmux queries (device attributes, version, mode, color, cursor-position and focus reports) do not. Output that keeps arriving for 400 ms (chunks less than 250 ms apart) counts as agent work, and resizes in quick succession cannot extend the window beyond 3 seconds from the first trigger. Only counted output feeds the `pty_activity` signal, so opening or resizing a terminal no longer reports an idle session as `working`. Polling intervals are unchanged.
+
+Known limit: slow output inside that window (chunks more than 250 ms apart during the first 2 seconds after an attach or resize) is still discarded as a repaint. The terminal-tail detectors still apply to it, and the output counts again once the window ends.
+
+#### Status refresh signal
+
+`SessionSupervisor` sends `session:checkStateChanged(sessionId, checking)` when a status inspection starts and ends. The renderer shows a neutral rotating border around the status icon only when an inspection lasts more than about 300 ms, and keeps it for at least about 600 ms. The icon itself changes only on `session:statusChanged`.
 
 ---
 
@@ -672,20 +755,70 @@ The PTY broker forwards output and input between the host adapter and the render
 
 ### 9.1 Terminal data retention boundary
 
-PTY bytes are forwarded to the renderer for live display and used transiently for activity metrics. Spawnea does not record a terminal transcript, upload terminal output to a Spawnea service, or run a remote terminal recorder. Status checks inspect a bounded `tmux capture-pane` tail in memory; that tail is not persisted as terminal history. Explicit state-feedback reports may persist a recent tail when the user submits a diagnostic report, and artifact actions may persist files the user uploads or the detector registers. Diagnostic logs use structured metadata, are stored in private application user-data storage by default, and use bounded asynchronous rotation; an explicit `SPAWNEA_LOG_FILE` override is the caller's responsibility to keep private.
+PTY bytes are forwarded to the renderer for live display and used transiently for activity metrics. Spawnea does not record a terminal transcript, upload terminal output to a Spawnea service, or run a remote terminal recorder. Status checks inspect a bounded `tmux capture-pane` tail in memory; that tail is not persisted as terminal history. Explicit state-feedback reports may persist a recent tail when the user submits a diagnostic report, and artifact actions may persist files the user uploads; the detector registers only pointers to original files and copies no content. Diagnostic logs use structured metadata, are stored in private application user-data storage by default, and use bounded asynchronous rotation; an explicit `SPAWNEA_LOG_FILE` override is the caller's responsibility to keep private.
 
 ### 9.2 Claude turn completion
 
 Claude's `✻ <verb> for <duration> · done <time>` terminal marker indicates an
-`idle` agent ready for another turn, even while its process remains alive. An
-editable `❯` draft, input separators, and mode footer may follow the marker. Draft
+`idle` agent ready for another turn, even while its process remains alive or the
+marker reports a background shell still running. An
+editable `❯` draft, input separators, up to two configured status-line rows
+directly below the input box, and mode footer may follow the marker. A row there
+that is a transcript entry or matches a built-in prompt, error, or activity rule
+is newer output, not status chrome. An unsent draft is not active work. Draft
 continuation lines inside the input separators also preserve completion evidence.
 An active interrupt hint such as `esc to interrupt` indicates `working`, including
-when it appears in the mode footer before the spinner. Newer output invalidates
+when it appears in the mode footer before the spinner. The working spinner is
+recognized on every animation frame (`·`, `✢`, `*`, `✳`, `✶`, `✻`, `✽`) when it
+starts at column 0 with a verb and ellipsis, optionally followed by an elapsed
+summary, so a capture does not report `idle` merely because it landed on an
+uncommon glyph. A column-0 spinner status line without an ellipsis, such as
+`✻ Waiting for API response · will retry in 2m 40s`, is also `working`; only the
+`· done` marker ends a turn. Indented transcript or draft lines such as Markdown
+bullets are not spinners. A background-command result or other output after the marker
+begins a newer turn. Newer output invalidates
 the completion evidence; prompts and activity from
 before the marker are historical. `done` remains reserved for session termination
-or a successful process exit. Caller-supplied detection rules still evaluate the
-current-turn lines before the built-in completion fallback.
+or a successful process exit. These are TypeScript preparation steps that trim
+the lines; the patterns themselves are state rules, and user rules evaluate the
+remaining lines before factory rules.
+
+### 9.3 Codex live signals and turn failures
+
+Codex status is decided only from live transcript and UI lines. Two regions are
+quoted content and carry no completion, working, input-request, failure, or
+recovery signal:
+
+- Tool content: the command text after a `• Ran`, `• Running`, `• Called`, or
+  `• Calling` header (the header verb, and a running tool's trailing live
+  `(<elapsed> • esc to interrupt)` suffix, remain an agent entry), `│` command
+  continuation lines, and an indented `└` output block with the deeper-indented
+  (four or more spaces) lines that continue it, such as results that quote a
+  prompt, a status line, or a `Worked for` marker. The filter runs over the whole
+  captured tail before the inspection window is taken, so a long block keeps its
+  `└` opener; a capture that already starts inside an unmarked continuation
+  cannot be recognized as tool output.
+- The editable input: when the last column-0 line is the `›` prompt (not a
+  numbered `› 1.` menu selector), its draft text, its indented draft lines, and
+  the footer below it. Placeholder, empty, and draft prompts are equivalent
+  ready prompts. A menu or approval that replaces the input prompt is still
+  evaluated, including an indented dialog with a numbered selector below a
+  submitted prompt when no composer footer (`? for shortcuts`) follows the
+  selector. A quoted dialog inside a draft keeps the footer below it and stays
+  draft text.
+
+Agent prose continuation (two-space indent) is not quoted content, so an
+indented `Worked for` completion marker in the transcript still ends a turn.
+
+Codex prints a failed turn as a column-0 `■ <message>` line, such as a model
+capacity failure, and then redraws its ready prompt. The failure ends the
+previous turn, so working or approval evidence from before it is historical.
+The latest unresolved failure reports `error` with the message as its reason.
+A later column-0 agent entry (`•`), a submitted prompt (an earlier column-0 `›`
+line), or a `Worked for` completion marker resolves it, and newer work or input
+is then reported normally. Indented lines are wrapped, quoted, or draft content
+and count as neither a failure nor a recovery. Interrupt notices that share the
+glyph are not failures.
 
 ---
 
