@@ -36,6 +36,7 @@ Spawnea is a local-first desktop workspace for supervising and operating AI codi
 
 - **[Vision](vision.md)**: Product goals, operational axioms, and MVP scope.
 - **[Architecture Specification](architecture.md)**: Monorepo layout, process isolation, SQLite schema, and state detection.
+- **[State Rules](state-rules.md)**: How session states are decided, the factory and user YAML rule files, and prompt-turn completion.
 - **[Local Control API](control-api.md)**: Local Unix-domain socket control protocol, scoping, session creation, prompt/turn lifecycle, and threat model.
 - **[Desktop Distribution](desktop-distribution.md)**: Local packaging and the implemented pipeline for future draft GitHub Releases.
 - **[Public-Source Privacy](public-source-privacy.md)**: Privacy standards and sanitization rules.

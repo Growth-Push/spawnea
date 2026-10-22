@@ -10,6 +10,7 @@ import type {
   AdoptSessionInput,
   OperationalCatalog,
   CatalogValidationError,
+  StateRulesStatus,
   HostSystemInfo,
   HostHealthResult,
   GitStatusResult,
@@ -30,6 +31,7 @@ import { UnadoptSessionModal } from './components/UnadoptSessionModal';
 import { FinishSessionModal } from './components/FinishSessionModal';
 import { StateFeedbackModal } from './components/StateFeedbackModal';
 import { CatalogErrorBanner } from './components/CatalogErrorBanner';
+import { StateRulesErrorBanner } from './components/StateRulesErrorBanner';
 import { QuickSwitcherModal } from './components/QuickSwitcherModal';
 import { NewProjectModal } from './components/NewProjectModal';
 import { LocalDiscoveryModal } from './components/LocalDiscoveryModal';
@@ -133,6 +135,7 @@ export function App(): React.JSX.Element {
   const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [catalogPath, setCatalogPath] = useState<string | undefined>(undefined);
   const [catalogErrors, setCatalogErrors] = useState<CatalogValidationError[] | null>(null);
+  const [stateRulesStatus, setStateRulesStatus] = useState<StateRulesStatus | null>(null);
   const [isReloadingCatalog, setIsReloadingCatalog] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTabType>('terminal');
@@ -237,6 +240,21 @@ export function App(): React.JSX.Element {
     }
     window.spawneaApi?.syncControlUiState?.({ activeSessionId, activeTab });
   }, [activeSessionId, activeTab]);
+
+  // State rules load once in Main and only change after a restart.
+  useEffect(() => {
+    let cancelled = false;
+    window.spawneaApi?.getStateRulesStatus?.()
+      .then((status) => {
+        if (!cancelled) setStateRulesStatus(status);
+      })
+      .catch(() => {
+        // The banner is optional; status detection keeps working without it.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -1378,6 +1396,8 @@ export function App(): React.JSX.Element {
             </button>
           </div>
         )}
+
+        <StateRulesErrorBanner status={stateRulesStatus} />
 
         {catalogErrors && catalogErrors.length > 0 && (
           <CatalogErrorBanner

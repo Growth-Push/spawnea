@@ -1,0 +1,45 @@
+
+ ▐▛███▛█   Claude Code v2.1.308
+▝▜██████▀  Opus 5.5 with medium effort · Claude Pro
+ ▝▝   ▝▝   /srv/code/demo
+
+
+❯ Run this exact bash command and wait for it: sleep 40 && echo finished. Then reply with one word.
+
+  Ran 1 shell command
+
+● The command is running in the background, because this environment blocks a plain sleep in the foreground. I'll reply when it finishes.
+
+✻ Baked for 11s · done 11:09 AM
+
+● Background command "Wait 40 seconds then print finished" completed (exit code 0)
+
+● Finished
+
+✻ Sautéed for 2s · done 11:10 AM
+
+❯ Use the Bash tool in the foreground (run_in_background false, timeout 120000) to run: python3 -c "import time; time.sleep(45); print(42)". Do not background
+  it. Then reply with the number only.
+
+  Ran 1 shell command
+
+● 42
+
+✻ Baked for 50s · done 11:11 AM
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5.5 | ws | main | ctx 5% | 5h 28% | 7d 61%
+  ⏵⏵ auto mode on (shift+tab to cycle)

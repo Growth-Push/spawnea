@@ -349,7 +349,7 @@ The local control gateway remains a main-process adapter, not a renderer or host
 
 `SessionApplicationService` also retains a bounded, in-memory record of scoped control calls for the read-only Agent Context tab. Requests and responses are recursively bounded and secret-shaped fields are redacted. This context is deliberately lost on restart; the UI reports that loss instead of reconstructing a transcript.
 
-Root and child prompt orchestration is tracked as bounded, volatile turns in Main. Connections scoped to a root through its injected `SPAWNEA_SESSION_ID` are child-only for prompt delivery, because allowing them to write into their own tmux pane would create reentrant terminal input. Known interactive editors receive bracketed paste followed by a separate delayed Enter through PTY or tmux; callers never need a second submission key. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. Completed turns stop capturing later terminal activity. Bounded long polling wakes on output or state changes. Turns and captured output are not persisted across application restarts.
+Root and child prompt orchestration is tracked as bounded, volatile turns in Main. Connections scoped to a root through its injected `SPAWNEA_SESSION_ID` are child-only for prompt delivery, because allowing them to write into their own tmux pane would create reentrant terminal input. Known interactive editors receive bracketed paste followed by a separate delayed Enter through PTY or tmux; callers never need a second submission key. Prompt delivery captures an initial non-mutating tmux cursor, and `spawnea_get_turn` returns incremental output with an opaque replacement cursor, version, truncation, and cursor-expiration metadata. A turn completes only on positive evidence: a response delimiter, an `idle` state rule (including completion markers), process exit, or a stable screen, which is the fallback `idle` on a turn with output whose evaluated window stayed identical for at least 30 seconds of elapsed time. A fallback `idle` alone leaves the turn `unknown`. Completed turns stop capturing later terminal activity. Bounded long polling wakes on output or state changes. Turns and captured output are not persisted across application restarts.
 
 When a connection carries a `SPAWNEA_SESSION_ID`, the gateway performs bounded rechecks within the authentication timeout and requires that identity to resolve to an enabled, active local root (or a child session acting on itself) before exposing scoped operations. An empty identity is rejected immediately during authentication. Spawnea persists a root session's identity before launching its harness; if tmux startup fails, session and context persistence are rolled back.
 
@@ -471,18 +471,42 @@ export interface StateDetector {
 
 The domain retains event-related source values for adapter and fixture compatibility, but the current desktop supervisor supplies no harness events. The runtime path is tmux/process inspection, PTY activity, and parsed terminal output.
 
-#### Signal Precedence & Confidence
-```text
-process exit code (Confidence: 1.0)
-        ↓
-harness-specific output parser / capture-pane pattern (Confidence: 0.85)
-        ↓
-generic terminal prompt heuristics (Confidence: 0.75)
-        ↓
-PTY activity streaming (Confidence: 0.60)
-        ↓
-tmux / process liveness & foreground command (Confidence: 0.50)
+```typescript
+// Added to SessionStatusResult by the rule engine.
+interface StateRuleReference { file: 'factory' | 'user'; harness: string; position: number }
+// matchedRule?: StateRuleReference  -- the rule that decided the status
+// fallback?: boolean                -- no rule matched; the activity fallback decided
+// windowFingerprint?: string        -- digest of the evaluated window, never its text
 ```
+
+#### Decision order and configurable rules
+
+Each harness's patterns live in an ordered YAML rule list (see
+[State Rules](state-rules.md)). Spawnea bundles factory rules and combines them
+with an optional `<userData>/state-rules.yaml`: per harness, user rules are
+evaluated before factory rules, and a harness only the user defines is added. An
+invalid user file is ignored completely; the factory rules apply, the renderer
+shows a banner with the file, harness, and rule position, and the error is
+logged. Main loads, validates, and compiles the rules once at startup and shares
+one `StateDetector` (and so one rule set) between the session supervisor and the
+control service. There is no reloading, polling, or file watching; changes apply
+after a restart, and catalog reloads do not affect rules.
+
+```text
+1. connection and process: disconnected, done, error by exit code (no patterns)
+        ↓
+2. harness preparation step (TypeScript, context-dependent line trimming)
+   → evaluated window: last 10 non-blank lines
+   → ordered rules for the harness; the first matching rule wins
+        ↓
+3. fallback: PTY output within ~3 s, or a foreground command other than the
+   harness or a shell → working; otherwise idle
+```
+
+A live harness process is no longer evidence of work. Rules carry no
+confidence: rule matches report 0.9, the activity fallback 0.75 (PTY) or 0.65
+(foreground command), and the quiet fallback 0.5. The window size is a starting
+value under review with real captures.
 
 #### PTY activity and attach redraws
 
@@ -748,13 +772,16 @@ when it appears in the mode footer before the spinner. The working spinner is
 recognized on every animation frame (`·`, `✢`, `*`, `✳`, `✶`, `✻`, `✽`) when it
 starts at column 0 with a verb and ellipsis, optionally followed by an elapsed
 summary, so a capture does not report `idle` merely because it landed on an
-uncommon glyph. Indented transcript or draft lines such as Markdown bullets are
-not spinners. A background-command result or other output after the marker
+uncommon glyph. A column-0 spinner status line without an ellipsis, such as
+`✻ Waiting for API response · will retry in 2m 40s`, is also `working`; only the
+`· done` marker ends a turn. Indented transcript or draft lines such as Markdown
+bullets are not spinners. A background-command result or other output after the marker
 begins a newer turn. Newer output invalidates
 the completion evidence; prompts and activity from
 before the marker are historical. `done` remains reserved for session termination
-or a successful process exit. Caller-supplied detection rules still evaluate the
-current-turn lines before the built-in completion fallback.
+or a successful process exit. These are TypeScript preparation steps that trim
+the lines; the patterns themselves are state rules, and user rules evaluate the
+remaining lines before factory rules.
 
 ### 9.3 Codex live signals and turn failures
 

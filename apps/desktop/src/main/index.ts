@@ -19,8 +19,10 @@ import {
   type LogLevel,
   type ArtifactDirection,
   type ArtifactOpenResult,
+  type StateRulesStatus,
 } from '@spawnea/domain';
 import { CatalogManager } from './catalog-manager.js';
+import { initializeStateRules } from './state-rules.js';
 import { SessionContextStore } from './session-context-store.js';
 import { PtyBroker } from './pty-broker.js';
 import { SessionManager } from './session-manager.js';
@@ -116,6 +118,7 @@ let sessionSupervisor: SessionSupervisor | null = null;
 let notificationBroker: NotificationBroker | null = null;
 let localDiscoveryService: LocalDiscoveryService | null = null;
 let agentControlService: AgentControlService | null = null;
+let stateRulesStatus: StateRulesStatus | null = null;
 let controlGateway: ControlGateway | null = null;
 let mainWindowRef: BrowserWindow | null = null;
 let shutdownPromise: Promise<void> | null = null;
@@ -356,6 +359,7 @@ function registerIpcHandlers(
   }
 
   // Operational Catalog Handlers
+  ipcMain.handle('stateRules:getStatus', async () => stateRulesStatus);
   ipcMain.handle('catalog:get', async () => sanitizeCatalogStateForRenderer(catManager.getState()));
   ipcMain.handle('catalog:reload', async () => {
     const result = catManager.reload();
@@ -1077,6 +1081,11 @@ app.whenReady().then(async () => {
       await seedInitialDataIfEmpty(repositories);
     }
 
+    // Loaded once; catalog reloads and file edits do not change the rules
+    // until Spawnea restarts.
+    const stateRules = initializeStateRules(app.getPath('userData'), logger.child('state-rules'));
+    stateRulesStatus = stateRules.status;
+
     const sessionsDir = join(app.getPath('userData'), 'sessions');
     contextStore = new SessionContextStore({ storeDir: sessionsDir, logger });
     ptyBroker = new PtyBroker(logger.child('pty'));
@@ -1093,6 +1102,7 @@ app.whenReady().then(async () => {
       repositories,
       sessionManager,
       logger: logger.child('control'),
+      stateDetector: stateRules.detector,
       getActiveCatalog: () => catalogManager?.getActiveCatalog() ?? null,
       notifyNavigate: (state) => {
         if (!mainWindowRef || mainWindowRef.isDestroyed()) return false;
@@ -1154,6 +1164,7 @@ app.whenReady().then(async () => {
       contextStore,
       ptyBroker,
       artifactManager,
+      stateDetector: stateRules.detector,
       logger: logger.child('supervisor'),
       feedbackDir: join(app.getPath('userData'), 'feedback'),
       pollIntervalMs: statusCheckIntervalMs,

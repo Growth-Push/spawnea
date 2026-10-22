@@ -12,6 +12,7 @@ import type {
   AdoptSessionInput,
   DiscoveredTmuxSession,
   CatalogState,
+  StateRulesStatus,
   CatalogReloadResult,
   AddProjectToCatalogInput,
   HostTestResult,
@@ -59,6 +60,7 @@ export const api = {
 
   // Operational Catalog
   getCatalog: (): Promise<CatalogState> => ipcRenderer.invoke('catalog:get'),
+  getStateRulesStatus: (): Promise<StateRulesStatus | null> => ipcRenderer.invoke('stateRules:getStatus'),
   reloadCatalog: (): Promise<CatalogReloadResult> => ipcRenderer.invoke('catalog:reload'),
   addProjectToCatalog: (input: AddProjectToCatalogInput): Promise<CatalogReloadResult> =>
     ipcRenderer.invoke('catalog:addProject', input),

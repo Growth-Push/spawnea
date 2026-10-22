@@ -7,6 +7,8 @@
   },
   "include": [
     "electron.vite.config.ts",
+    "../../packages/state/src/rules/rule-config.ts",
+    "../../packages/state/src/harness-ids.ts",
     "vitest.config.ts",
     "src/main/**/*",
     "src/cli/**/*",

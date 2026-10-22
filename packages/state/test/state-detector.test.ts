@@ -253,7 +253,7 @@ describe('StateDetector', () => {
     }, 'claude');
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
-    expect(res.confidence).toBeGreaterThanOrEqual(0.95);
+    expect(res.matchedRule).toMatchObject({ file: 'factory', harness: 'claude' });
   });
 
   it('detects a new Claude turn from an interrupt footer before its spinner appears', () => {
@@ -400,7 +400,7 @@ describe('StateDetector', () => {
     const res = detector.detectStatus(signals);
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
-    expect(res.reason).toContain('Shell prompt ready');
+    expect(res.matchedRule).toMatchObject({ file: 'factory', harness: 'generic' });
   });
 
   it('reports idle for background sessions (isPtyAttached: false) with live tmux session and healthy process', () => {

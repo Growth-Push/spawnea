@@ -2,6 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { GrokStatusAdapter } from '../src/adapters/grok-adapter.js';
 import { StateDetector } from '../src/state-detector.js';
 import type { SessionSignals } from '@spawnea/domain';
+import { loadStateRules } from '../src/rules/load-state-rules.js';
+
+function userRules(yaml: string) {
+  return loadStateRules({ userFilePath: '/fictional/user-data/state-rules.yaml', readFile: () => yaml }).ruleSet;
+}
 
 function readyComposer(extraBefore: string[] = []): string[] {
   const scrollbar = `${' '.repeat(40)}█`;
@@ -58,77 +63,44 @@ describe('GrokStatusAdapter', () => {
     );
     expect(res.status).toBe('needs_input');
     expect(res.source).toBe('terminal_prompt');
-    expect(res.reason).toContain('waiting for an answer');
+    expect(res.matchedRule).toMatchObject({ file: 'factory', harness: 'grok' });
   });
 
-  it('lets a custom confirmation rule supply the question card result', () => {
+  it('lets a user rule decide the question card before the factory rules', () => {
+    const rules = userRules("harnesses:\n  grok:\n    rules:\n      - state: needs_input\n        patterns: ['Tab:next answer']\n");
     const res = adapter.evaluateStatus(
       signals([
         '   ◆ Waiting on answers for Which status does Spawnea show?',
         '  ┃  1 (○) Needs attention',
         '  Tab:next answer  │  Esc:scrollback  │  Shift+x:dismiss',
       ]),
-      {
-        customRules: [{
-          id: 'custom-confirm-card',
-          name: 'Custom confirmation card',
-          category: 'confirmation',
-          pattern: /Tab:next answer/,
-          confidence: 0.42,
-        }],
-      }
+      { rules }
     );
     expect(res.status).toBe('needs_input');
-    expect(res.confidence).toBe(0.42);
+    expect(res.matchedRule).toEqual({ file: 'user', harness: 'grok', position: 1 });
     expect(res.detectedPrompt).toContain('Tab:next answer');
-    expect(res.reason).toContain('Terminal prompt requires user input');
   });
 
-  it('lets a custom error rule override the ready composer', () => {
-    const res = adapter.evaluateStatus(signals(readyComposer(['     Worked for 7.8s'])), {
-      customRules: [{
-        id: 'custom-composer-error',
-        name: 'Custom composer error',
-        category: 'error',
-        pattern: /Grok\s+\d+(?:\.\d+)?/,
-        confidence: 0.77,
-      }],
-    });
-    expect(res.status).toBe('error');
-    expect(res.confidence).toBe(0.77);
+  it('lets a user rule override the ready composer', () => {
+    const rules = userRules("harnesses:\n  grok:\n    rules:\n      - state: needs_input\n        patterns: ['Grok\\s+\\d+(?:\\.\\d+)?']\n");
+    const res = adapter.evaluateStatus(signals(readyComposer(['     Worked for 7.8s'])), { rules });
+    expect(res.status).toBe('needs_input');
+    expect(res.matchedRule).toEqual({ file: 'user', harness: 'grok', position: 1 });
     expect(res.detectedPrompt).toContain('Grok 4.7');
-    expect(res.reason).toContain('Execution error detected');
   });
 
-  it('lets a grok-scoped global rule override the ready composer', () => {
-    const res = adapter.evaluateStatus(signals(readyComposer(['     Worked for 7.8s'])), {
-      customRules: [{
-        id: 'grok-scoped-error',
-        name: 'Grok scoped error',
-        category: 'error',
-        harness: 'Grok',
-        pattern: /Grok\s+\d+(?:\.\d+)?/g,
-        confidence: 0.33,
-      }],
-    });
-    expect(res.status).toBe('error');
-    expect(res.confidence).toBe(0.33);
-    expect(res.detectedPrompt).toContain('Grok 4.7');
-    expect(res.reason).toContain('Execution error detected');
+  it('resolves user harness keys case-insensitively', () => {
+    const rules = userRules("harnesses:\n  Grok:\n    rules:\n      - state: needs_input\n        patterns: ['Grok\\s+\\d']\n");
+    const res = adapter.evaluateStatus(signals(readyComposer(['     Worked for 7.8s'])), { rules });
+    expect(res.status).toBe('needs_input');
+    expect(res.matchedRule?.file).toBe('user');
   });
 
-  it('ignores custom rules that target another harness', () => {
-    const res = adapter.evaluateStatus(signals(readyComposer(['     Worked for 7.8s'])), {
-      customRules: [{
-        id: 'hermes-only-error',
-        name: 'Hermes only error',
-        category: 'error',
-        harness: 'hermes',
-        pattern: /Grok\s+\d/,
-        confidence: 0.99,
-      }],
-    });
+  it('ignores user rules that target another harness', () => {
+    const rules = userRules("harnesses:\n  hermes:\n    rules:\n      - state: error\n        patterns: ['Grok\\s+\\d']\n");
+    const res = adapter.evaluateStatus(signals(readyComposer(['     Worked for 7.8s'])), { rules });
     expect(res.status).toBe('idle');
+    expect(res.matchedRule?.file).toBe('factory');
   });
 
   it('detects needs_input while a question card is waiting, even if the TUI is repainting', () => {
@@ -153,7 +125,7 @@ describe('GrokStatusAdapter', () => {
     expect(res.status).toBe('needs_input');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Waiting on answers');
-    expect(res.reason).toContain('waiting for an answer');
+    expect(res.matchedRule).toMatchObject({ file: 'factory', harness: 'grok' });
   });
 
   it('returns to idle after a question card is replaced by the finished composer', () => {
@@ -175,7 +147,7 @@ describe('GrokStatusAdapter', () => {
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toBe('Worked for 7.8s');
-    expect(res.reason).toContain('Grok turn finished');
+    expect(res.detectedPrompt).toContain('Worked for');
   });
 
   it('keeps working when a new tool line follows the completion marker', () => {
@@ -208,7 +180,7 @@ describe('GrokStatusAdapter', () => {
     const res = adapter.evaluateStatus(signals(readyComposer()));
     expect(res.status).toBe('idle');
     expect(res.source).toBe('terminal_prompt');
-    expect(res.reason).toContain('ready composer');
+    expect(res.matchedRule).toMatchObject({ file: 'factory', harness: 'grok' });
   });
 
   it('treats the live Grok welcome artwork as idle when the composer is ready', () => {
@@ -231,7 +203,7 @@ describe('GrokStatusAdapter', () => {
       'Reading files',
     ])));
     expect(res.status).toBe('working');
-    expect(res.source).toBe('pty_activity');
+    expect(res.source).toBe('terminal_prompt');
   });
 
   it('does not report idle when new work replaces welcome content', () => {
@@ -250,7 +222,7 @@ describe('GrokStatusAdapter', () => {
     expect(res.status).toBe('working');
   });
 
-  it('keeps recent PTY output as working when the ready composer is not on screen', () => {
+  it('reports an active Grok entry as working when the ready composer is not on screen', () => {
     const res = adapter.evaluateStatus(
       signals(['Reading packages/state/src/adapters/grok-adapter.ts', '◆ Run vitest'], {
         lastOutputAt: new Date(),
@@ -258,7 +230,7 @@ describe('GrokStatusAdapter', () => {
       })
     );
     expect(res.status).toBe('working');
-    expect(res.source).toBe('pty_activity');
+    expect(res.source).toBe('terminal_prompt');
   });
 
   it('resolves the grok harness through the state detector', () => {
@@ -287,9 +259,9 @@ describe('GrokStatusAdapter', () => {
 
     const res = adapter.evaluateStatus(signals(tailLines));
     expect(res.status).toBe('idle');
-    expect(res.confidence).toBe(0.96);
+    expect(res.matchedRule?.harness).toBe('grok');
     expect(res.detectedPrompt).toBe('Worked for 9.1s');
-    expect(res.reason).toBe('Grok turn finished: Worked for 9.1s');
+    expect(res.detectedPrompt).toBe('Worked for 9.1s');
   });
 
   it('detects idle when historical Ask is followed by resolved Worked for with trailing scrollbar', () => {
@@ -302,9 +274,9 @@ describe('GrokStatusAdapter', () => {
       ])
     );
     expect(res.status).toBe('idle');
-    expect(res.confidence).toBe(0.96);
+    expect(res.matchedRule?.harness).toBe('grok');
     expect(res.detectedPrompt).toBe('Worked for 9.1s');
-    expect(res.reason).toContain('Grok turn finished: Worked for 9.1s');
+    expect(res.detectedPrompt).toBe('Worked for 9.1s');
   });
 
   it('detects working when substantive active work follows Worked for with trailing scrollbar', () => {
@@ -333,10 +305,10 @@ describe('GrokStatusAdapter', () => {
       ])
     );
     expect(res.status).toBe('needs_input');
-    expect(res.confidence).toBe(0.97);
+    expect(res.matchedRule?.harness).toBe('grok');
     expect(res.source).toBe('terminal_prompt');
     expect(res.detectedPrompt).toContain('Waiting on answers');
-    expect(res.reason).toContain('waiting for an answer');
+    expect(res.matchedRule).toMatchObject({ file: 'factory', harness: 'grok' });
   });
 
   it('detects idle when Grok turn completion includes a Recap summary block', () => {
@@ -352,9 +324,9 @@ describe('GrokStatusAdapter', () => {
       ])
     );
     expect(res.status).toBe('idle');
-    expect(res.confidence).toBe(0.96);
+    expect(res.matchedRule?.harness).toBe('grok');
     expect(res.detectedPrompt).toBe('Worked for 9.1s');
-    expect(res.reason).toContain('Grok turn finished: Worked for 9.1s');
+    expect(res.detectedPrompt).toBe('Worked for 9.1s');
   });
 
   it('keeps working when new active work mentioning Recap follows completion', () => {
