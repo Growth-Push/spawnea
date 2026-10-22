@@ -1,7 +1,20 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { StateFeedbackModal } from './StateFeedbackModal';
+
+// Records every status a badge renders, including renders before effects run.
+const { badgeStatuses } = vi.hoisted(() => ({ badgeStatuses: [] as string[] }));
+vi.mock('./StatusBadge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./StatusBadge')>();
+  return {
+    ...actual,
+    StatusBadge: (props: React.ComponentProps<typeof actual.StatusBadge>) => {
+      badgeStatuses.push(props.status);
+      return actual.StatusBadge(props);
+    },
+  };
+});
 import type { Session, Server, Agent, StateFeedbackSnapshot, StateFeedbackResult } from '@spawnea/domain';
 
 describe('StateFeedbackModal (FG-4.2.5)', () => {
@@ -326,5 +339,117 @@ describe('StateFeedbackModal (FG-4.2.5)', () => {
     expect(report).not.toHaveProperty('detectedConfidence');
     expect(report).not.toHaveProperty('detectedSource');
     expect(JSON.stringify(report)).not.toContain('IPC channel closed');
+  });
+
+  it('keeps the status displayed at open in the dialog and the report after the session status changes', async () => {
+    const { rerender } = render(
+      <StateFeedbackModal isOpen={true} session={{ ...mockSession, status: 'working' }} agent={mockAgent} onClose={vi.fn()} />
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('feedback-decision')).toBeDefined();
+    });
+
+    rerender(<StateFeedbackModal isOpen={true} session={{ ...mockSession, status: 'idle' }} agent={mockAgent} onClose={vi.fn()} />);
+    const displayed = screen.getByText('Displayed Status').parentElement as HTMLElement;
+    expect(displayed.textContent).toContain('Working');
+    expect(displayed.textContent).not.toContain('Idle');
+
+    fireEvent.click(screen.getByTestId('feedback-modal-submit-btn'));
+    await waitFor(() => {
+      expect(window.spawneaApi.submitStateFeedback).toHaveBeenCalledTimes(1);
+    });
+    expect((window.spawneaApi.submitStateFeedback as any).mock.calls[0][0].observedStatus).toBe('working');
+  });
+
+  it('never shows the previous session status or snapshot after switching sessions', async () => {
+    const { rerender } = render(
+      <StateFeedbackModal isOpen={true} session={{ ...mockSession, status: 'working' }} agent={mockAgent} onClose={vi.fn()} />
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('feedback-decision')).toBeDefined();
+    });
+    (window as any).spawneaApi.getStateSnapshot = vi.fn(() => new Promise(() => {}));
+    badgeStatuses.length = 0;
+
+    // The first render for the new session happens before its open effect runs.
+    rerender(
+      <StateFeedbackModal isOpen={true} session={{ ...mockSession, id: 'sess-feedback-2', status: 'error' }} agent={mockAgent} onClose={vi.fn()} />
+    );
+    expect(badgeStatuses).toContain('error');
+    expect(badgeStatuses).not.toContain('working');
+    // The previous session's detected status (idle) is not shown either.
+    expect(badgeStatuses).not.toContain('idle');
+  });
+
+  it('never shows the previous opening snapshot after closing and reopening the same session', async () => {
+    const session: Session = { ...mockSession, status: 'working' };
+    const { rerender } = render(<StateFeedbackModal isOpen={true} session={session} agent={mockAgent} onClose={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('feedback-decision')).toBeDefined();
+    });
+    rerender(<StateFeedbackModal isOpen={false} session={session} agent={mockAgent} onClose={vi.fn()} />);
+    (window as any).spawneaApi.getStateSnapshot = vi.fn(() => new Promise(() => {}));
+    badgeStatuses.length = 0;
+
+    rerender(<StateFeedbackModal isOpen={true} session={session} agent={mockAgent} onClose={vi.fn()} />);
+    // The previous opening's detected status (idle) is never rendered.
+    expect(badgeStatuses).not.toContain('idle');
+    expect(screen.queryByTestId('feedback-decision')).toBeNull();
+    expect(screen.getByText(/Capturing terminal snapshot/)).toBeDefined();
+  });
+
+  describe('stale snapshot responses', () => {
+    function deferredSnapshots() {
+      const pending: Array<{ resolve: (snapshot: StateFeedbackSnapshot) => void; reject: (error: Error) => void }> = [];
+      (window as any).spawneaApi.getStateSnapshot = vi.fn(
+        () => new Promise<StateFeedbackSnapshot>((resolve, reject) => pending.push({ resolve, reject }))
+      );
+      return pending;
+    }
+
+    it('ignores a response for the previous session after switching sessions', async () => {
+      const pending = deferredSnapshots();
+      const other: Session = { ...mockSession, id: 'sess-feedback-2', name: 'Other Session' };
+      const { rerender } = render(<StateFeedbackModal isOpen={true} session={mockSession} agent={mockAgent} onClose={vi.fn()} />);
+      rerender(<StateFeedbackModal isOpen={true} session={other} agent={mockAgent} onClose={vi.fn()} />);
+      expect(pending).toHaveLength(2);
+
+      await act(async () => {
+        pending[1].resolve({ ...mockSnapshot, sessionId: other.id, reason: 'Second session snapshot' });
+      });
+      await act(async () => {
+        pending[0].resolve({ ...mockSnapshot, reason: 'First session snapshot' });
+      });
+
+      expect(screen.getByText('Second session snapshot')).toBeDefined();
+      expect(screen.queryByText('First session snapshot')).toBeNull();
+    });
+
+    it('ignores a response or failure that arrives after the dialog closed', async () => {
+      const pending = deferredSnapshots();
+      const { rerender } = render(<StateFeedbackModal isOpen={true} session={mockSession} agent={mockAgent} onClose={vi.fn()} />);
+      rerender(<StateFeedbackModal isOpen={false} session={mockSession} agent={mockAgent} onClose={vi.fn()} />);
+      rerender(<StateFeedbackModal isOpen={true} session={mockSession} agent={mockAgent} onClose={vi.fn()} />);
+      expect(pending).toHaveLength(2);
+
+      await act(async () => {
+        pending[0].resolve({ ...mockSnapshot, reason: 'Snapshot from the closed dialog' });
+      });
+      expect(screen.queryByText('Snapshot from the closed dialog')).toBeNull();
+      expect(screen.getByText(/Capturing terminal snapshot/)).toBeDefined();
+
+      rerender(<StateFeedbackModal isOpen={false} session={mockSession} agent={mockAgent} onClose={vi.fn()} />);
+      rerender(<StateFeedbackModal isOpen={true} session={mockSession} agent={mockAgent} onClose={vi.fn()} />);
+      await act(async () => {
+        pending[1].reject(new Error('Failure from the closed dialog'));
+      });
+      expect(screen.queryByTestId('feedback-capture-failed')).toBeNull();
+      expect(screen.getByText(/Capturing terminal snapshot/)).toBeDefined();
+
+      await act(async () => {
+        pending[2].resolve({ ...mockSnapshot, reason: 'Current snapshot' });
+      });
+      expect(screen.getByText('Current snapshot')).toBeDefined();
+    });
   });
 });

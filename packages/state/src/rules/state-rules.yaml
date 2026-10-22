@@ -35,7 +35,9 @@ harnesses:
       - &generic_working
         state: working
         patterns:
-          - '^[^\S\n]*[•*·-]?[^\S\n]*(?:working|generating|executing|processing|analyzing)\b'
+          # Whitespace after the optional bullet belongs to the bullet, so long
+          # whitespace runs cannot backtrack polynomially.
+          - '^[^\S\n]*(?:[•*·-][^\S\n]*)?(?:working|generating|executing|processing|analyzing)\b'
           - '\breading (?:file|files|context|directory)\b'
           - '^[^\S\n]*[✻✽][^\S\n]+[A-Za-z][A-Za-z -]*…'
       - &generic_error
@@ -75,9 +77,11 @@ harnesses:
       - *generic_working
       - *generic_error
       # Turn completion marker, the empty input box, and the first-run placeholder.
+      # Each space run between marker words is followed by a word character,
+      # which keeps matching linear.
       - state: idle
         patterns:
-          - '^[^\S\n]*[✻✽][^\S\n]+[A-Za-z][A-Za-z -]*[^\S\n]+for[^\S\n]+\d+(?:\.\d+)?[smh](?:[^\S\n]+\d+(?:\.\d+)?[smh])*[^\S\n]*·[^\S\n]*done\b'
+          - '^[^\S\n]*[✻✽][^\S\n]+[A-Za-z][A-Za-z-]*(?: +[A-Za-z-]+)*[^\S\n]+for[^\S\n]+\d+(?:\.\d+)?[smh](?:[^\S\n]+\d+(?:\.\d+)?[smh])*[^\S\n]*·[^\S\n]*done\b'
           - '^[^\S\n]*[>❯][^\S\n]*$'
           - '^[^\S\n]*[>❯][^\S\n]*Try[^\S\n]+"'
       - *generic_idle
@@ -121,7 +125,7 @@ harnesses:
           - '^[^\S\n]*[•*·-]?[^\S\n]*¿?[^\n]+\?[^\S\n]*\n(?:[^\S\n]*[•*·-][^\S\n]+[^\n]+\n?){2,}'
       - state: working
         patterns:
-          - '^[^\S\n]*[•*·-]?[^\S\n]*Working\b'
+          - '^[^\S\n]*(?:[•*·-][^\S\n]*)?Working\b'
           - '^[^\S\n]*•[^\S\n]*(?:Thinking|Reasoning|Searching|Running|Executing|Exploring|Reading)\b'
           - '^[^\S\n]*[┌╭•*·-][^\S\n]*(?:Reasoning|Thinking)\b'
       - *generic_working
@@ -198,7 +202,8 @@ harnesses:
         patterns:
           - '^[^\S\n]*Worked for[^\S\n]+\d[\d.smh ]*$'
           - '[│|][^\S\n]*[❯›>][^\S\n]*[│|][^\S\n]*$'
-          - 'Shift\+Tab:[^\S\n]*mode[^\n]*shortcuts'
+          # The scan stops at a repeated Shift+Tab:, which keeps matching linear.
+          - 'Shift\+Tab:[^\S\n]*mode(?:(?!Shift\+Tab:)[^\n])*shortcuts'
       - *generic_needs_input
       - *generic_working
       - *generic_error

@@ -7,7 +7,9 @@ const INPUT_BOX_BORDER = /^\s*─{3,}\s*$/;
 // The editable input line. A numbered selector such as `❯ 1. Yes` is a dialog.
 const INPUT_LINE = /^\s*❯(?!\s*\d+\.)/;
 const INPUT_PLACEHOLDER = /^\s*❯\s*Try\s+"/;
-const TURN_COMPLETION = /^\s*[✻✽]\s+[A-Za-z][A-Za-z -]*\s+for\s+\d+(?:\.\d+)?[smh](?:\s+\d+(?:\.\d+)?[smh])*\s*·\s*done\b/i;
+// Each space run between words is followed by a word character, so a long
+// run of spaces cannot backtrack polynomially.
+const TURN_COMPLETION = /^\s*[✻✽]\s+[A-Za-z][A-Za-z-]*(?: +[A-Za-z-]+)*\s+for\s+\d+(?:\.\d+)?[smh](?:\s+\d+(?:\.\d+)?[smh])*\s*·\s*done\b/i;
 const MODE_FOOTER = /^\s*⏵⏵[^\n]*\b(?:auto\s+mode|plan\s+mode|accept edits(?:\s+mode)?|bypass permissions(?:\s+mode)?)\s+on\b/i;
 const TRANSCRIPT_LINE = /^\s*[●⎿]/;
 // A configured status line renders directly below the input box.

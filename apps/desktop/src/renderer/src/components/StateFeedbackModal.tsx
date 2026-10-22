@@ -122,10 +122,16 @@ export function StateFeedbackModal({
   agent,
   onClose,
 }: StateFeedbackModalProps): React.JSX.Element | null {
-  const [snapshot, setSnapshot] = useState<StateFeedbackSnapshot | null>(null);
+  /** Outcome of the snapshot request, kept with the session it was requested for. */
+  const [snapshotResult, setSnapshotResult] = useState<{
+    sessionId: string;
+    snapshot: StateFeedbackSnapshot | null;
+    /** Shown when the snapshot could not be requested; the report can still be saved. */
+    error: string | null;
+  } | null>(null);
+  /** Status displayed when the dialog opened; later status updates do not change the report. */
+  const [observed, setObserved] = useState<{ sessionId: string; status: SessionStatus } | null>(null);
   const [isLoadingSnapshot, setIsLoadingSnapshot] = useState(false);
-  /** Shown when the snapshot could not be requested; the report can still be saved. */
-  const [snapshotError, setSnapshotError] = useState<string | null>(null);
 
   const [expectedStatus, setExpectedStatus] = useState<SessionStatus>('needs_input');
   const [userNotes, setUserNotes] = useState('');
@@ -149,8 +155,9 @@ export function StateFeedbackModal({
 
   useEffect(() => {
     if (!isOpen || !session) {
-      setSnapshot(null);
-      setSnapshotError(null);
+      setSnapshotResult(null);
+      setObserved(null);
+      setIsLoadingSnapshot(false);
       setUserNotes('');
       setSubmitResult(null);
       setSubmitError(null);
@@ -158,30 +165,53 @@ export function StateFeedbackModal({
       return;
     }
 
+    const openedStatus = session.status;
+    setObserved({ sessionId: session.id, status: openedStatus });
+    // A response that arrives after the dialog closed or switched sessions is ignored.
+    let cancelled = false;
+
     const fetchSnapshot = async () => {
       setIsLoadingSnapshot(true);
-      setSnapshotError(null);
+      setSnapshotResult(null);
       try {
         if (!window.spawneaApi?.getStateSnapshot) {
           throw new Error('The desktop API is unavailable');
         }
         const res = await window.spawneaApi.getStateSnapshot(session.id);
-        setSnapshot(res);
+        if (cancelled) return;
+        setSnapshotResult({ sessionId: session.id, snapshot: res, error: null });
         // Suggest an alternate expected status by default
-        setExpectedStatus(suggestedExpectedStatus(res.detectedStatus ?? session.status));
+        setExpectedStatus(suggestedExpectedStatus(res.detectedStatus ?? openedStatus));
       } catch (err: any) {
-        setSnapshot(null);
-        setSnapshotError(err.message || 'Failed to capture live session snapshot');
-        setExpectedStatus(suggestedExpectedStatus(session.status));
+        if (cancelled) return;
+        setSnapshotResult({
+          sessionId: session.id,
+          snapshot: null,
+          error: err.message || 'Failed to capture live session snapshot',
+        });
+        setExpectedStatus(suggestedExpectedStatus(openedStatus));
       } finally {
-        setIsLoadingSnapshot(false);
+        if (!cancelled) {
+          setIsLoadingSnapshot(false);
+        }
       }
     };
 
     fetchSnapshot();
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen, session?.id]);
 
   if (!isOpen || !session) return null;
+
+  // Until the open effect records this session, the status on screen is the one
+  // being opened with; a previous session's status is never carried over.
+  const displayedStatus = observed?.sessionId === session.id ? observed.status : session.status;
+  // Likewise, a snapshot or error from a previous session is never shown or saved.
+  const currentResult = snapshotResult?.sessionId === session.id ? snapshotResult : null;
+  const snapshot = currentResult?.snapshot ?? null;
+  const snapshotError = currentResult?.error ?? null;
 
   const handleSubmit = async () => {
     if (!session) return;
@@ -199,7 +229,7 @@ export function StateFeedbackModal({
       harness: snapshot?.harness || agent?.harness || agent?.command,
       worktreePath: session.worktreePath,
       branch: session.branch,
-      observedStatus: session.status,
+      observedStatus: displayedStatus,
       capture,
       ...(captured
         ? {
@@ -345,7 +375,7 @@ export function StateFeedbackModal({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Displayed Status</span>
-                    <StatusBadge status={session.status} />
+                    <StatusBadge status={displayedStatus} />
                   </div>
                   {snapshot?.detectedStatus && (
                     <div className="flex items-center gap-2" data-testid="feedback-detected-status">

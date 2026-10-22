@@ -3,25 +3,53 @@ import { RuleBasedStatusAdapter } from './rule-based-adapter.js';
 import type { LinePreparationContext } from './types.js';
 
 const SCROLLBAR_ROW = /^\s*█+\s*$/;
-const TRAILING_SCROLLBAR = /[\s█]+$/;
 const QUESTION_CARD_HEADER = /Tab:\s*next answer|Waiting on answers\b/i;
 const QUESTION_CARD_LINE = /Waiting on answers\b|Tab:\s*next answer|Enter:\s*submit|Type your answer here|↑\/↓\s*navigate|\(\s*[○●]\s*\)|^\s*┃/i;
-const READY_COMPOSER = /[│|]\s*[❯›>]\s*[│|]\s*$|Shift\+Tab:\s*mode.*shortcuts/i;
+const EMPTY_COMPOSER = /[│|]\s*[❯›>]\s*[│|]\s*$/;
+const SHORTCUT_BAR_MODE = /Shift\+Tab:\s*mode/i;
+const SHORTCUT_BAR_END = /shortcuts/i;
 const COMPLETION_LINE = /^\s*Worked for\s+\d[\d.smh ]*$/i;
 const BOX_CHROME = /^[╭╮╰╯┌┐└┘─━│├┤┬┴┼]+$/;
-const MODEL_FOOTER = /Grok\s+\d+(?:\.\d+)?\b.*[╭╮╰╯│─]|[╭╮╰╯│─].*Grok\s+\d+(?:\.\d+)?\b/;
+const MODEL_NAME = /Grok\s+\d+(?:\.\d+)?\b/;
+const BOX_GLYPH = /[╭╮╰╯│─]/;
 // Welcome-panel rows, tips, update notices, the release-channel badge, and
 // the header row with the branch, working directory, and context usage.
 const WELCOME_CHROME = /^\s*[│|╭╰]|^\s*Tip:|^\s*Update: v|^\s*\[[a-z]+\]\s*$|^\s*(?:\uE0A0\s*)?[\w./-]+\s+[~/]\S*(?:\s.*\[Dashboard\])?\s*$/i;
 const RECAP_LINE = /^\s*┃/;
+
+// The helpers below scan with separate linear patterns instead of one pattern
+// with `.*` between two parts, which backtracks polynomially on long lines
+// that repeat the first part.
+
+function stripTrailingScrollbar(line: string): string {
+  let end = line.length;
+  while (end > 0 && (line[end - 1] === '█' || line[end - 1].trim() === '')) {
+    end--;
+  }
+  return line.slice(0, end);
+}
+
+/** The empty composer box, or the shortcut bar shown below it. */
+function isReadyComposer(line: string): boolean {
+  if (EMPTY_COMPOSER.test(line)) {
+    return true;
+  }
+  const mode = SHORTCUT_BAR_MODE.exec(line);
+  return mode !== null && SHORTCUT_BAR_END.test(line.slice(mode.index + mode[0].length));
+}
+
+/** The composer border that carries the model name. */
+function isModelFooter(line: string): boolean {
+  return MODEL_NAME.test(line) && BOX_GLYPH.test(line);
+}
 
 /** Screen furniture that the TUI repaints while idle. */
 function isReadyChrome(line: string): boolean {
   const trimmed = line.trim();
   return (
     BOX_CHROME.test(trimmed) ||
-    READY_COMPOSER.test(line) ||
-    MODEL_FOOTER.test(line) ||
+    isReadyComposer(line) ||
+    isModelFooter(line) ||
     WELCOME_CHROME.test(line) ||
     RECAP_LINE.test(line) ||
     COMPLETION_LINE.test(line)
@@ -41,7 +69,7 @@ export class GrokStatusAdapter extends RuleBasedStatusAdapter {
   prepareLines(rawLines: string[], { rules }: LinePreparationContext): string[] {
     let lines = rawLines
       .filter((line) => !SCROLLBAR_ROW.test(line))
-      .map((line) => line.replace(TRAILING_SCROLLBAR, ''));
+      .map(stripTrailingScrollbar);
 
     let card = -1;
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -53,7 +81,7 @@ export class GrokStatusAdapter extends RuleBasedStatusAdapter {
     if (card >= 0) {
       const workingRules = rules.filter((rule) => rule.state === 'working');
       const later = lines.slice(card + 1);
-      const replaced = later.some((line) => READY_COMPOSER.test(line));
+      const replaced = later.some(isReadyComposer);
       const resumed = later.some((line) =>
         !QUESTION_CARD_LINE.test(line) && workingRules.some((rule) => ruleMatchesLine(rule, line))
       );
@@ -73,7 +101,7 @@ export class GrokStatusAdapter extends RuleBasedStatusAdapter {
     // screen. Otherwise it and the older marker are removed, and other rules
     // or the fallback decide.
     if (lines.some((line) => !isReadyChrome(line))) {
-      return lines.filter((line) => !READY_COMPOSER.test(line) && !COMPLETION_LINE.test(line));
+      return lines.filter((line) => !isReadyComposer(line) && !COMPLETION_LINE.test(line));
     }
     return lines;
   }
