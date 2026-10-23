@@ -48,6 +48,26 @@ pnpm start
 
 On Linux environments running Wayland, `pnpm start` automatically passes `--ozone-platform-hint=auto` to avoid Xwayland mapping delays.
 
+### Updating bundles without rebuilding native modules
+
+For interface or other bundled-code changes, when the installed native modules are already compatible with this checkout's Electron version and ABI, run:
+
+```bash
+pnpm --filter @spawnea/desktop build:bundles
+```
+
+This only compiles the main, preload, CLI, and renderer bundles into `apps/desktop/out/` in this checkout. It does not rebuild native modules, update another checkout or installed application, or change the running app. The next launch from this checkout uses that output; `pnpm app` launches it without rebuilding. Root `pnpm start` still runs the full build before launching.
+
+After installing dependencies, changing Electron or its ABI, updating `better-sqlite3` or `node-pty`, or running Node-ABI tests, prepare native modules for Electron explicitly:
+
+```bash
+pnpm --filter @spawnea/desktop rebuild:native
+```
+
+This forcibly rebuilds only `better-sqlite3` and `node-pty` for Electron and does not compile bundles. Use `pnpm build` for the complete flow: native rebuild first, then bundles. Development (`pnpm dev`), bootstrap smoke (`pnpm smoke`), and packaging also prepare Electron-compatible native modules automatically. `pnpm test` retains its separate `better-sqlite3` rebuild for Node's ABI; rebuild for Electron again before launching existing bundles after tests.
+
+### Packaging
+
 To create a package for the current host without publishing it:
 
 ```bash
@@ -228,7 +248,7 @@ children. Do not hard-code another session's ID in shared configuration.
 If you see errors such as `Cannot find module .../pty.node` or `better-sqlite3.node`:
 
 - Ensure Python 3 and a C++ compiler (`g++` / `clang++`) are installed.
-- Run `pnpm dev` or `pnpm build`, which invokes `electron-rebuild` for the Electron ABI.
+- Run `pnpm --filter @spawnea/desktop rebuild:native` to force an Electron ABI rebuild, or `pnpm dev` / `pnpm build` to include it in the full flow. `build:bundles` alone cannot repair incompatible native modules.
 - For pure Node testing without Electron, running `pnpm test` triggers the Node ABI rebuild.
 
 ### Missing `tmux`
