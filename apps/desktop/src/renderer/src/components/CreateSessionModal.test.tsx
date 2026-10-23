@@ -89,7 +89,7 @@ describe('CreateSessionModal', () => {
     expect(optionValues).toEqual(['srv-1:claude', 'srv-1:codex', 'srv-1:shell']);
   });
 
-  it('renders target host segmented pills with local and remote indicators without latency or offline badges', () => {
+  it('renders icon-only hosts with accessible names, focus and hover tooltips', () => {
     render(
       <CreateSessionModal
         isOpen={true}
@@ -106,8 +106,19 @@ describe('CreateSessionModal', () => {
     );
 
     expect(screen.getByTestId('host-pill-group')).toBeDefined();
-    expect(screen.getByTestId('host-badge-local')).toBeDefined();
-    expect(screen.getByTestId('host-badge-remote')).toBeDefined();
+    expect(screen.queryByTestId('host-badge-local')).toBeNull();
+    expect(screen.queryByTestId('host-badge-remote')).toBeNull();
+    const host = screen.getByRole('radio', { name: 'Local Workstation (shortcut 1)' });
+    expect(within(host).queryByText('Local Workstation')).toBeNull();
+    expect(screen.getByTestId('selected-host-name').textContent).toBe('Local Workstation');
+    fireEvent.focus(host);
+    expect(screen.getByRole('tooltip').textContent).toContain('Local Workstation');
+    fireEvent.blur(host);
+    fireEvent.mouseEnter(screen.getByTestId('host-pill-srv-2'));
+    expect(screen.getByRole('tooltip').textContent).toContain('Remote Box');
+    fireEvent.mouseLeave(screen.getByTestId('host-pill-srv-2'));
+    fireEvent.focus(screen.getByTestId('provider-radio-codex'));
+    expect(screen.getByRole('tooltip').textContent).toContain('Codex');
     expect(screen.queryByTestId('host-latency')).toBeNull();
     expect(screen.queryByText('offline')).toBeNull();
   });
@@ -324,7 +335,7 @@ describe('CreateSessionModal', () => {
     expect(nativeSelect.value).toBe('srv-1:grok');
   });
 
-  it('transforms task name into lowercase slug and provides live preview of branch and tmux', () => {
+  it('keeps editable task names without an execution preview', () => {
     render(
       <CreateSessionModal
         isOpen={true}
@@ -339,12 +350,9 @@ describe('CreateSessionModal', () => {
     const taskInput = screen.getByTestId('input-task-name');
     fireEvent.change(taskInput, { target: { value: 'Fix OAuth Login Bug #404!' } });
 
-    // Slug: lowercase, hyphenated, alphanumeric, max 30
-    const previewSlug = screen.getByTestId('preview-slug');
-    expect(previewSlug.textContent).toBe('fix-oauth-login-bug-404');
-
-    const previewTmux = screen.getByTestId('preview-tmux-session');
-    expect(previewTmux.textContent).toBe('spawnea-fix-oauth-login-bug-404');
+    expect((taskInput as HTMLInputElement).value).toBe('Fix OAuth Login Bug #404!');
+    expect(screen.queryByTestId('preview-slug')).toBeNull();
+    expect(screen.queryByTestId('preview-tmux-session')).toBeNull();
   });
 
   it('auto-selects createdProject when passed', () => {
@@ -518,6 +526,8 @@ describe('CreateSessionModal', () => {
       />
     );
 
+    expect(screen.queryByTestId('checkbox-use-worktree')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Customize workspace'));
     const checkbox = screen.getByTestId('checkbox-use-worktree') as HTMLInputElement;
     expect(checkbox.checked).toBe(false);
   });
@@ -553,6 +563,7 @@ describe('CreateSessionModal', () => {
       catalog,
     };
     const { rerender } = render(<CreateSessionModal {...props} />);
+    fireEvent.click(screen.getByLabelText('Customize workspace'));
     fireEvent.click(screen.getByTestId('checkbox-use-worktree'));
     expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(true);
 
@@ -568,10 +579,12 @@ describe('CreateSessionModal', () => {
 
     rerender(<CreateSessionModal {...props} isOpen={false} />);
     rerender(<CreateSessionModal {...props} />);
+    expect(screen.queryByTestId('checkbox-use-worktree')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Customize workspace'));
     expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(false);
   });
 
-  it('previews custom worktree path when worktrees_dir is configured in catalog', () => {
+  it('exposes worktree options only after explicit customization', () => {
     const catalog = {
       version: 1 as const,
       hosts: {
@@ -605,8 +618,10 @@ describe('CreateSessionModal', () => {
       />
     );
 
+    expect(screen.queryByTestId('radio-workspace-new-worktree')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Customize workspace'));
     fireEvent.click(screen.getByTestId('radio-workspace-new-worktree'));
-    expect(screen.getByText(/\/workspace\/spawnea\/\.my-worktrees\//)).toBeDefined();
+    expect(screen.getByTestId('radio-workspace-new-worktree').getAttribute('aria-pressed')).toBe('true');
   });
 
   it('allows adopting an existing worktree via manual input and submits worktreePath', async () => {
@@ -623,6 +638,7 @@ describe('CreateSessionModal', () => {
     );
 
     // Switch to existing worktree
+    fireEvent.click(screen.getByLabelText('Customize workspace'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('radio-workspace-existing-worktree'));
     });
@@ -656,6 +672,7 @@ describe('CreateSessionModal', () => {
       />
     );
 
+    fireEvent.click(screen.getByLabelText('Customize workspace'));
     const rootBtn = screen.getByTestId('radio-workspace-root');
     const existingBtn = screen.getByTestId('radio-workspace-existing-worktree');
 
@@ -698,6 +715,7 @@ describe('CreateSessionModal', () => {
       expect(discoverProjectWorktrees).not.toHaveBeenCalled();
 
       // Click existing worktree option
+      fireEvent.click(screen.getByLabelText('Customize workspace'));
       await act(async () => {
         fireEvent.click(screen.getByTestId('radio-workspace-existing-worktree'));
       });
@@ -720,6 +738,7 @@ describe('CreateSessionModal', () => {
       />
     );
 
+    fireEvent.click(screen.getByLabelText('Customize workspace'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('radio-workspace-existing-worktree'));
     });
@@ -885,163 +904,36 @@ describe('CreateSessionModal', () => {
     expect(agentTrigger.textContent).toContain('No harnesses for host');
   });
 
-  it('submits no model by default and forwards an exact model ID literally', async () => {
+  it('omits model overrides and preserves the literal multiline initial prompt', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<CreateSessionModal isOpen={true} onClose={vi.fn()} onSubmit={onSubmit} servers={mockServers} projects={mockProjects} agents={mockAgents} />);
-
-    await waitFor(() => expect((screen.getByTestId('select-project') as HTMLSelectElement).value).toBe('srv-1:spawnea'));
-    fireEvent.change(screen.getByTestId('input-task-name'), { target: { value: 'Model test' } });
-    fireEvent.click(screen.getByTestId('submit-create-session'));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ model: undefined })));
-
-    onSubmit.mockClear();
-    fireEvent.change(screen.getByTestId('input-task-name'), { target: { value: 'Exact model test' } });
-    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
-    fireEvent.change(screen.getByLabelText('Exact model ID'), { target: { value: 'literal-model.v1:/exact' } });
-    fireEvent.click(screen.getByTestId('submit-create-session'));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ model: 'literal-model.v1:/exact' })));
-  });
-
-  it.each([
-    { name: 'OpenAI Review', harness: 'codex' },
-    { name: 'Claude Review', harness: 'review-profile' },
-  ])('keeps unsupported $name wrappers on their configured default', async ({ name, harness }) => {
-    const onSubmit = vi.fn().mockResolvedValue(undefined);
-    const wrapper = { ...mockAgents[2], id: 'srv-1:review-profile', name, harness, command: 'example-wrapper' };
-    render(<CreateSessionModal isOpen={true} onClose={vi.fn()} onSubmit={onSubmit} servers={mockServers} projects={mockProjects} agents={[wrapper]} />);
-    await waitFor(() => expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe(wrapper.id));
     expect(screen.queryByTestId('session-model')).toBeNull();
-    expect(screen.getByText('Harness default (explicit model selection is not supported for this harness)')).toBeDefined();
-    fireEvent.change(screen.getByTestId('input-task-name'), { target: { value: 'Wrapper default' } });
+    expect(screen.queryByText('Execution Summary')).toBeNull();
+    expect(screen.queryByText(/explicit model selection/)).toBeNull();
+    fireEvent.change(screen.getByLabelText('Initial prompt (optional)'), { target: { value: '  First line\nSecond line  ' } });
     fireEvent.click(screen.getByTestId('submit-create-session'));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ agentId: wrapper.id, model: undefined })));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(onSubmit.mock.calls[0][0].initialPrompt).toBe('  First line\nSecond line  ');
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('model');
   });
 
-  it('clears a requested model when the selected profile changes to an unsupported executable', () => {
-    const onSubmit = vi.fn();
-    const props = { isOpen: true, onClose: vi.fn(), onSubmit, servers: mockServers, projects: mockProjects };
-    const { rerender } = render(<CreateSessionModal {...props} agents={[mockAgents[2]]} />);
-    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
-    fireEvent.change(screen.getByLabelText('Exact model ID'), { target: { value: 'Literal.v1:Exact_ID' } });
-    rerender(<CreateSessionModal {...props} agents={[{ ...mockAgents[2], command: 'example-wrapper' }]} />);
-    expect(screen.queryByTestId('session-model')).toBeNull();
-    rerender(<CreateSessionModal {...props} agents={[mockAgents[2]]} />);
-    expect((screen.getByTestId('session-model') as HTMLSelectElement).value).toBe('default');
-    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
-    expect((screen.getByLabelText('Exact model ID') as HTMLInputElement).value).toBe('');
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it.each(['', ' model', 'model ', 'mo del', 'model$unsafe'])('rejects invalid model ID %j before onSubmit', async (value) => {
+  it('clears workspace overrides when customization is turned off and reopened', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<CreateSessionModal isOpen={true} onClose={vi.fn()} onSubmit={onSubmit} servers={mockServers} projects={mockProjects} agents={mockAgents} />);
-    await waitFor(() => expect((screen.getByTestId('select-project') as HTMLSelectElement).value).toBe('srv-1:spawnea'));
-    fireEvent.change(screen.getByTestId('input-task-name'), { target: { value: 'Invalid model test' } });
-    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
-    fireEvent.change(screen.getByLabelText('Exact model ID'), { target: { value } });
+    const toggle = screen.getByLabelText('Customize workspace');
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByTestId('radio-workspace-existing-worktree'));
+    fireEvent.change(screen.getByTestId('input-manual-worktree-path'), { target: { value: '/workspace/existing' } });
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId('input-manual-worktree-path')).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByTestId('radio-workspace-root').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByTestId('radio-workspace-existing-worktree'));
+    expect((screen.getByTestId('input-manual-worktree-path') as HTMLInputElement).value).toBe('');
+    fireEvent.click(toggle);
     fireEvent.click(screen.getByTestId('submit-create-session'));
-    await waitFor(() => expect(screen.getByTestId('create-session-error-banner')).toBeDefined());
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  const profileAgents: Agent[] = [
-    ...mockAgents,
-    { ...mockAgents[1], id: 'srv-1:claude-review', name: 'Claude Review' },
-  ];
-
-  function selectCustomModel() {
-    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
-    fireEvent.change(screen.getByLabelText('Exact model ID'), { target: { value: 'Literal.v1:Exact_ID' } });
-    expect((screen.getByTestId('session-model') as HTMLSelectElement).value).toBe('custom');
-    expect((screen.getByLabelText('Exact model ID') as HTMLInputElement).value).toBe('Literal.v1:Exact_ID');
-  }
-
-  function expectDefaultModel() {
-    expect((screen.getByTestId('session-model') as HTMLSelectElement).value).toBe('default');
-    expect(screen.queryByLabelText('Exact model ID')).toBeNull();
-    fireEvent.change(screen.getByTestId('session-model'), { target: { value: 'custom' } });
-    expect((screen.getByLabelText('Exact model ID') as HTMLInputElement).value).toBe('');
-  }
-
-  function resetTestProps() {
-    return { onClose: vi.fn(), onSubmit: vi.fn().mockResolvedValue(undefined), servers: mockServers, projects: mockProjects, agents: profileAgents };
-  }
-
-  it('resets a custom model on close/reopen of the same mounted instance without submission', () => {
-    const props = resetTestProps();
-    const { rerender } = render(<CreateSessionModal {...props} isOpen={true} />);
-    selectCustomModel();
-    rerender(<CreateSessionModal {...props} isOpen={false} />);
-    expect(screen.queryByTestId('session-model')).toBeNull();
-    rerender(<CreateSessionModal {...props} isOpen={true} />);
-    expectDefaultModel();
-    expect(props.onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('resets a custom model when a different profile is clicked on the same host and harness', () => {
-    const props = resetTestProps();
-    render(<CreateSessionModal {...props} isOpen={true} />);
-    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-1:claude');
-    selectCustomModel();
-    fireEvent.click(screen.getByTestId('profile-pill-srv-1:claude-review'));
-    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-1:claude-review');
-    expect((screen.getByTestId('select-server') as HTMLSelectElement).value).toBe('srv-1');
-    expectDefaultModel();
-    expect(props.onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('resets a custom model when the profile changes by keyboard on the same harness', () => {
-    const props = resetTestProps();
-    render(<CreateSessionModal {...props} isOpen={true} />);
-    selectCustomModel();
-    fireEvent.keyDown(screen.getByTestId('profile-pill-srv-1:claude'), { key: 'ArrowRight' });
-    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-1:claude-review');
-    expectDefaultModel();
-    expect(props.onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('resets a custom model when the harness changes by keyboard', () => {
-    const props = resetTestProps();
-    render(<CreateSessionModal {...props} isOpen={true} />);
-    selectCustomModel();
-    fireEvent.keyDown(screen.getByTestId('select-agent-trigger'), { key: '1' });
-    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-1:codex');
-    expectDefaultModel();
-    expect(props.onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('resets a custom model when changed options automatically select another profile', () => {
-    const props = resetTestProps();
-    const { rerender } = render(<CreateSessionModal {...props} isOpen={true} />);
-    selectCustomModel();
-    rerender(<CreateSessionModal {...props} agents={profileAgents.filter((agent) => agent.id !== 'srv-1:claude')} isOpen={true} />);
-    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-1:codex');
-    expectDefaultModel();
-    expect(props.onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('resets a custom model immediately when the host changes', () => {
-    const props = resetTestProps();
-    render(<CreateSessionModal {...props}
-      projects={[...mockProjects, { ...mockProjects[0], id: 'srv-2:spawnea', serverId: 'srv-2' }]}
-      agents={[...profileAgents, { ...mockAgents[2], id: 'srv-2:codex' }]} isOpen={true} />);
-    selectCustomModel();
-    fireEvent.click(screen.getByTestId('host-pill-srv-2'));
-    expect((screen.getByTestId('select-server') as HTMLSelectElement).value).toBe('srv-2');
-    expect((screen.getByTestId('select-agent') as HTMLSelectElement).value).toBe('srv-2:codex');
-    expectDefaultModel();
-    expect(props.onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('resets a custom model immediately after successful submission while still mounted and open', async () => {
-    const props = resetTestProps();
-    render(<CreateSessionModal {...props} isOpen={true} />);
-    fireEvent.change(screen.getByTestId('input-task-name'), { target: { value: 'Model reset task' } });
-    selectCustomModel();
-    fireEvent.click(screen.getByTestId('submit-create-session'));
-    await waitFor(() => expect(props.onClose).toHaveBeenCalledOnce());
-    expect(props.onSubmit).toHaveBeenCalledWith(expect.objectContaining({ model: 'Literal.v1:Exact_ID' }));
-    expectDefaultModel();
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ useWorktree: false, worktreePath: undefined, baseBranch: undefined });
   });
 
 });

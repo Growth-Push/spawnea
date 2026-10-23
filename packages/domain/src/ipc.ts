@@ -32,6 +32,11 @@ export interface CreateSessionInput {
   model?: string;
 }
 
+/** Renderer-only launch intent; initialPrompt is sent separately after creation. */
+export interface CreateSessionLaunchInput extends CreateSessionInput {
+  initialPrompt?: string;
+}
+
 export type ChildSessionWorkspaceMode = 'same-project' | 'new-worktree';
 
 export interface CreateChildSessionInput {

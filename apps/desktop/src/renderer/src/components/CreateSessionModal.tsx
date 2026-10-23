@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Server, Project, Agent, CreateSessionInput, HostTestResult } from '@spawnea/domain';
-import { getRootModelFlag, MODEL_ID_PATTERN } from '@spawnea/domain';
+import type { Server, Project, Agent, CreateSessionLaunchInput, HostTestResult } from '@spawnea/domain';
 import {
   X,
   Bot,
@@ -66,7 +65,7 @@ export function isLocalHost(host: string): boolean {
 interface CreateSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (input: CreateSessionInput) => Promise<void>;
+  onSubmit: (input: CreateSessionLaunchInput) => Promise<void>;
   servers: Server[];
   projects: Project[];
   agents: Agent[];
@@ -93,8 +92,10 @@ export function CreateSessionModal({
   const [serverId, setServerId] = useState<string>(() => servers[0]?.id || '');
   const [projectId, setProjectId] = useState<string>('');
   const [agentId, setAgentId] = useState<string>('');
-  const [modelChoice, setModelChoice] = useState<string>('');
-  const [modelMode, setModelMode] = useState<'default' | 'custom'>('default');
+  const [initialPrompt, setInitialPrompt] = useState('');
+  const [customizeWorkspace, setCustomizeWorkspace] = useState(false);
+  const submittingRef = useRef(false);
+  const [choiceTooltip, setChoiceTooltip] = useState<{ group: 'host' | 'harness'; text: string } | null>(null);
   const [task, setTask] = useState<string>('');
   const [isCustomTask, setIsCustomTask] = useState<boolean>(false);
   const [baseBranch, setBaseBranch] = useState<string>('');
@@ -210,8 +211,8 @@ export function CreateSessionModal({
     setHostTestResult(null);
     setIsProjectOpen(false);
     setProjectSearchQuery('');
-    setModelChoice('');
-    setModelMode('default');
+    setInitialPrompt('');
+    setCustomizeWorkspace(false);
 
     // Restore configured baseBranch from currently selected project
     prevProjectIdRef.current = projectId;
@@ -230,8 +231,6 @@ export function CreateSessionModal({
       clearTimeout(timer);
     };
   }, [isOpen]);
-
-
 
   // Synchronize selections when modal opens or lists change.
   useEffect(() => {
@@ -306,8 +305,6 @@ export function CreateSessionModal({
       setProjectSearchQuery('');
       setIsProjectOpen(false);
       setAgentId(availableAgents[0]?.id || '');
-      setModelChoice('');
-      setModelMode('default');
     }
     prevEffectiveServerIdRef.current = effectiveServerId;
   }, [effectiveServerId, isOpen, availableProjects, availableAgents, createdProject]);
@@ -335,13 +332,9 @@ export function CreateSessionModal({
     if (availableAgents.length > 0) {
       if (!agentId || !availableAgents.some((a) => a.id === agentId)) {
         setAgentId(availableAgents[0].id);
-        setModelChoice('');
-        setModelMode('default');
       }
     } else {
       setAgentId('');
-      setModelChoice('');
-      setModelMode('default');
     }
   }, [availableAgents, agentId]);
 
@@ -397,14 +390,6 @@ export function CreateSessionModal({
   const currentProviderAgents = useMemo(() => {
     return groupedAgents.get(selectedProvider) || [];
   }, [groupedAgents, selectedProvider]);
-
-  const supportsExplicitModel = Boolean(getRootModelFlag(currentAgent?.command || ''));
-
-  useEffect(() => {
-    setModelChoice('');
-    setModelMode('default');
-  }, [currentAgent?.command]);
-
   const handleSelectProvider = useCallback(
     (pKey: string) => {
       const agentsInGroup = groupedAgents.get(pKey) || [];
@@ -412,8 +397,6 @@ export function CreateSessionModal({
         if (!agentsInGroup.some((a) => a.id === agentId)) {
           setAgentId(agentsInGroup[0].id);
         }
-        setModelChoice('');
-        setModelMode('default');
       }
     },
     [groupedAgents, agentId]
@@ -743,8 +726,6 @@ export function CreateSessionModal({
         e.preventDefault();
         e.stopPropagation();
         setAgentId(currentProviderAgents[numIdx].id);
-        setModelChoice('');
-        setModelMode('default');
         const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
         buttons?.[numIdx]?.focus();
         return;
@@ -754,8 +735,6 @@ export function CreateSessionModal({
         e.preventDefault();
         const nextIdx = (currentIdx + 1) % currentProviderAgents.length;
         setAgentId(currentProviderAgents[nextIdx].id);
-        setModelChoice('');
-        setModelMode('default');
         const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
         buttons?.[nextIdx]?.focus();
         return;
@@ -765,8 +744,6 @@ export function CreateSessionModal({
         e.preventDefault();
         const prevIdx = (currentIdx - 1 + currentProviderAgents.length) % currentProviderAgents.length;
         setAgentId(currentProviderAgents[prevIdx].id);
-        setModelChoice('');
-        setModelMode('default');
         const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]');
         buttons?.[prevIdx]?.focus();
         return;
@@ -840,30 +817,9 @@ export function CreateSessionModal({
 
   const isWorktreeConfigured = Boolean(catalogProject?.worktree?.enabled);
 
-  // Slugification rule: lowercase, hyphens, alphanumeric only, max 30 chars
-  const slug =
-    task
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .substring(0, 30) || 'task';
-
-  const previewBasePath = selectedProject ? selectedProject.rootPath : `/workspace/code`;
-  const configuredWorktreesDir = catalogProject?.worktree?.worktrees_dir || catalogProject?.worktrees_dir;
-  const previewWorktreesRoot = configuredWorktreesDir
-    ? (configuredWorktreesDir.startsWith('/')
-        ? configuredWorktreesDir.replace(/\/+$/, '')
-        : `${previewBasePath}/${configuredWorktreesDir}`.replace(/\/+$/, ''))
-    : `${previewBasePath}__worktrees`;
-  const previewWorktreePath = `${previewWorktreesRoot}/${slug}`;
-  const previewTaskBranch = `spawnea/${slug}`;
-  const previewBaseBranch = baseBranch.trim() !== '' ? baseBranch.trim() : 'Current branch (e.g. main)';
-  const previewTmux = `spawnea-${slug}`;
-  const copyFiles = catalogProject?.worktree?.copy_files || [];
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting) return;
+    if (submittingRef.current) return;
 
     if (!task.trim()) {
       setError('Please provide a task description.');
@@ -881,11 +837,6 @@ export function CreateSessionModal({
       setError('Please select an agent harness.');
       return;
     }
-    if (supportsExplicitModel && modelMode === 'custom' && !MODEL_ID_PATTERN.test(modelChoice)) {
-      setError('Enter an exact model ID without whitespace or unsupported characters.');
-      return;
-    }
-    const requestedModel = supportsExplicitModel && modelMode === 'custom' ? modelChoice : undefined;
 
     if (workspaceOption === 'existing-worktree' && !existingWorktreePath.trim()) {
       setError('Please select or specify an existing worktree path.');
@@ -893,6 +844,7 @@ export function CreateSessionModal({
     }
 
     try {
+      submittingRef.current = true;
       setIsSubmitting(true);
       setError(null);
       const isEffectiveWorktree = Boolean(isWorktreeConfigured && workspaceOption === 'new-worktree');
@@ -905,19 +857,19 @@ export function CreateSessionModal({
         baseBranch: isEffectiveWorktree ? baseBranch.trim() || undefined : undefined,
         useWorktree: isEffectiveWorktree,
         worktreePath: effectiveWorktreePath,
-        model: requestedModel,
+        initialPrompt: initialPrompt.trim() ? initialPrompt : undefined,
       });
       // Reset form
       setTask('');
       setBaseBranch('');
       setWorkspaceOption('root');
       setExistingWorktreePath('');
-      setModelChoice('');
-      setModelMode('default');
+      setInitialPrompt('');
       onClose();
     } catch (err: any) {
       setError(err?.message || 'Failed to create session. Please check details and retry.');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -942,6 +894,7 @@ export function CreateSessionModal({
           <button
             type="button"
             onClick={onClose}
+            disabled={isSubmitting}
             className="p-1 hover:bg-[#21262d] rounded-md text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
@@ -1055,7 +1008,7 @@ export function CreateSessionModal({
               role="radiogroup"
               aria-label="Target Host"
               data-testid="host-pill-group"
-              className="flex flex-wrap gap-2"
+              className="flex flex-nowrap gap-2 overflow-x-auto py-1"
             >
               {servers.length === 0 ? (
                 <button
@@ -1070,8 +1023,8 @@ export function CreateSessionModal({
               ) : (
                 servers.map((s, idx) => {
                   const isSelected = s.id === effectiveServerId;
-                  const isLocal = isLocalHost(s.host);
                   const shortcut = idx < 10 ? NUMBER_SHORTCUTS[idx] : null;
+                  const tooltip = `${s.name}${shortcut ? ` (shortcut ${shortcut})` : ''}`;
 
                   return (
                     <button
@@ -1079,6 +1032,12 @@ export function CreateSessionModal({
                       ref={isSelected ? serverTriggerRef : undefined}
                       type="button"
                       role="radio"
+                      aria-label={tooltip}
+                      aria-describedby={choiceTooltip?.group === 'host' && choiceTooltip.text === tooltip ? 'host-choice-tooltip' : undefined}
+                      onFocus={() => setChoiceTooltip({ group: 'host', text: tooltip })}
+                      onBlur={() => setChoiceTooltip(null)}
+                      onMouseEnter={() => setChoiceTooltip({ group: 'host', text: tooltip })}
+                      onMouseLeave={() => setChoiceTooltip(null)}
                       aria-checked={isSelected}
                       tabIndex={isSelected ? 0 : -1}
                       autoFocus={isOpen && isSelected}
@@ -1086,7 +1045,7 @@ export function CreateSessionModal({
                       data-testid={isSelected ? 'select-server-trigger' : `host-pill-${s.id}`}
                       onClick={() => handleServerChange(s.id)}
                       onKeyDown={(e) => handleHostKeyDown(e, idx)}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
+                      className={`shrink-0 flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
                         isSelected
                           ? 'bg-emerald-500/15 border-emerald-500/60 text-white shadow-sm ring-1 ring-emerald-500/30'
                           : 'bg-[#0d1117] border-[#30363d] text-zinc-300 hover:bg-[#1c2128] hover:border-zinc-500'
@@ -1094,23 +1053,7 @@ export function CreateSessionModal({
                     >
                       <span className="contents">
                         <OsIcon osName={`${s.name} ${s.host}`} className="w-4 h-4 shrink-0" />
-                        <span className="font-medium truncate max-w-[140px]">{s.name}</span>
-                        {/* Local vs Remote indicator */}
-                        {isLocal ? (
-                          <span
-                            data-testid="host-badge-local"
-                            className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/25 font-mono shrink-0"
-                          >
-                            Local
-                          </span>
-                        ) : (
-                          <span
-                            data-testid="host-badge-remote"
-                            className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/25 font-mono shrink-0"
-                          >
-                            Remote
-                          </span>
-                        )}
+
                         {shortcut && (
                           <kbd className="text-[10px] font-mono text-zinc-500 bg-[#161b22] border border-[#30363d] px-1 rounded shrink-0">
                             {shortcut}
@@ -1123,6 +1066,11 @@ export function CreateSessionModal({
               )}
             </div>
           </div>
+
+          {choiceTooltip?.group === 'host' && (
+            <div role="tooltip" id="host-choice-tooltip" className="absolute z-20 rounded-md border border-[#30363d] bg-[#21262d] px-2 py-1 text-xs text-zinc-200 shadow-lg">{choiceTooltip.text}</div>
+          )}
+          <div data-testid="selected-host-name" className="text-xs text-zinc-300">{servers.find((s) => s.id === effectiveServerId)?.name}</div>
 
           {/* Searchable Project Combobox */}
           <div
@@ -1318,7 +1266,7 @@ export function CreateSessionModal({
             <select
               data-testid="select-agent"
               value={agentId}
-              onChange={(e) => { setAgentId(e.target.value); setModelChoice(''); setModelMode('default'); }}
+              onChange={(e) => setAgentId(e.target.value)}
               disabled={isSubmitting}
               aria-hidden="true"
               tabIndex={-1}
@@ -1354,9 +1302,10 @@ export function CreateSessionModal({
               ) : (
                 orderedProviders.map((pKey, idx) => {
                   const isSelected = selectedProvider === pKey;
-                  const count = groupedAgents.get(pKey)?.length || 0;
                   const displayName =
-                    pKey === 'shell' ? 'Interactive Shell' : getProviderDisplayName(pKey as ProviderType);
+                    pKey === 'shell' ? 'Interactive Shell' : pKey === 'generic'
+                      ? (groupedAgents.get(pKey) || []).map((a) => a.name).join(', ')
+                      : getProviderDisplayName(pKey as ProviderType);
                   const shortcut = idx < 10 ? NUMBER_SHORTCUTS[idx] : null;
 
                   return (
@@ -1364,6 +1313,12 @@ export function CreateSessionModal({
                       key={pKey}
                       type="button"
                       role="radio"
+                      aria-label={displayName}
+                      aria-describedby={choiceTooltip?.group === 'harness' && choiceTooltip.text === displayName ? 'harness-choice-tooltip' : undefined}
+                      onFocus={() => setChoiceTooltip({ group: 'harness', text: displayName })}
+                      onBlur={() => setChoiceTooltip(null)}
+                      onMouseEnter={() => setChoiceTooltip({ group: 'harness', text: displayName })}
+                      onMouseLeave={() => setChoiceTooltip(null)}
                       aria-checked={isSelected}
                       tabIndex={isSelected ? 0 : -1}
                       disabled={isSubmitting}
@@ -1382,12 +1337,7 @@ export function CreateSessionModal({
                           harness={pKey === 'shell' ? 'shell' : undefined}
                           className="w-4 h-4 shrink-0"
                         />
-                        <span className="font-medium">{displayName}</span>
-                        {count > 1 && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400 font-mono">
-                            {count}
-                          </span>
-                        )}
+
                         {shortcut && (
                           <kbd className="text-[10px] font-mono text-zinc-500 bg-[#161b22] border border-[#30363d] px-1 rounded shrink-0">
                             {shortcut}
@@ -1400,8 +1350,11 @@ export function CreateSessionModal({
               )}
             </div>
 
-            {/* Tier 2: Profile Selection (when multi-profile or Hermes) */}
-            {currentProviderAgents.length > 0 && (
+            {choiceTooltip?.group === 'harness' && (
+              <div role="tooltip" id="harness-choice-tooltip" className="absolute z-20 rounded-md border border-[#30363d] bg-[#21262d] px-2 py-1 text-xs text-zinc-200 shadow-lg">{choiceTooltip.text}</div>
+            )}
+            {/* Profiles are exposed only when there is a choice to make. */}
+            {currentProviderAgents.length > 1 && (
               <div
                 role="radiogroup"
                 aria-label="Agent Profile"
@@ -1421,7 +1374,7 @@ export function CreateSessionModal({
                       tabIndex={isProfileSelected ? 0 : -1}
                       disabled={isSubmitting}
                       data-testid={`profile-pill-${ag.id}`}
-                      onClick={() => { setAgentId(ag.id); setModelChoice(''); setModelMode('default'); }}
+                      onClick={() => setAgentId(ag.id)}
                       onKeyDown={(e) => handleProfileKeyDown(e, pIdx)}
                       className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                         isProfileSelected
@@ -1436,9 +1389,7 @@ export function CreateSessionModal({
                         className="w-3.5 h-3.5 shrink-0"
                       />
                       <span>{ag.name}</span>
-                      {ag.command && ag.command !== ag.name && (
-                        <span className="text-[10px] text-zinc-500 font-mono">({ag.command})</span>
-                      )}
+
                       {pShortcut && (
                         <kbd className="text-[10px] font-mono text-zinc-500 bg-[#161b22] border border-[#30363d] px-1 rounded shrink-0">
                           {pShortcut}
@@ -1451,44 +1402,36 @@ export function CreateSessionModal({
             )}
           </div>
 
-          <div className="space-y-2">
-            <label htmlFor="session-model" className="block text-xs font-semibold text-zinc-300">
-              Model
-            </label>
-            {supportsExplicitModel ? (
-              <>
-                <select
-                  id="session-model"
-                  data-testid="session-model"
-                  value={modelMode}
-                  onChange={(e) => setModelMode(e.target.value as 'default' | 'custom')}
-                  disabled={isSubmitting}
-                  className="w-full rounded-lg border border-[#30363d] bg-[#0d1117] px-3 py-2 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none"
-                >
-                  <option value="default">Harness default</option>
-                  <option value="custom">Exact model ID</option>
-                </select>
-                {modelMode === 'custom' && (
-                  <input
-                    aria-label="Exact model ID"
-                    value={modelChoice}
-                    onChange={(e) => setModelChoice(e.target.value)}
-                    placeholder="e.g. gpt-5-codex"
-                    disabled={isSubmitting}
-                    className="mt-2 w-full rounded-lg border border-[#30363d] bg-[#0d1117] px-3 py-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:border-emerald-500 focus:outline-none"
-                  />
-                )}
-              </>
-            ) : (
-              <div className="rounded-lg border border-[#30363d] bg-[#0d1117] px-3 py-2 text-xs text-zinc-500">
-                Harness default (explicit model selection is not supported for this harness)
-              </div>
-            )}
-            <p id="session-model-help" className="text-[10px] text-zinc-500">
-              {supportsExplicitModel ? 'Choose Harness default to use the configured default.' : 'The configured harness default is used.'} This records a requested choice; the native harness validates access.
-            </p>
-          </div>
 
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label htmlFor="session-task-name" className="text-xs font-semibold text-zinc-300">Task name</label>
+              {isCustomTask && (
+                <button type="button" disabled={isSubmitting} onClick={handleResetToAutoTask} className="text-xs text-emerald-400">Use default name</button>
+              )}
+            </div>
+            <input id="session-task-name" type="text" data-testid="input-task-name" value={task} onChange={handleTaskChange} disabled={isSubmitting}
+              className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200 focus:outline-none focus:border-emerald-500" />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="session-initial-prompt" className="text-xs font-semibold text-zinc-300">Initial prompt (optional)</label>
+            <textarea id="session-initial-prompt" rows={4} value={initialPrompt} onChange={(e) => setInitialPrompt(e.target.value)} disabled={isSubmitting}
+              className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200 focus:outline-none focus:border-emerald-500" />
+          </div>
+          <label className="flex items-center gap-2 text-xs text-zinc-300">
+            <input type="checkbox" checked={customizeWorkspace} disabled={isSubmitting} onChange={(e) => {
+              setCustomizeWorkspace(e.target.checked);
+              if (!e.target.checked) {
+                setWorkspaceOption('root');
+                setExistingWorktreePath('');
+                setBaseBranch('');
+              } else {
+                setBaseBranch(selectedProject?.baseBranch || '');
+              }
+            }} />
+            Customize workspace
+          </label>
+          {customizeWorkspace && <fieldset disabled={isSubmitting} className="space-y-3">
           {/* Workspace Options */}
           <div className="pt-0.5 space-y-2">
             <div className="flex items-center justify-between">
@@ -1661,156 +1604,7 @@ export function CreateSessionModal({
             </div>
           )}
 
-          {/* Task Name / Prompt */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold text-zinc-300">
-                Task Description <span className="text-rose-400">*</span>
-              </label>
-              {isCustomTask && (
-                <button
-                  type="button"
-                  onClick={handleResetToAutoTask}
-                  className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-emerald-400 transition-colors cursor-pointer"
-                  title="Reset to default task description based on selections"
-                >
-                  <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
-                  <span>Use default name</span>
-                </button>
-              )}
-            </div>
-            <input
-              type="text"
-              data-testid="input-task-name"
-              placeholder="e.g. Implement user authentication and OAuth"
-              value={task}
-              onChange={handleTaskChange}
-              disabled={isSubmitting}
-              className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
-            />
-          </div>
-
-          {/* Project Preparation & Execution Summary Card */}
-          <div className="p-3 bg-[#12161c] border border-[#21262d] rounded-lg space-y-2 text-[11px] font-mono text-zinc-400">
-            <div className="flex items-center justify-between text-zinc-300 font-semibold pb-1.5 border-b border-[#21262d]">
-              <span>Execution Summary</span>
-              {workspaceOption === 'new-worktree' && isWorktreeConfigured ? (
-                <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-sans font-medium">
-                  <GitBranch className="w-2.5 h-2.5" />
-                  <span>Isolated Worktree</span>
-                </span>
-              ) : workspaceOption === 'existing-worktree' ? (
-                <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-sans font-medium">
-                  <GitBranch className="w-2.5 h-2.5" />
-                  <span>Existing Worktree</span>
-                </span>
-              ) : (
-                <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 font-sans font-medium">
-                  <span>Project Root</span>
-                </span>
-              )}
-            </div>
-
-            <div className="space-y-1.5">
-              {workspaceOption === 'new-worktree' && isWorktreeConfigured ? (
-                <>
-                  <div
-                    className="flex items-baseline justify-between gap-3 group cursor-help"
-                    title={`Full Worktree Path: ${previewWorktreePath}`}
-                  >
-                    <span className="text-zinc-500 shrink-0">Worktree Path:</span>
-                    <span className="truncate text-emerald-400 font-medium text-right max-w-[280px]">
-                      {previewWorktreePath}
-                    </span>
-                  </div>
-                  <div
-                    className="flex items-baseline justify-between gap-3 group cursor-help"
-                    title={`Full Branch Name: ${previewTaskBranch}`}
-                  >
-                    <span className="text-zinc-500 shrink-0">Task Branch:</span>
-                    <span
-                      data-testid="preview-task-branch"
-                      className="truncate text-cyan-400 text-right max-w-[280px]"
-                    >
-                      {previewTaskBranch}
-                    </span>
-                  </div>
-                  <div
-                    className="flex items-baseline justify-between gap-3 group cursor-help"
-                    title={`Base Branch Target: ${previewBaseBranch}`}
-                  >
-                    <span className="text-zinc-500 shrink-0">Base Branch:</span>
-                    <span className="truncate text-zinc-300 text-right max-w-[280px]">
-                      {previewBaseBranch}
-                    </span>
-                  </div>
-                  {copyFiles.length > 0 && (
-                    <div
-                      className="flex items-baseline justify-between gap-3 group cursor-help"
-                      title={`Files copied into worktree: ${copyFiles.join(', ')}`}
-                    >
-                      <span className="text-zinc-500 shrink-0">Copied Configs:</span>
-                      <span className="truncate text-zinc-300 text-right max-w-[280px]">
-                        {copyFiles.join(', ')}
-                      </span>
-                    </div>
-                  )}
-                </>
-              ) : workspaceOption === 'existing-worktree' ? (
-                <>
-                  <div
-                    className="flex items-baseline justify-between gap-3 group cursor-help"
-                    title={`Adopted Worktree Path: ${existingWorktreePath || '(none specified)'}`}
-                  >
-                    <span className="text-zinc-500 shrink-0">Worktree Path:</span>
-                    <span className="truncate text-cyan-400 font-medium text-right max-w-[280px]">
-                      {existingWorktreePath || '(select or enter path)'}
-                    </span>
-                  </div>
-                  <div
-                    className="flex items-baseline justify-between gap-3 group cursor-help"
-                    title="Branch will be auto-detected upon adoption"
-                  >
-                    <span className="text-zinc-500 shrink-0">Worktree Branch:</span>
-                    <span className="truncate text-zinc-300 text-right max-w-[280px]">
-                      {discoveredWorktrees.find((w) => w.path === existingWorktreePath)?.branch ||
-                        'Auto-detected on adoption'}
-                    </span>
-                  </div>
-                </>
-              ) : (
-                <div
-                  className="flex items-baseline justify-between gap-3 group cursor-help"
-                  title={`Project Path: ${previewBasePath}`}
-                >
-                  <span className="text-zinc-500 shrink-0">Project Path:</span>
-                  <span className="truncate text-zinc-300 text-right max-w-[280px]">{previewBasePath}</span>
-                </div>
-              )}
-
-              {/* Task Slug live preview */}
-              <div
-                className="flex items-baseline justify-between gap-3 cursor-help"
-                title={`Task Slug: ${slug}`}
-              >
-                <span className="text-zinc-500 shrink-0">Task Slug:</span>
-                <span data-testid="preview-slug" className="truncate text-zinc-300 text-right max-w-[280px]">
-                  {slug}
-                </span>
-              </div>
-
-              {/* tmux session preview */}
-              <div
-                className="flex items-baseline justify-between gap-3 pt-1.5 border-t border-[#21262d]/60 cursor-help"
-                title={`tmux Session Target: ${previewTmux}`}
-              >
-                <span className="text-zinc-500 shrink-0">tmux Session:</span>
-                <span data-testid="preview-tmux-session" className="truncate text-zinc-300 text-right max-w-[280px]">
-                  {previewTmux}
-                </span>
-              </div>
-            </div>
-          </div>
+          </fieldset>}
 
           {/* Modal Footer Actions */}
           <div className="pt-2 flex items-center justify-end gap-2">
