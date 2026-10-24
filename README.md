@@ -68,6 +68,8 @@ pnpm build
 pnpm start
 ```
 
+For code-only updates with already-compatible native modules, use `pnpm --filter @spawnea/desktop build:bundles`. To force an Electron-native rebuild without bundling, use `pnpm --filter @spawnea/desktop rebuild:native`. The full `pnpm build` and `pnpm start` flows still prepare native modules. See [the build command guide](docs/install-and-configure.md#updating-bundles-without-rebuilding-native-modules) for ABI requirements and launching this checkout's updated output.
+
 To package the desktop application for the current host without publishing:
 
 ```sh

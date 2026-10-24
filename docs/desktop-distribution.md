@@ -26,6 +26,8 @@ pnpm package:desktop:host
 
 The application is built with `electron-vite`, native dependencies are rebuilt for the Electron ABI, and artifacts are written to the repository `release/` directory. The directory is ignored by Git.
 
+The desktop `build` command runs `rebuild:native` before `build:bundles`; packaging keeps that complete flow. For bundle-only development updates, see [Updating bundles without rebuilding native modules](install-and-configure.md#updating-bundles-without-rebuilding-native-modules). Do not substitute `build:bundles` for native preparation when Electron, its ABI, or native dependencies change. CI and tag-release packaging retain their explicit target-architecture native rebuilds before bundling and packaging.
+
 To select a target explicitly when the host toolchain supports it:
 
 ```sh
