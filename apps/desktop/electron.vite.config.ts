@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import { defineConfig } from 'electron-vite';
 import type { Plugin } from 'vite';
 // Only the parser, bundled with this config: the package entry imports the
 // YAML with a Vite-only suffix.
@@ -23,11 +23,11 @@ function validateFactoryStateRules(): Plugin {
 
 export default defineConfig({
   main: {
-    plugins: [
-      validateFactoryStateRules(),
-      externalizeDepsPlugin({ exclude: ['@spawnea/domain', '@spawnea/db', '@spawnea/hosts', '@spawnea/state'] }),
-    ],
+    plugins: [validateFactoryStateRules()],
     build: {
+      // Packaged builds only ship the node_modules listed in
+      // electron-builder.yml, so other runtime dependencies must be bundled.
+      externalizeDeps: { exclude: ['@spawnea/domain', '@spawnea/db', '@spawnea/hosts', '@spawnea/state', 'zod'] },
       rollupOptions: {
         external: ['electron', 'better-sqlite3', 'ssh2', 'cpu-features', 'node-pty'],
         input: {
@@ -39,8 +39,8 @@ export default defineConfig({
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@spawnea/domain'] })],
     build: {
+      externalizeDeps: { exclude: ['@spawnea/domain', 'zod'] },
       rollupOptions: {
         external: ['electron'],
         input: {
