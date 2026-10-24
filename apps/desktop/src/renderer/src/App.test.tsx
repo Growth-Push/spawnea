@@ -1008,6 +1008,67 @@ describe('App Desktop Shell', () => {
     }
   });
 
+  it.each(['', '   \n', '  Implement this\nKeep existing behavior  '])('delivers a nonblank initial prompt once, only after creation: %j', async (prompt) => {
+    let finishCreation!: (session: Session) => void;
+    const createSession = vi.fn(() => new Promise<Session>((resolve) => { finishCreation = resolve; }));
+    const sendPrompt = vi.fn().mockResolvedValue({ delivered: true, deliveryMethod: 'tmux' });
+    window.spawneaApi = createMockSpawneaApi({ createSession, sendPrompt });
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (2)')).toBeDefined());
+    fireEvent.click(screen.getByTestId('sidebar-new-session-button'));
+    fireEvent.change(screen.getByLabelText('Initial prompt (optional)'), { target: { value: prompt } });
+    const submit = screen.getByTestId('submit-create-session');
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    expect(createSession).toHaveBeenCalledOnce();
+    expect(createSession.mock.calls[0]).toHaveLength(1);
+    expect(sendPrompt).not.toHaveBeenCalled();
+    await act(async () => { finishCreation({ ...mockSessions[0], id: 'created-prompt-session' }); });
+    await waitFor(() => expect(screen.queryByText('Create Agent Session')).toBeNull());
+    expect(createSession).toHaveBeenCalledOnce();
+    const payload = (createSession.mock.calls as unknown as [Record<string, unknown>][])[0][0];
+    expect(payload).not.toHaveProperty('initialPrompt');
+    expect(payload).not.toHaveProperty('model');
+    if (prompt.trim()) {
+      expect(sendPrompt).toHaveBeenCalledExactlyOnceWith('created-prompt-session', prompt);
+    } else {
+      expect(sendPrompt).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['reject', 'unconfirmed'])('preserves a created session after %s prompt delivery without retrying', async (failure) => {
+    const createSession = vi.fn().mockResolvedValue({ ...mockSessions[0], id: 'created-prompt-session' });
+    const sendPrompt = failure === 'reject'
+      ? vi.fn().mockRejectedValue(new Error('Delivery failed'))
+      : vi.fn().mockResolvedValue({ delivered: false, deliveryMethod: 'tmux' });
+    window.spawneaApi = createMockSpawneaApi({ createSession, sendPrompt });
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (2)')).toBeDefined());
+    fireEvent.click(screen.getByTestId('sidebar-new-session-button'));
+    fireEvent.change(screen.getByLabelText('Initial prompt (optional)'), { target: { value: 'Initial task' } });
+    fireEvent.click(screen.getByTestId('submit-create-session'));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('was created'));
+    expect(screen.getByRole('alert').textContent).toContain('will not be retried automatically');
+    expect(screen.queryByText('Create Agent Session')).toBeNull();
+    expect(screen.getByText('Active Sessions (3)')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(createSession).toHaveBeenCalledOnce();
+    expect(sendPrompt).toHaveBeenCalledOnce();
+  });
+
+  it('does not deliver a prompt when session creation fails', async () => {
+    const createSession = vi.fn().mockRejectedValue(new Error('Creation failed'));
+    const sendPrompt = vi.fn();
+    window.spawneaApi = createMockSpawneaApi({ createSession, sendPrompt });
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (2)')).toBeDefined());
+    fireEvent.click(screen.getByTestId('sidebar-new-session-button'));
+    fireEvent.change(screen.getByLabelText('Initial prompt (optional)'), { target: { value: 'Initial task' } });
+    fireEvent.click(screen.getByTestId('submit-create-session'));
+    await waitFor(() => expect(screen.getByTestId('create-session-error-banner').textContent).toContain('Creation failed'));
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
   it('opens CreateSessionModal, fills form, and launches new session', async () => {
     const createdSession: Session = {
       id: 'sess-new-123',
@@ -1129,9 +1190,10 @@ describe('App Desktop Shell', () => {
     // Click New Session in sidebar
     fireEvent.click(screen.getByTestId('sidebar-new-session-button'));
 
-    // Modal opens and shows worktree badge
+    // Workspace customization is opt-in.
     expect(screen.getByText('Create Agent Session')).toBeDefined();
-    expect(screen.getByText('Worktree')).toBeDefined();
+    expect(screen.queryByTestId('checkbox-use-worktree')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Customize workspace'));
 
     // Worktree is unchecked by default, check it to enable isolated worktree
     const checkbox = screen.getByTestId('checkbox-use-worktree') as HTMLInputElement;
@@ -1217,9 +1279,8 @@ describe('App Desktop Shell', () => {
     fireEvent.click(screen.getByTestId('sidebar-new-session-button'));
     expect(screen.getByText('Create Agent Session')).toBeDefined();
 
-    // Verify checkbox is present and unchecked by default
-    const checkbox = screen.getByTestId('checkbox-use-worktree') as HTMLInputElement;
-    expect(checkbox.checked).toBe(false);
+    // No workspace overrides are exposed by default.
+    expect(screen.queryByTestId('checkbox-use-worktree')).toBeNull();
 
     // Fill form task
     const taskInput = screen.getByTestId('input-task-name');
@@ -1577,9 +1638,8 @@ describe('App Desktop Shell', () => {
     const projectSelect = screen.getByTestId('select-project') as HTMLSelectElement;
     expect(projectSelect.value).toBe('proj-1');
 
-    // 5. Verify worktree is unchecked by default
-    const worktreeCheckbox = screen.getByTestId('checkbox-use-worktree') as HTMLInputElement;
-    expect(worktreeCheckbox.checked).toBe(false);
+    // 5. Workspace customization stays collapsed by default.
+    expect(screen.queryByTestId('checkbox-use-worktree')).toBeNull();
 
     // 6. Select harness with number key '1' (first canonical provider is codex)
     const agentTrigger = screen.getByTestId('select-agent-trigger');

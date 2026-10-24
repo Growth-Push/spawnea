@@ -4,7 +4,7 @@ import type {
   Server,
   Project,
   Agent,
-  CreateSessionInput,
+  CreateSessionLaunchInput,
   CreateChildSessionInput,
   ParentCloseAction,
   AdoptSessionInput,
@@ -162,6 +162,7 @@ export function App(): React.JSX.Element {
   const handleCloseAgentSetup = useCallback(() => setIsAgentSetupOpen(false), []);
   const [isLoading, setIsLoading] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
+  const [initialPromptError, setInitialPromptError] = useState<string | null>(null);
   const [controlFinalizationRequests, setControlFinalizationRequests] = useState<ControlFinalizationRequest[]>([]);
   const gitRequestGeneration = useRef(0);
   const activeGitRequests = useRef(new Map<string, Promise<GitStatusResult>>());
@@ -547,11 +548,21 @@ export function App(): React.JSX.Element {
     }
   };
 
-  const handleCreateSession = async (input: CreateSessionInput) => {
+  const handleCreateSession = async ({ initialPrompt, ...input }: CreateSessionLaunchInput) => {
     if (window.spawneaApi) {
       const created = await window.spawneaApi.createSession(input);
       setSessions((prev) => [created, ...prev]);
       setActiveSessionId(created.id);
+      // Creation resolves only after the persistent tmux runtime is established.
+      // A delivery failure must never turn a successful creation into a retry.
+      if (initialPrompt?.trim()) {
+        try {
+          const result = await window.spawneaApi.sendPrompt(created.id, initialPrompt);
+          if (!result.delivered) throw new Error('Delivery was not confirmed.');
+        } catch {
+          setInitialPromptError(`Session "${created.name}" was created, but the initial prompt could not be confirmed as delivered. It will not be retried automatically. Check the terminal before sending it manually.`);
+        }
+      }
     } else {
       const slug = input.task
         .toLowerCase()
@@ -1329,6 +1340,12 @@ export function App(): React.JSX.Element {
       }}
       className="flex h-screen w-screen bg-[#0d1117] text-[#c9d1d9] overflow-hidden select-none font-sans"
     >
+      {initialPromptError && (
+        <div role="alert" className="fixed top-3 left-1/2 -translate-x-1/2 z-[100] max-w-xl rounded-lg border border-amber-500 bg-[#161b22] p-3 text-sm">
+          {initialPromptError}
+          <button type="button" onClick={() => setInitialPromptError(null)} className="ml-3 underline">Dismiss</button>
+        </div>
+      )}
       {/* Navigation Sidebar */}
       <Sidebar
         sessions={sessions}

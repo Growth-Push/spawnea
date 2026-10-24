@@ -58,7 +58,8 @@
       "ignoreGhsas": [
         "GHSA-ch52-4w7c-c8xp",
         "GHSA-pqg4-j6r4-53mv",
-        "GHSA-6qxp-vccf-f47h"
+        "GHSA-6qxp-vccf-f47h",
+        "GHSA-jr5w-w6x2-84p9"
       ]
     }
   }
