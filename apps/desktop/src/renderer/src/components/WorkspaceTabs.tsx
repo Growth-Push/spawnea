@@ -81,6 +81,7 @@ interface WorkspaceTabsProps {
   onResurrect?: (sessionId: string) => void;
   onForgetLocally?: (sessionId: string) => void;
   onStatusChange?: (sessionId: string, status: Session['status']) => void;
+  isSuspended?: boolean;
 }
 
 interface DetailCardProps {
@@ -149,6 +150,7 @@ export function WorkspaceTabs({
   onResurrect,
   onForgetLocally,
   onStatusChange,
+  isSuspended = false,
 }: WorkspaceTabsProps): React.JSX.Element {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(false);
@@ -351,8 +353,12 @@ export function WorkspaceTabs({
 
   // Global Clipboard Paste Handler (Ctrl+V / Cmd+V for image pasting)
   useEffect(() => {
+    if (isSuspended) return;
     const handlePaste = async (e: ClipboardEvent) => {
       if (!session || !e.clipboardData) return;
+      if (e.defaultPrevented) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.matches?.('input, textarea:not(.xterm-helper-textarea), [contenteditable="true"]')) return;
 
       const items = e.clipboardData.items;
       let imageItem: DataTransferItem | null = null;
@@ -424,7 +430,7 @@ export function WorkspaceTabs({
 
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [session?.id, fetchArtifacts]);
+  }, [session?.id, fetchArtifacts, isSuspended]);
 
   // Drag & Drop Ingestion Handlers
   const handleDragOver = (e: React.DragEvent) => {

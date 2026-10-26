@@ -37,6 +37,17 @@ const RETRY_DELAY_MS = 2000;
 
 const isInteractiveStatus = (status: Session['status']) => status !== 'done';
 
+function isTerminalContainerVisible(container: HTMLElement | null): boolean {
+  if (!container || !container.isConnected) return false;
+  if (container.closest('.hidden') !== null) return false;
+  if (typeof container.checkVisibility === 'function') {
+    if (!container.checkVisibility()) return false;
+    if (container.offsetParent === null) return false;
+    if (container.clientWidth === 0 && container.clientHeight === 0) return false;
+  }
+  return true;
+}
+
 const HTTP_URL_PATTERN = /https?:\/\/[^\s<>"'`]+/g;
 const OSC52_MAX_DECODED_LENGTH = 1024 * 1024;
 const OSC52_MAX_ENCODED_LENGTH = 4 * Math.ceil(OSC52_MAX_DECODED_LENGTH / 3);
@@ -150,6 +161,7 @@ export function TerminalView({
   // context menu after it was dismissed.
   const lastOsc52ClipboardTextRef = useRef<string | null>(null);
   const lastContextSelectionTextRef = useRef<string | null>(null);
+  const deferredConnectRef = useRef<boolean>(false);
 
   const sessionRef = useRef(session);
   sessionRef.current = session;
@@ -292,6 +304,9 @@ export function TerminalView({
     const fitAddon = fitAddonRef.current;
     const terminal = terminalInstanceRef.current;
     if (!fitAddon || !terminal) return;
+    if (!isTerminalContainerVisible(containerRef.current)) {
+      return;
+    }
 
     try {
       fitAddon.fit();
@@ -336,8 +351,13 @@ export function TerminalView({
 
   const connectToSession = useCallback(
     async (term: Terminal, isRetry = false) => {
+      if (!isTerminalContainerVisible(containerRef.current)) {
+        deferredConnectRef.current = true;
+        return;
+      }
       if (isConnectingRef.current) return;
       isConnectingRef.current = true;
+      deferredConnectRef.current = false;
 
       const currentSession = sessionRef.current;
       const currentAgent = agentRef.current;
@@ -672,14 +692,20 @@ export function TerminalView({
     terminalInstanceRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    try {
-      fitAddon.fit();
-    } catch {
-      // Ignore initial fit error
-    }
+    const isVisible = isTerminalContainerVisible(containerRef.current);
 
+    deferredConnectRef.current = false;
     if (isInteractiveStatus(session.status)) {
-      connectToSession(term, false);
+      if (isVisible) {
+        try {
+          fitAddon.fit();
+        } catch {
+          // Ignore initial fit error
+        }
+        connectToSession(term, false);
+      } else {
+        deferredConnectRef.current = true;
+      }
     } else {
       setConnectionStatus('disconnected');
     }
@@ -697,10 +723,21 @@ export function TerminalView({
     // Debounced resize handling via ResizeObserver
     const resizeObserver = new ResizeObserver(() => {
       if (fitAddonRef.current && containerRef.current && terminalInstanceRef.current) {
+        if (!isTerminalContainerVisible(containerRef.current)) {
+          return;
+        }
         try {
           fitAddonRef.current.fit();
           const cols = terminalInstanceRef.current.cols;
           const rows = terminalInstanceRef.current.rows;
+
+          if (cols < 10 || rows < 3) return;
+
+          if (deferredConnectRef.current && !activeChannelIdRef.current && !isConnectingRef.current && isInteractiveStatus(sessionRef.current.status)) {
+            deferredConnectRef.current = false;
+            connectToSession(terminalInstanceRef.current, false);
+            return;
+          }
 
           if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
           resizeTimerRef.current = setTimeout(() => {
@@ -745,10 +782,38 @@ export function TerminalView({
       terminalInstanceRef.current.options.disableStdin = true;
     } else if (session.status !== 'disconnected') {
       if (!activeChannelIdRef.current && connectionStatus !== 'connecting') {
-        connectToSession(terminalInstanceRef.current, false);
+        if (isTerminalContainerVisible(containerRef.current)) {
+          connectToSession(terminalInstanceRef.current, false);
+        } else {
+          deferredConnectRef.current = true;
+        }
       }
     }
   }, [session.status, connectionStatus, connectToSession, cleanupActiveConnection]);
+
+  // Restore focus and connect deferred terminal when returning to workspace or requested by parent shell
+  useEffect(() => {
+    const handleFocusTerminal = () => {
+      if (
+        terminalInstanceRef.current &&
+        isInteractiveStatus(session.status) &&
+        isTerminalContainerVisible(containerRef.current)
+      ) {
+        if (deferredConnectRef.current && !activeChannelIdRef.current && !isConnectingRef.current) {
+          deferredConnectRef.current = false;
+          try {
+            fitAddonRef.current?.fit();
+          } catch {}
+          connectToSession(terminalInstanceRef.current, false);
+        }
+        terminalInstanceRef.current.focus();
+      }
+    };
+    window.addEventListener('spawnea:focus-terminal', handleFocusTerminal);
+    return () => {
+      window.removeEventListener('spawnea:focus-terminal', handleFocusTerminal);
+    };
+  }, [session.status, connectToSession]);
 
   const handleManualRetry = async () => {
     cleanupActiveConnection();

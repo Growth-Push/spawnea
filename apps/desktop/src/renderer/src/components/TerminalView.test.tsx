@@ -675,4 +675,19 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
     view.unmount();
     expect(window.spawneaApi.detachSession).toHaveBeenCalledWith(mockSession.id);
   });
+
+  it('defers status-driven terminal attachments while hidden', async () => {
+    const view = render(
+      <div className="hidden">
+        <TerminalView session={{ ...mockSession, status: 'done' }} />
+      </div>
+    );
+    expect(window.spawneaApi.attachSession).not.toHaveBeenCalled();
+    view.rerender(
+      <div className="hidden">
+        <TerminalView session={{ ...mockSession, status: 'working' }} />
+      </div>
+    );
+    expect(window.spawneaApi.attachSession).not.toHaveBeenCalled();
+  });
 });
