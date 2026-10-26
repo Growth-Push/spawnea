@@ -20,6 +20,8 @@ import type {
   ControlFinalizationRequest,
 } from '@spawnea/domain';
 import { Sidebar } from './components/Sidebar';
+import { DashboardView } from './components/DashboardView';
+import { useActivitySamples } from './hooks/useActivitySamples';
 import { ContextBar } from './components/ContextBar';
 import { WorkspaceTabs, type WorkspaceTabType } from './components/WorkspaceTabs';
 import { CreateSessionModal } from './components/CreateSessionModal';
@@ -115,6 +117,14 @@ export function getHierarchicalSessionOrder(sessions: Session[]): Session[] {
 
 export function App(): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [isDashboardOpen, setIsDashboardOpen] = useState(false);
+  const [sessionsObserved, setSessionsObserved] = useState(false);
+  const activity = useActivitySamples(sessions, sessionsObserved, isDashboardOpen);
+  useEffect(() => {
+    if (!isDashboardOpen) {
+      window.dispatchEvent(new Event('resize'));
+    }
+  }, [isDashboardOpen]);
   const [visibleSessionIds, setVisibleSessionIds] = useState<string[]>([]);
   const [servers, setServers] = useState<Server[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -158,6 +168,31 @@ export function App(): React.JSX.Element {
   const [parentSessionToClose, setParentSessionToClose] = useState<Session | null>(null);
   const [pendingCloseAllParentId, setPendingCloseAllParentId] = useState<string | null>(null);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const restoreWorkspaceFocus = useCallback(() => {
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'));
+      window.dispatchEvent(new CustomEvent('spawnea:focus-terminal'));
+      const activeEl = (document.querySelector('.xterm-helper-textarea') ||
+        document.querySelector('[role="tab"][aria-selected="true"]') ||
+        document.querySelector('[role="tab"]') ||
+        document.querySelector('[data-testid^="workspace-tab-"]') ||
+        document.body) as HTMLElement | null;
+      activeEl?.focus?.();
+    });
+  }, []);
+
+  const handleCloseDashboard = useCallback(() => {
+    setIsDashboardOpen(false);
+    restoreWorkspaceFocus();
+  }, [restoreWorkspaceFocus]);
+
+  const handleSelectSession = useCallback((sessionId: string | null, shouldFocus = true) => {
+    setActiveSessionId(sessionId);
+    setIsDashboardOpen(false);
+    if (shouldFocus) {
+      restoreWorkspaceFocus();
+    }
+  }, [restoreWorkspaceFocus]);
   const [isAgentSetupOpen, setIsAgentSetupOpen] = useState(false);
   const handleCloseAgentSetup = useCallback(() => setIsAgentSetupOpen(false), []);
   const [isLoading, setIsLoading] = useState(false);
@@ -209,12 +244,16 @@ export function App(): React.JSX.Element {
 
   const handleTabChange = useCallback((tab: WorkspaceTabType) => {
     setActiveTab(tab);
+    if (isDashboardOpen) {
+      setIsDashboardOpen(false);
+      restoreWorkspaceFocus();
+    }
     if (activeSessionId) {
       try {
         localStorage.setItem(spawneaSessionTabKey(activeSessionId), tab);
       } catch {}
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, isDashboardOpen, restoreWorkspaceFocus]);
 
   const handleRenameSession = useCallback(async (sessionId: string, title: string): Promise<void> => {
     if (!window.spawneaApi?.renameSession) {
@@ -237,10 +276,10 @@ export function App(): React.JSX.Element {
   // Sync activeSessionId to Main process for Notification suppression
   useEffect(() => {
     if (window.spawneaApi?.setActiveSession) {
-      window.spawneaApi.setActiveSession(activeSessionId);
+      window.spawneaApi.setActiveSession(isDashboardOpen ? null : activeSessionId);
     }
     window.spawneaApi?.syncControlUiState?.({ activeSessionId, activeTab });
-  }, [activeSessionId, activeTab]);
+  }, [activeSessionId, activeTab, isDashboardOpen]);
 
   // State rules load once in Main and only change after a restart.
   useEffect(() => {
@@ -273,6 +312,7 @@ export function App(): React.JSX.Element {
         ]);
 
         setSessions(loadedSessions);
+        setSessionsObserved(true);
         setServers(loadedServers);
         setProjects(loadedProjects);
         setAgents(loadedAgents);
@@ -338,7 +378,7 @@ export function App(): React.JSX.Element {
 
     if (window.spawneaApi?.onSessionActivate) {
       const unActivate = window.spawneaApi.onSessionActivate((sessionId) => {
-        setActiveSessionId(sessionId);
+        handleSelectSession(sessionId, document.hasFocus());
       });
       unsubs.push(unActivate);
     }
@@ -364,7 +404,7 @@ export function App(): React.JSX.Element {
             localStorage.setItem(spawneaSessionTabKey(state.activeSessionId), state.activeTab);
           } catch {}
         }
-        setActiveSessionId(state.activeSessionId);
+        handleSelectSession(state.activeSessionId, document.hasFocus());
         setActiveTab(state.activeTab);
       });
       unsubs.push(unNavigate);
@@ -552,7 +592,7 @@ export function App(): React.JSX.Element {
     if (window.spawneaApi) {
       const created = await window.spawneaApi.createSession(input);
       setSessions((prev) => [created, ...prev]);
-      setActiveSessionId(created.id);
+      handleSelectSession(created.id);
       // Creation resolves only after the persistent tmux runtime is established.
       // A delivery failure must never turn a successful creation into a retry.
       if (initialPrompt?.trim()) {
@@ -585,7 +625,7 @@ export function App(): React.JSX.Element {
         lastActivityAt: new Date(),
       };
       setSessions((prev) => [mockSession, ...prev]);
-      setActiveSessionId(mockSession.id);
+      handleSelectSession(mockSession.id);
     }
   };
 
@@ -634,7 +674,7 @@ export function App(): React.JSX.Element {
     if (window.spawneaApi?.adoptSession) {
       const adopted = await window.spawneaApi.adoptSession(input);
       setSessions((prev) => [adopted, ...prev]);
-      setActiveSessionId(adopted.id);
+      handleSelectSession(adopted.id);
     } else {
       const mockAdopted: Session = {
         id: `sess-adopted-${Date.now()}`,
@@ -652,7 +692,7 @@ export function App(): React.JSX.Element {
         lastActivityAt: new Date(),
       };
       setSessions((prev) => [mockAdopted, ...prev]);
-      setActiveSessionId(mockAdopted.id);
+      handleSelectSession(mockAdopted.id);
     }
   };
 
@@ -938,7 +978,7 @@ export function App(): React.JSX.Element {
     }
     const created = await window.spawneaApi.createChildSession(input);
     setSessions((prev) => [...prev, created]);
-    setActiveSessionId(created.id);
+    handleSelectSession(created.id);
   }, []);
 
   const handleCloseParentModal = useCallback(() => {
@@ -1053,6 +1093,7 @@ export function App(): React.JSX.Element {
           window.spawneaApi.listAgents(),
         ]);
         setSessions(reconciledSessions);
+        setSessionsObserved(true);
         setServers(loadedServers);
         setProjects(loadedProjects);
         setAgents(loadedAgents);
@@ -1094,6 +1135,21 @@ export function App(): React.JSX.Element {
   // - Workspace Tabs: Alt+1..6
   // - Sidebar Toggle: Ctrl+Shift+B
   // - Session Navigation: Ctrl+1..0, Ctrl+Tab, Ctrl+Shift+Tab
+  const isBlockingOverlayOpen =
+    isCreateModalOpen ||
+    isQuickSwitcherOpen ||
+    isNewProjectModalOpen ||
+    isLocalDiscoveryOpen ||
+    isAdoptModalOpen ||
+    isFeedbackModalOpen ||
+    isAgentSetupOpen ||
+    sessionToStop !== null ||
+    sessionToUnadopt !== null ||
+    sessionToFinish !== null ||
+    sessionToCreateChildFor !== null ||
+    parentSessionToClose !== null ||
+    controlFinalizationRequests.length > 0;
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isCtrl = e.ctrlKey || e.metaKey;
@@ -1129,21 +1185,7 @@ export function App(): React.JSX.Element {
 
       // 2. New Session: Ctrl+N / Cmd+N
       if (isCtrl && !e.shiftKey && !e.altKey && (e.key === 'n' || e.key === 'N')) {
-        if (
-          isCreateModalOpen ||
-          isQuickSwitcherOpen ||
-          isNewProjectModalOpen ||
-          isLocalDiscoveryOpen ||
-          isAdoptModalOpen ||
-          isFeedbackModalOpen ||
-          isAgentSetupOpen ||
-          sessionToStop !== null ||
-          sessionToUnadopt !== null ||
-          sessionToFinish !== null ||
-          sessionToCreateChildFor !== null ||
-          parentSessionToClose !== null ||
-          controlFinalizationRequests.length > 0
-        ) {
+        if (isBlockingOverlayOpen) {
           return;
         }
         e.preventDefault();
@@ -1181,8 +1223,21 @@ export function App(): React.JSX.Element {
         return;
       }
 
-      // If a modal like Create Session or Quick Switcher is open, do not intercept session switching shortcuts
-      if (isCreateModalOpen || isQuickSwitcherOpen) {
+      // If a modal like Create Session, Quick Switcher, or any confirmation dialog is open, do not intercept session switching or dashboard shortcuts
+      if (isBlockingOverlayOpen) {
+        return;
+      }
+
+      // Handle Ctrl+Shift+D / Cmd+Shift+D to toggle session dashboard
+      if ((e.key === 'd' || e.key === 'D') && e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isDashboardOpen) {
+          setIsDashboardOpen(false);
+          restoreWorkspaceFocus();
+        } else {
+          setIsDashboardOpen(true);
+        }
         return;
       }
 
@@ -1210,11 +1265,11 @@ export function App(): React.JSX.Element {
         if (e.shiftKey) {
           // Previous session
           const prevIndex = currentIndex <= 0 ? cyclingSessions.length - 1 : currentIndex - 1;
-          setActiveSessionId(cyclingSessions[prevIndex].id);
+          handleSelectSession(cyclingSessions[prevIndex].id);
         } else {
           // Next session
           const nextIndex = currentIndex === -1 || currentIndex >= cyclingSessions.length - 1 ? 0 : currentIndex + 1;
-          setActiveSessionId(cyclingSessions[nextIndex].id);
+          handleSelectSession(cyclingSessions[nextIndex].id);
         }
         return;
       }
@@ -1238,7 +1293,7 @@ export function App(): React.JSX.Element {
         if (targetIndex < rootSessions.length) {
           e.preventDefault();
           e.stopPropagation();
-          setActiveSessionId(rootSessions[targetIndex].id);
+          handleSelectSession(rootSessions[targetIndex].id);
         }
       }
     };
@@ -1250,19 +1305,10 @@ export function App(): React.JSX.Element {
     visibleSessionIds,
     activeSessionId,
     handleTabChange,
+    isBlockingOverlayOpen,
     isCreateModalOpen,
-    isQuickSwitcherOpen,
-    isNewProjectModalOpen,
-    isLocalDiscoveryOpen,
-    isAdoptModalOpen,
-    isFeedbackModalOpen,
-    isAgentSetupOpen,
-    sessionToStop,
-    sessionToUnadopt,
-    sessionToFinish,
-    sessionToCreateChildFor,
-    parentSessionToClose,
-    controlFinalizationRequests,
+    isDashboardOpen,
+    restoreWorkspaceFocus,
   ]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
@@ -1347,7 +1393,10 @@ export function App(): React.JSX.Element {
         </div>
       )}
       {/* Navigation Sidebar */}
+      <div className={isDashboardOpen ? 'hidden' : 'contents'}>
       <Sidebar
+        onOpenDashboard={() => setIsDashboardOpen(true)}
+        isSuspended={isDashboardOpen}
         sessions={sessions}
         servers={servers}
         projects={projects}
@@ -1359,7 +1408,7 @@ export function App(): React.JSX.Element {
         gitDirtyBySessionId={gitDirtyBySessionId}
         gitChangeCountBySessionId={gitChangeCountBySessionId}
         activeSessionId={activeSessionId}
-        onSelectSession={setActiveSessionId}
+        onSelectSession={handleSelectSession}
         onVisibleSessionIdsChange={setVisibleSessionIds}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
         onOpenCreateChildModal={(parentId) => {
@@ -1392,9 +1441,30 @@ export function App(): React.JSX.Element {
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
       />
+      </div>
+
+      {isDashboardOpen && (
+        <DashboardView
+          sessions={sessions}
+          servers={servers}
+          projects={projects}
+          agents={agents}
+          activeSessionId={activeSessionId}
+          isLoading={isLoading}
+          samples={activity.samples}
+          startedAt={activity.startedAt}
+          onReturn={handleCloseDashboard}
+          onOpenCreateModal={() => setIsCreateModalOpen(true)}
+          onSelectSession={(id) => {
+            try { localStorage.setItem(spawneaSessionTabKey(id), 'terminal'); } catch {}
+            handleSelectSession(id);
+            setActiveTab('terminal');
+          }}
+        />
+      )}
 
       {/* Main Workspace Area */}
-      <main className="flex-1 flex flex-col bg-[#0d1117] overflow-hidden">
+      <main className={`${isDashboardOpen ? 'hidden' : 'flex'} flex-1 flex-col bg-[#0d1117] overflow-hidden`}>
         {reloadNotice && (
           <div
             data-testid="catalog-reload-success-banner"
@@ -1500,6 +1570,7 @@ export function App(): React.JSX.Element {
               onResurrect={handleResurrectSession}
               onForgetLocally={handleForgetSessionLocally}
               onStatusChange={handleSessionStatusChange}
+              isSuspended={isDashboardOpen}
             />
           </>
         )}
@@ -1516,7 +1587,7 @@ export function App(): React.JSX.Element {
         agents={agents}
         activeSessionId={activeSessionId}
         activeTab={activeTab}
-        onSelectSession={setActiveSessionId}
+        onSelectSession={handleSelectSession}
         onSelectTab={handleTabChange}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
         onOpenAdoptModal={() => setIsAdoptModalOpen(true)}

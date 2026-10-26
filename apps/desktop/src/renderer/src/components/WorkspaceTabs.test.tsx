@@ -633,4 +633,91 @@ describe('WorkspaceTabs Component', () => {
     );
     expect(screen.queryByTestId('detected-output-banner')).toBeNull();
   });
+
+  it('provides complete WAI-ARIA tablist, tab, tabpanel associations and keyboard navigation', async () => {
+    const onTabChange = vi.fn();
+    render(
+      <WorkspaceTabs
+        session={mockSession}
+        activeTab="terminal"
+        onTabChange={onTabChange}
+      />
+    );
+
+    const tablist = screen.getByRole('tablist', { name: 'Workspace tabs' });
+    expect(tablist).toBeDefined();
+
+    const allTabs = screen.getAllByRole('tab');
+    expect(allTabs.length).toBeGreaterThan(1);
+    const tabpanel = screen.getByRole('tabpanel');
+    for (const tab of allTabs) {
+      expect(tab.getAttribute('aria-controls')).toBe(tabpanel.id);
+      expect(document.getElementById(tab.getAttribute('aria-controls')!)).toBe(tabpanel);
+    }
+
+    const terminalTab = screen.getByRole('tab', { name: /Terminal/i });
+    expect(terminalTab.getAttribute('aria-selected')).toBe('true');
+    expect(tabpanel.getAttribute('aria-labelledby')).toBe(terminalTab.id);
+
+    // ArrowRight moves to next tab
+    fireEvent.keyDown(terminalTab, { key: 'ArrowRight' });
+    expect(onTabChange).toHaveBeenCalledWith('files');
+
+    // ArrowDown / ArrowUp do not change tabs (unhandled for natural scrolling)
+    fireEvent.keyDown(terminalTab, { key: 'ArrowDown' });
+    fireEvent.keyDown(terminalTab, { key: 'ArrowUp' });
+    expect(onTabChange).toHaveBeenCalledTimes(1);
+
+    // End key moves to last tab
+    fireEvent.keyDown(terminalTab, { key: 'End' });
+    expect(onTabChange).toHaveBeenCalledWith('agent-context');
+
+    // Home key moves to first tab
+    fireEvent.keyDown(terminalTab, { key: 'Home' });
+    expect(onTabChange).toHaveBeenCalledWith('terminal');
+  });
+
+  it('preserves tab keyboard focus when navigating into terminal tab without autofocus stealing', async () => {
+    let resolveAttach: (value: any) => void = () => {};
+    const attachPromise = new Promise((resolve) => {
+      resolveAttach = resolve;
+    });
+    window.spawneaApi.attachSession = vi.fn().mockImplementation(() => attachPromise);
+
+    function StatefulWorkspace() {
+      const [tab, setTab] = React.useState<any>('files');
+      return (
+        <WorkspaceTabs
+          session={mockSession}
+          activeTab={tab}
+          onTabChange={setTab}
+        />
+      );
+    }
+
+    render(<StatefulWorkspace />);
+    const filesTab = screen.getByRole('tab', { name: /Files/i });
+    filesTab.focus();
+    expect(document.activeElement).toBe(filesTab);
+
+    // Navigate to Terminal with ArrowLeft
+    fireEvent.keyDown(filesTab, { key: 'ArrowLeft' });
+
+    const terminalTab = screen.getByRole('tab', { name: /Terminal/i });
+    expect(document.activeElement).toBe(terminalTab);
+
+    // Resolve attachment promise
+    act(() => {
+      resolveAttach({ ptyChannelId: 'pty-1' });
+    });
+
+    // Wait for attachment to settle
+    await waitFor(() => {
+      expect(window.spawneaApi.attachSession).toHaveBeenCalled();
+    });
+
+    // Terminal autofocus should not steal focus from the tab
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(document.activeElement).toBe(terminalTab);
+  });
 });

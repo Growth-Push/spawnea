@@ -431,6 +431,136 @@ describe('StatusBadge component', () => {
 });
 
 describe('App Desktop Shell', () => {
+  it('expands and returns without replacing the workspace or sidebar preferences, then navigates to the selected terminal', async () => {
+    window.spawneaApi = createMockSpawneaApi();
+    render(<App />);
+    await screen.findByText('Active Sessions (2)');
+    const sidebar = screen.getByTestId('sidebar');
+    const layout = sidebar.getAttribute('data-session-layout');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand session dashboard' }));
+    expect(screen.getByRole('region', { name: 'Session dashboard' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Return to workspace' }));
+    expect(screen.queryByRole('region', { name: 'Session dashboard' })).toBeNull();
+    expect(screen.getByTestId('sidebar')).toBe(sidebar);
+    expect(sidebar.getAttribute('data-session-layout')).toBe(layout);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand session dashboard' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Model Optimization' }));
+    await waitFor(() => expect(window.spawneaApi.setActiveSession).toHaveBeenLastCalledWith('sess-2'));
+    expect(screen.queryByRole('region', { name: 'Session dashboard' })).toBeNull();
+  });
+
+  it('preserves sidebar parent collapse state after returning from dashboard', async () => {
+    const parentSession: Session = {
+      ...mockSessions[0],
+      id: 'parent-sess',
+      name: 'Parent Session',
+      status: 'working',
+    };
+    const childSession: Session = {
+      ...mockSessions[1],
+      id: 'child-sess',
+      name: 'Child Session',
+      parentSessionId: 'parent-sess',
+      status: 'working',
+    };
+    const api = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue([parentSession, childSession]),
+      reconcileSessions: vi.fn().mockResolvedValue([parentSession, childSession]),
+    });
+    window.spawneaApi = api;
+    render(<App />);
+    await screen.findByText('Active Sessions (1)');
+
+    // Expand parent to reveal child
+    const expandBtn = await screen.findByTitle(/click to expand/);
+    fireEvent.click(expandBtn);
+    expect(screen.getByTestId('session-item-child-sess')).toBeTruthy();
+
+    // Select the child session
+    fireEvent.click(screen.getByTestId('session-item-child-sess'));
+
+    // Manually collapse the parent while child remains active
+    const collapseBtn = screen.getByTitle(/click to collapse/);
+    fireEvent.click(collapseBtn);
+    expect(screen.queryByTestId('session-item-child-sess')).toBeNull();
+
+    // Open dashboard
+    fireEvent.click(screen.getByRole('button', { name: 'Expand session dashboard' }));
+    expect(screen.getByRole('region', { name: 'Session dashboard' })).toBeTruthy();
+
+    // Return to workspace
+    fireEvent.click(screen.getByRole('button', { name: 'Return to workspace' }));
+    expect(screen.queryByRole('region', { name: 'Session dashboard' })).toBeNull();
+
+    // Child session must remain collapsed instead of re-expanding
+    expect(screen.queryByTestId('session-item-child-sess')).toBeNull();
+  });
+
+  it('suspends alert acknowledgement while dashboard is open', async () => {
+    const initial = mockSessions.map((s) => ({ ...s, status: 'working' as const }));
+    const api = createMockSpawneaApi({ listSessions: vi.fn().mockResolvedValue(initial) });
+    window.spawneaApi = api;
+    render(<App />);
+    await screen.findByText('Active Sessions (2)');
+
+    // Open dashboard while sess-1 is active
+    fireEvent.click(screen.getByRole('button', { name: 'Expand session dashboard' }));
+    expect(screen.getByRole('region', { name: 'Session dashboard' })).toBeTruthy();
+
+    act(() => {
+      (api.onStatusChanged as any).mock.calls[0][0]('sess-1', 'needs_input');
+    });
+
+    // Select sess-2 from dashboard
+    fireEvent.click(screen.getByRole('button', { name: 'Model Optimization' }));
+    await waitFor(() => expect(api.setActiveSession).toHaveBeenLastCalledWith('sess-2'));
+    expect(screen.queryByRole('region', { name: 'Session dashboard' })).toBeNull();
+
+    expect(screen.getByTestId('status-filter-needs_attention').querySelector('.animate-pulse')).not.toBeNull();
+  });
+
+  it('closes dashboard and reveals workspace when selecting a session through quick switcher', async () => {
+    window.spawneaApi = createMockSpawneaApi();
+    render(<App />);
+    await screen.findByText('Active Sessions (2)');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand session dashboard' }));
+    expect(screen.getByRole('region', { name: 'Session dashboard' })).toBeTruthy();
+    fireEvent.keyDown(window, { key: 'p', ctrlKey: true });
+    const sessionItem = await screen.findByTestId('quick-switcher-item-session-sess-2');
+    fireEvent.click(sessionItem);
+    await waitFor(() => expect(window.spawneaApi.setActiveSession).toHaveBeenLastCalledWith('sess-2'));
+    expect(screen.queryByRole('region', { name: 'Session dashboard' })).toBeNull();
+  });
+
+  it('restores terminal focus when returning from dashboard', async () => {
+    window.spawneaApi = createMockSpawneaApi();
+    render(<App />);
+    await screen.findByText('Active Sessions (2)');
+    const focusEventSpy = vi.fn();
+    window.addEventListener('spawnea:focus-terminal', focusEventSpy);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand session dashboard' }));
+    expect(screen.getByRole('region', { name: 'Session dashboard' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Return to workspace' }));
+    expect(screen.queryByRole('region', { name: 'Session dashboard' })).toBeNull();
+    await waitFor(() => expect(focusEventSpy).toHaveBeenCalled());
+    window.removeEventListener('spawnea:focus-terminal', focusEventSpy);
+  });
+
+  it('marks sessions as observed after recovering via manual session refresh', async () => {
+    const api = createMockSpawneaApi();
+    api.listSessions = vi.fn().mockRejectedValueOnce(new Error('initial load failed')).mockResolvedValue(mockSessions);
+    api.reconcileSessions = vi.fn().mockResolvedValue(mockSessions);
+    window.spawneaApi = api;
+    render(<App />);
+    await waitFor(() => expect(api.listSessions).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId('sidebar-actions-menu-button'));
+    fireEvent.click(screen.getByTestId('sidebar-refresh-sessions-button'));
+    await screen.findByText('Active Sessions (2)');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand session dashboard' }));
+    expect(screen.getByRole('region', { name: 'Session dashboard' })).toBeTruthy();
+    expect(screen.queryByText('Waiting for observations')).toBeNull();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();

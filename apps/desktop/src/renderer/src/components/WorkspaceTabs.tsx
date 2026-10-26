@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useId } from 'react';
 import type {
   Session,
   Server,
@@ -81,6 +81,7 @@ interface WorkspaceTabsProps {
   onResurrect?: (sessionId: string) => void;
   onForgetLocally?: (sessionId: string) => void;
   onStatusChange?: (sessionId: string, status: Session['status']) => void;
+  isSuspended?: boolean;
 }
 
 interface DetailCardProps {
@@ -149,7 +150,11 @@ export function WorkspaceTabs({
   onResurrect,
   onForgetLocally,
   onStatusChange,
+  isSuspended = false,
 }: WorkspaceTabsProps): React.JSX.Element {
+  const instanceId = useId();
+  const tablistRef = useRef<HTMLDivElement>(null);
+  const activePanelId = `${instanceId}-active-tabpanel`;
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(false);
   const [hostInfo, setHostInfo] = useState<HostSystemInfo | null>(null);
@@ -351,8 +356,12 @@ export function WorkspaceTabs({
 
   // Global Clipboard Paste Handler (Ctrl+V / Cmd+V for image pasting)
   useEffect(() => {
+    if (isSuspended) return;
     const handlePaste = async (e: ClipboardEvent) => {
       if (!session || !e.clipboardData) return;
+      if (e.defaultPrevented) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.matches?.('input, textarea:not(.xterm-helper-textarea), [contenteditable="true"]')) return;
 
       const items = e.clipboardData.items;
       let imageItem: DataTransferItem | null = null;
@@ -424,7 +433,7 @@ export function WorkspaceTabs({
 
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [session?.id, fetchArtifacts]);
+  }, [session?.id, fetchArtifacts, isSuspended]);
 
   // Drag & Drop Ingestion Handlers
   const handleDragOver = (e: React.DragEvent) => {
@@ -588,16 +597,50 @@ export function WorkspaceTabs({
 
       {/* Tab Navigation Rail */}
       <div className="h-10 px-4 border-b border-[#30363d] bg-[#0d1117] flex items-center justify-between shrink-0 select-none">
-        <div className="flex items-center gap-1">
+        <div ref={tablistRef} role="tablist" aria-label="Workspace tabs" className="flex items-center gap-1">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
+            const tabElementId = `${instanceId}-tab-${tab.id}`;
             return (
               <button
                 type="button"
+                role="tab"
+                id={tabElementId}
+                aria-controls={activePanelId}
+                aria-selected={isActive}
+                tabIndex={isActive ? 0 : -1}
                 key={tab.id}
                 data-testid={`workspace-tab-${tab.id}`}
                 onClick={() => onTabChange(tab.id)}
+                onKeyDown={(e) => {
+                  const focusTab = (targetTabId: string) => {
+                    tablistRef.current
+                      ?.querySelector<HTMLElement>(`[data-testid="workspace-tab-${targetTabId}"]`)
+                      ?.focus();
+                  };
+                  if (e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    const currentIndex = tabs.findIndex((t) => t.id === tab.id);
+                    const nextTab = tabs[(currentIndex + 1) % tabs.length];
+                    onTabChange(nextTab.id);
+                    focusTab(nextTab.id);
+                  } else if (e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    const currentIndex = tabs.findIndex((t) => t.id === tab.id);
+                    const prevTab = tabs[(currentIndex - 1 + tabs.length) % tabs.length];
+                    onTabChange(prevTab.id);
+                    focusTab(prevTab.id);
+                  } else if (e.key === 'Home') {
+                    e.preventDefault();
+                    onTabChange(tabs[0].id);
+                    focusTab(tabs[0].id);
+                  } else if (e.key === 'End') {
+                    e.preventDefault();
+                    onTabChange(tabs[tabs.length - 1].id);
+                    focusTab(tabs[tabs.length - 1].id);
+                  }
+                }}
                 title={`${tab.label} (${tab.shortcut})`}
                 className={`group flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md transition-all cursor-pointer ${
                   isActive
@@ -657,7 +700,13 @@ export function WorkspaceTabs({
       </div>
 
       {/* Tab Content Panels */}
-      <div className="flex-1 p-5 overflow-auto">
+      <div
+        role="tabpanel"
+        id={activePanelId}
+        aria-labelledby={`${instanceId}-tab-${activeTab}`}
+        className="flex-1 p-5 overflow-auto"
+        tabIndex={0}
+      >
         {/* Terminal Panel */}
         {activeTab === 'terminal' && (
           <div className="h-full flex flex-col gap-3">
@@ -678,6 +727,7 @@ export function WorkspaceTabs({
                 agent={agent}
                 uiZoom={uiZoom}
                 clipboardBridgeAvailable={clipboardBridgeState.sessionId === session?.id && clipboardBridgeState.available}
+                isSuspended={isSuspended}
                 onAttach={onAttach}
                 onDetach={onDetach}
                 onDelete={onDelete}

@@ -15,6 +15,7 @@ import {
 } from './StatusBadge';
 import { OsIcon } from './OsIcon';
 import { AgentIcon } from './AgentIcon';
+import { needsAttention, sessionForest } from './session-overview';
 import {
   Plus,
   RefreshCw,
@@ -172,6 +173,9 @@ interface SidebarProps {
   isLoading?: boolean;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
+  onOpenDashboard?: () => void;
+  /** When true, suspends auto-acknowledging attention alerts (e.g. when hidden by dashboard). */
+  isSuspended?: boolean;
   /** Sessions whose status is being re-inspected longer than the visibility threshold. */
   refreshingSessionIds?: ReadonlySet<string>;
 }
@@ -474,6 +478,8 @@ export function Sidebar({
   isLoading = false,
   isCollapsed: externalIsCollapsed,
   onToggleCollapse,
+  onOpenDashboard,
+  isSuspended = false,
   refreshingSessionIds,
 }: SidebarProps): React.JSX.Element {
   const [searchTerm, setSearchTerm] = useState('');
@@ -541,7 +547,7 @@ export function Sidebar({
 
   // When activeSessionId changes or statusDetailsMap updates, mark the active session's alert as acknowledged
   useEffect(() => {
-    if (!activeSessionId) return;
+    if (isSuspended || !activeSessionId) return;
     const activeSession = sessions.find((s) => s.id === activeSessionId);
     if (!activeSession) return;
     if (activeSession.status === 'needs_input' || activeSession.status === 'error') {
@@ -554,7 +560,7 @@ export function Sidebar({
         return next;
       });
     }
-  }, [activeSessionId, statusDetailsMap, sessions]);
+  }, [activeSessionId, statusDetailsMap, sessions, isSuspended]);
 
   // Clean up acknowledged alerts for sessions that returned to normal working/idle
   useEffect(() => {
@@ -590,9 +596,7 @@ export function Sidebar({
   const agentsById = React.useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
 
   // Live counts for filter chips
-  const countNeedsAttention = sessions.filter(
-    (s) => s.status === 'needs_input' || s.status === 'error'
-  ).length;
+  const countNeedsAttention = sessions.filter(needsAttention).length;
   const countUnacknowledgedAttention = sessions.filter((s) => {
     if (s.status !== 'needs_input' && s.status !== 'error') return false;
     const details = statusDetailsMap[s.id];
@@ -618,23 +622,7 @@ export function Sidebar({
 
   // Group children under parents and track expandable parent cards
   const childrenByParentId = React.useMemo(() => {
-    const map = new Map<string, Session[]>();
-    for (const s of sessions) {
-      if (s.parentSessionId) {
-        const list = map.get(s.parentSessionId) || [];
-        list.push(s);
-        map.set(s.parentSessionId, list);
-      }
-    }
-    for (const list of map.values()) {
-      list.sort((a, b) =>
-        (a.childAlias || a.name).localeCompare(b.childAlias || b.name, undefined, {
-          numeric: true,
-          sensitivity: 'base',
-        })
-      );
-    }
-    return map;
+    return sessionForest(sessions).children;
   }, [sessions]);
 
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
@@ -685,7 +673,7 @@ export function Sidebar({
 
   const sessionMatchesStatus = (s: Session): boolean => {
     if (statusFilter === 'needs_attention') {
-      return s.status === 'needs_input' || s.status === 'error';
+      return needsAttention(s);
     }
     if (statusFilter === 'working') {
       return s.status === 'working' || s.status === 'starting';
@@ -1840,6 +1828,18 @@ export function Sidebar({
         {/* Collapsed quick actions */}
         {isCollapsed && (
           <div className="p-2 border-b border-[#30363d] flex flex-col items-center gap-2 shrink-0">
+            {onOpenDashboard && (
+              <button
+                type="button"
+                data-testid="sidebar-open-dashboard-button-collapsed"
+                title="Open full-window session dashboard (Ctrl+Shift+D)"
+                aria-label="Expand session dashboard"
+                onClick={onOpenDashboard}
+                className="w-8 h-8 rounded-lg bg-[#21262d] hover:bg-emerald-600/20 text-zinc-300 hover:text-emerald-400 border border-[#30363d] flex items-center justify-center shadow-sm cursor-pointer transition-colors"
+              >
+                <LayoutGrid className="w-4 h-4" />
+              </button>
+            )}
             <div className="flex items-center gap-1">
               <button
                 type="button"
@@ -1933,6 +1933,29 @@ export function Sidebar({
         {/* Grouping Mode Selector & Search Filter (when expanded) */}
         {!isCollapsed && (
           <div className="px-3 pt-3 pb-1 shrink-0 space-y-2">
+            {onOpenDashboard && (
+              <button
+                type="button"
+                data-testid="sidebar-open-dashboard-button"
+                onClick={onOpenDashboard}
+                className="w-full flex items-center justify-between px-3 py-2 bg-[#1c2128] hover:bg-[#21262d] text-zinc-200 hover:text-white rounded-lg border border-[#30363d] hover:border-emerald-500/40 transition-all group cursor-pointer shadow-xs"
+                title="Open full-window session dashboard (Ctrl+Shift+D)"
+                aria-label="Expand session dashboard"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="p-1 rounded-md bg-emerald-500/10 text-emerald-400 group-hover:bg-emerald-500/20 group-hover:text-emerald-300 transition-colors">
+                    <LayoutGrid className="w-4 h-4" />
+                  </div>
+                  <div className="flex flex-col text-left">
+                    <span className="text-xs font-semibold tracking-tight text-zinc-100">Session Dashboard</span>
+                    <span className="text-[10px] text-zinc-400">All sessions & analytics</span>
+                  </div>
+                </div>
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[#0d1117] text-zinc-400 border border-[#30363d] group-hover:text-zinc-200 group-hover:border-zinc-500 transition-colors">
+                  Ctrl+Shift+D
+                </span>
+              </button>
+            )}
             {/* Grouping Tabs */}
             <div className="flex items-center bg-[#0d1117] p-0.5 rounded-lg border border-[#30363d] text-[11px]">
               <button

@@ -675,4 +675,45 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
     view.unmount();
     expect(window.spawneaApi.detachSession).toHaveBeenCalledWith(mockSession.id);
   });
+
+  it('defers status-driven terminal attachments while hidden', async () => {
+    const view = render(
+      <div className="hidden">
+        <TerminalView session={{ ...mockSession, status: 'done' }} />
+      </div>
+    );
+    expect(window.spawneaApi.attachSession).not.toHaveBeenCalled();
+    view.rerender(
+      <div className="hidden">
+        <TerminalView session={{ ...mockSession, status: 'working' }} />
+      </div>
+    );
+    expect(window.spawneaApi.attachSession).not.toHaveBeenCalled();
+
+    view.rerender(
+      <div>
+        <TerminalView session={{ ...mockSession, status: 'working' }} />
+      </div>
+    );
+    act(() => {
+      window.dispatchEvent(new CustomEvent('spawnea:focus-terminal'));
+    });
+    await waitFor(() => {
+      expect(window.spawneaApi.attachSession).toHaveBeenCalledWith(mockSession.id, 80, 24);
+    });
+  });
+
+  it('defers and reconnects terminal attachments based on isSuspended prop', async () => {
+    const view = render(
+      <TerminalView session={{ ...mockSession, status: 'working' }} isSuspended={true} />
+    );
+    expect(window.spawneaApi.attachSession).not.toHaveBeenCalled();
+
+    view.rerender(
+      <TerminalView session={{ ...mockSession, status: 'working' }} isSuspended={false} />
+    );
+    await waitFor(() => {
+      expect(window.spawneaApi.attachSession).toHaveBeenCalledWith(mockSession.id, 80, 24);
+    });
+  });
 });
