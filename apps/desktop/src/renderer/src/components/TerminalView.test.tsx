@@ -689,5 +689,31 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
       </div>
     );
     expect(window.spawneaApi.attachSession).not.toHaveBeenCalled();
+
+    view.rerender(
+      <div>
+        <TerminalView session={{ ...mockSession, status: 'working' }} />
+      </div>
+    );
+    act(() => {
+      window.dispatchEvent(new CustomEvent('spawnea:focus-terminal'));
+    });
+    await waitFor(() => {
+      expect(window.spawneaApi.attachSession).toHaveBeenCalledWith(mockSession.id, 80, 24);
+    });
+  });
+
+  it('defers and reconnects terminal attachments based on isSuspended prop', async () => {
+    const view = render(
+      <TerminalView session={{ ...mockSession, status: 'working' }} isSuspended={true} />
+    );
+    expect(window.spawneaApi.attachSession).not.toHaveBeenCalled();
+
+    view.rerender(
+      <TerminalView session={{ ...mockSession, status: 'working' }} isSuspended={false} />
+    );
+    await waitFor(() => {
+      expect(window.spawneaApi.attachSession).toHaveBeenCalledWith(mockSession.id, 80, 24);
+    });
   });
 });

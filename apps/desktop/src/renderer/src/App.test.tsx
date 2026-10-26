@@ -497,7 +497,8 @@ describe('App Desktop Shell', () => {
   });
 
   it('suspends alert acknowledgement while dashboard is open', async () => {
-    const api = createMockSpawneaApi();
+    const initial = mockSessions.map((s) => ({ ...s, status: 'working' as const }));
+    const api = createMockSpawneaApi({ listSessions: vi.fn().mockResolvedValue(initial) });
     window.spawneaApi = api;
     render(<App />);
     await screen.findByText('Active Sessions (2)');
@@ -506,10 +507,16 @@ describe('App Desktop Shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand session dashboard' }));
     expect(screen.getByRole('region', { name: 'Session dashboard' })).toBeTruthy();
 
+    act(() => {
+      (api.onStatusChanged as any).mock.calls[0][0]('sess-1', 'needs_input');
+    });
+
     // Select sess-2 from dashboard
     fireEvent.click(screen.getByRole('button', { name: 'Model Optimization' }));
     await waitFor(() => expect(api.setActiveSession).toHaveBeenLastCalledWith('sess-2'));
     expect(screen.queryByRole('region', { name: 'Session dashboard' })).toBeNull();
+
+    expect(screen.getByTestId('status-filter-needs_attention').querySelector('.animate-pulse')).not.toBeNull();
   });
 
   it('closes dashboard and reveals workspace when selecting a session through quick switcher', async () => {

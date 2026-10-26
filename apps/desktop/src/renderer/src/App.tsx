@@ -119,7 +119,7 @@ export function App(): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isDashboardOpen, setIsDashboardOpen] = useState(false);
   const [sessionsObserved, setSessionsObserved] = useState(false);
-  const activity = useActivitySamples(sessions, sessionsObserved);
+  const activity = useActivitySamples(sessions, sessionsObserved, isDashboardOpen);
   useEffect(() => {
     if (!isDashboardOpen) {
       window.dispatchEvent(new Event('resize'));
@@ -173,7 +173,8 @@ export function App(): React.JSX.Element {
       window.dispatchEvent(new Event('resize'));
       window.dispatchEvent(new CustomEvent('spawnea:focus-terminal'));
       const activeEl = (document.querySelector('.xterm-helper-textarea') ||
-        document.querySelector('[data-testid^="workspace-tab-"].text-emerald-400') ||
+        document.querySelector('[role="tab"][aria-selected="true"]') ||
+        document.querySelector('[role="tab"]') ||
         document.querySelector('[data-testid^="workspace-tab-"]') ||
         document.body) as HTMLElement | null;
       activeEl?.focus?.();
@@ -1134,6 +1135,21 @@ export function App(): React.JSX.Element {
   // - Workspace Tabs: Alt+1..6
   // - Sidebar Toggle: Ctrl+Shift+B
   // - Session Navigation: Ctrl+1..0, Ctrl+Tab, Ctrl+Shift+Tab
+  const isBlockingOverlayOpen =
+    isCreateModalOpen ||
+    isQuickSwitcherOpen ||
+    isNewProjectModalOpen ||
+    isLocalDiscoveryOpen ||
+    isAdoptModalOpen ||
+    isFeedbackModalOpen ||
+    isAgentSetupOpen ||
+    sessionToStop !== null ||
+    sessionToUnadopt !== null ||
+    sessionToFinish !== null ||
+    sessionToCreateChildFor !== null ||
+    parentSessionToClose !== null ||
+    controlFinalizationRequests.length > 0;
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isCtrl = e.ctrlKey || e.metaKey;
@@ -1169,21 +1185,7 @@ export function App(): React.JSX.Element {
 
       // 2. New Session: Ctrl+N / Cmd+N
       if (isCtrl && !e.shiftKey && !e.altKey && (e.key === 'n' || e.key === 'N')) {
-        if (
-          isCreateModalOpen ||
-          isQuickSwitcherOpen ||
-          isNewProjectModalOpen ||
-          isLocalDiscoveryOpen ||
-          isAdoptModalOpen ||
-          isFeedbackModalOpen ||
-          isAgentSetupOpen ||
-          sessionToStop !== null ||
-          sessionToUnadopt !== null ||
-          sessionToFinish !== null ||
-          sessionToCreateChildFor !== null ||
-          parentSessionToClose !== null ||
-          controlFinalizationRequests.length > 0
-        ) {
+        if (isBlockingOverlayOpen) {
           return;
         }
         e.preventDefault();
@@ -1222,21 +1224,7 @@ export function App(): React.JSX.Element {
       }
 
       // If a modal like Create Session, Quick Switcher, or any confirmation dialog is open, do not intercept session switching or dashboard shortcuts
-      if (
-        isCreateModalOpen ||
-        isQuickSwitcherOpen ||
-        isNewProjectModalOpen ||
-        isLocalDiscoveryOpen ||
-        isAdoptModalOpen ||
-        isFeedbackModalOpen ||
-        isAgentSetupOpen ||
-        sessionToStop !== null ||
-        sessionToUnadopt !== null ||
-        sessionToFinish !== null ||
-        sessionToCreateChildFor !== null ||
-        parentSessionToClose !== null ||
-        controlFinalizationRequests.length > 0
-      ) {
+      if (isBlockingOverlayOpen) {
         return;
       }
 
@@ -1317,19 +1305,8 @@ export function App(): React.JSX.Element {
     visibleSessionIds,
     activeSessionId,
     handleTabChange,
+    isBlockingOverlayOpen,
     isCreateModalOpen,
-    isQuickSwitcherOpen,
-    isNewProjectModalOpen,
-    isLocalDiscoveryOpen,
-    isAdoptModalOpen,
-    isFeedbackModalOpen,
-    isAgentSetupOpen,
-    sessionToStop,
-    sessionToUnadopt,
-    sessionToFinish,
-    sessionToCreateChildFor,
-    parentSessionToClose,
-    controlFinalizationRequests,
     isDashboardOpen,
     restoreWorkspaceFocus,
   ]);

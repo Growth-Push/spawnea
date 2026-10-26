@@ -326,7 +326,7 @@ export function DashboardView(props: Props) {
   const workingSessions = all.filter((s) => s.status === 'working' || s.status === 'starting').length;
   const needInputSessions = all.filter((s) => s.status === 'needs_input').length;
   const errorSessions = all.filter((s) => s.status === 'error').length;
-  const idleSessions = all.filter((s) => s.status === 'idle' || s.status === 'done').length;
+  const idleSessions = all.filter((s) => s.status === 'idle' || s.status === 'done' || s.status === 'disconnected').length;
   const hostsCount = new Set(all.map((s) => s.serverId)).size;
   const projectsCount = new Set(all.map((s) => s.projectId)).size;
 

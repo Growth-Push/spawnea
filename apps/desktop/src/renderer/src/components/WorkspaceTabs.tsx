@@ -601,6 +601,8 @@ export function WorkspaceTabs({
             return (
               <button
                 type="button"
+                role="tab"
+                aria-selected={isActive}
                 key={tab.id}
                 data-testid={`workspace-tab-${tab.id}`}
                 onClick={() => onTabChange(tab.id)}
@@ -684,6 +686,7 @@ export function WorkspaceTabs({
                 agent={agent}
                 uiZoom={uiZoom}
                 clipboardBridgeAvailable={clipboardBridgeState.sessionId === session?.id && clipboardBridgeState.available}
+                isSuspended={isSuspended}
                 onAttach={onAttach}
                 onDetach={onDetach}
                 onDelete={onDelete}
