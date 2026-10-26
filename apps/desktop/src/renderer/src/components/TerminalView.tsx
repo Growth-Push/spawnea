@@ -291,7 +291,9 @@ export function TerminalView({
                 setPtyChannelId(data.ptyChannelId);
                 setConnectionStatus('connected');
                 term.options.disableStdin = false;
-                term.focus();
+                if (!document.activeElement?.closest('[role="tab"], input, textarea, select, [contenteditable="true"]')) {
+                  term.focus();
+                }
                 showToast('Connection restored successfully');
               }
             }
@@ -409,7 +411,9 @@ export function TerminalView({
           }
 
           setTimeout(() => {
-            term.focus();
+            if (!document.activeElement?.closest('[role="tab"], input, textarea, select, [contenteditable="true"]')) {
+              term.focus();
+            }
           }, 50);
 
           // 1. Hook up PTY output streaming with backpressure acknowledgment
@@ -517,7 +521,9 @@ export function TerminalView({
           );
           term.writeln(`Type interactive commands below:`);
           term.write('\r\n$ ');
-          term.focus();
+          if (!document.activeElement?.closest('[role="tab"], input, textarea, select, [contenteditable="true"]')) {
+            term.focus();
+          }
 
           const termInputDisposable = term.onData((data) => {
             if (data === '\r') {
