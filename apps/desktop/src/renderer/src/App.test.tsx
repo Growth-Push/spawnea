@@ -2598,6 +2598,7 @@ describe('App Desktop Shell', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Active Sessions (4)')).toBeDefined();
+      expect(screen.getByTestId('session-item-c-1-1').getAttribute('aria-current')).toBe('page');
     });
 
     // Press Ctrl+4: MUST navigate to parent4 (Delta Project 4), NOT any child!
@@ -2619,6 +2620,7 @@ describe('App Desktop Shell', () => {
 
     fireEvent.click(screen.getByTestId('session-toggle-children-p-4'));
     expect(screen.getByTestId('session-toggle-children-p-4').getAttribute('aria-expanded')).toBe('true');
+    await screen.findByTestId('session-item-c-4-1');
 
     fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
     await waitFor(() => {
@@ -2627,6 +2629,9 @@ describe('App Desktop Shell', () => {
 
     // Collapsing the currently active child skips its hidden row on the next cycle.
     fireEvent.click(screen.getByTestId('session-toggle-children-p-4'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('session-item-c-4-1')).toBeNull();
+    });
     fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
     await waitFor(() => {
       expect(screen.getByTestId('session-item-p-1').getAttribute('aria-current')).toBe('page');
