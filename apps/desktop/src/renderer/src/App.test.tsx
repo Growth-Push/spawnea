@@ -2925,7 +2925,9 @@ describe('App Desktop Shell', () => {
     // Modal 2: FinishSessionModal transitions to child-2 without dismissing
     await waitFor(() => {
       expect(api.finishSession).toHaveBeenCalledWith('child-1', 'integrate', undefined);
-      expect(screen.getByText('Dirty Child Two')).toBeDefined();
+      expect(api.inspectWorktree).toHaveBeenCalledWith('child-2');
+      const submitBtn2 = screen.getByRole('button', { name: /Integrate & Clean Up/i }) as HTMLButtonElement;
+      expect(submitBtn2.disabled).toBe(false);
     });
 
     const submitBtn2 = screen.getByRole('button', { name: /Integrate & Clean Up/i });
