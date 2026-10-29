@@ -1439,12 +1439,25 @@ export class SessionManager {
 
     if (childAction === 'close-all') {
       this.logger.info('Closing child sessions under parent', { parentId, count: children.length });
-      for (const child of children) {
-        if (child.managedWorktree) {
-          await this.finishSession(child.id, 'close', { stashChanges: false }, 'ui');
-        } else {
-          await this.deleteSession(child.id, 'close-all');
+      let closedChildren = 0;
+      try {
+        for (const child of children) {
+          if (child.managedWorktree) {
+            await this.finishSession(child.id, 'close', { stashChanges: false }, 'ui');
+          } else {
+            await this.deleteSession(child.id, 'close-all');
+          }
+          if (await this.repos.sessions.findById(child.id)) {
+            throw new Error('Persistence failure: child session remains in the database');
+          }
+          closedChildren++;
         }
+      } catch (error) {
+        if (closedChildren > 0) {
+          const wc = this.getWebContents();
+          if (wc && (typeof wc.isDestroyed !== 'function' || !wc.isDestroyed())) wc.send('control:dataChanged');
+        }
+        throw new Error(`Child-finalization failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
       }
     } else {
       this.logger.info('Promoting child sessions to root before parent removal', { parentId, count: children.length });
@@ -1665,19 +1678,40 @@ export class SessionManager {
             this.logger.warn('Failed to clean up remote session resources during deletion (host may be unreachable)', { error: err });
           }
         }
-      } catch (err) {
-        this.logger.warn('Error querying session for tmux cleanup during deletion', { error: err });
-      }
 
-      const contextDeleted = await this.contextStore.delete(sessionId);
-      if (!contextDeleted) {
-        throw new Error(`Failed to delete context file for session '${sessionId}'`);
-      }
+        const previousContext = await this.contextStore.load(sessionId).catch(() => null);
+        const contextDeleted = await this.contextStore.delete(sessionId);
+        if (!contextDeleted) {
+          throw new Error(`Failed to delete context file for session '${sessionId}'`);
+        }
 
-      try {
-        await this.repos.sessions.delete(sessionId);
-      } catch (err) {
-        this.logger.warn('Failed to delete session from database during deletion', { error: err });
+        let deleteError: unknown;
+        try {
+          await this.repos.sessions.delete(sessionId);
+        } catch (err) {
+          deleteError = err;
+          this.logger.warn('Failed to delete session from database during deletion', { error: err });
+        }
+        try {
+          if (await this.repos.sessions.findById(sessionId)) {
+            throw new Error(`Session '${sessionId}' remains in the database`);
+          }
+        } catch (error) {
+          if (previousContext) {
+            try {
+              await this.contextStore.save(previousContext);
+            } catch (restoreError) {
+              this.logger.error('Failed to restore session context after database deletion failed', restoreError, { sessionId });
+            }
+          }
+          throw new Error('Persistence failure: could not verify session deletion from the database', { cause: deleteError ?? error });
+        }
+      } catch (error) {
+        const wc = this.getWebContents();
+        if (wc && (typeof wc.isDestroyed !== 'function' || !wc.isDestroyed())) {
+          wc.send('control:dataChanged');
+        }
+        throw error;
       }
 
       const wc = this.getWebContents();

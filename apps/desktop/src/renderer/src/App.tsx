@@ -26,7 +26,7 @@ import { ContextBar } from './components/ContextBar';
 import { WorkspaceTabs, type WorkspaceTabType } from './components/WorkspaceTabs';
 import { CreateSessionModal } from './components/CreateSessionModal';
 import { CreateChildSessionModal } from './components/CreateChildSessionModal';
-import { CloseParentModal } from './components/CloseParentModal';
+import { CloseParentModal, isPossiblyDirtyChild } from './components/CloseParentModal';
 import { AdoptSessionModal } from './components/AdoptSessionModal';
 import { StopSessionModal } from './components/StopSessionModal';
 import { UnadoptSessionModal } from './components/UnadoptSessionModal';
@@ -117,6 +117,8 @@ export function getHierarchicalSessionOrder(sessions: Session[]): Session[] {
 
 export function App(): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const [isDashboardOpen, setIsDashboardOpen] = useState(false);
   const [sessionsObserved, setSessionsObserved] = useState(false);
   const activity = useActivitySamples(sessions, sessionsObserved, isDashboardOpen);
@@ -166,6 +168,11 @@ export function App(): React.JSX.Element {
   const [sessionToFinish, setSessionToFinish] = useState<Session | null>(null);
   const [sessionToCreateChildFor, setSessionToCreateChildFor] = useState<Session | null>(null);
   const [parentSessionToClose, setParentSessionToClose] = useState<Session | null>(null);
+  const inFlightDelete = useRef(new Set<string>());
+  const [deletingSessionIds, setDeletingSessionIds] = useState<Set<string>>(new Set());
+  const [parentCloseError, setParentCloseError] = useState<string | null>(null);
+  const [parentCloseAction, setParentCloseAction] = useState<ParentCloseAction>('close-all');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [pendingCloseAllParentId, setPendingCloseAllParentId] = useState<string | null>(null);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   const restoreWorkspaceFocus = useCallback(() => {
@@ -775,6 +782,9 @@ export function App(): React.JSX.Element {
     }
   };
 
+  const isPossiblyDirty = (c: Session): boolean =>
+    isPossiblyDirtyChild(c, gitDirtyBySessionId, gitUnavailableBySessionId);
+
   const handleFinishSession = async (
     sessionId: string,
     action: FinishSessionAction,
@@ -816,9 +826,7 @@ export function App(): React.JSX.Element {
           const remainingChildren = sessions.filter(
             (s) => s.parentSessionId === parentId && s.id !== sessionId
           );
-          const nextDirtyChild = remainingChildren.find(
-            (c) => c.managedWorktree && gitDirtyBySessionId[c.id]
-          );
+          const nextDirtyChild = remainingChildren.find((c) => isPossiblyDirty(c));
           if (nextDirtyChild) {
             setSessionToFinish(nextDirtyChild);
             return;
@@ -849,58 +857,82 @@ export function App(): React.JSX.Element {
   const executeDeleteSession = async (
     sessionId: string,
     childAction: ParentCloseAction = 'leave-children',
-    options?: { skipDirtyChildCheck?: boolean }
+    options?: { skipDirtyChildCheck?: boolean; modal?: boolean; preserveError?: boolean }
   ) => {
-    if (childAction === 'close-all' && !options?.skipDirtyChildCheck) {
-      const children = sessions.filter((s) => s.parentSessionId === sessionId);
-      const dirtyChild = children.find((c) => c.managedWorktree && gitDirtyBySessionId[c.id] !== false);
-      if (dirtyChild) {
-        setPendingCloseAllParentId(sessionId);
-        setSessionToFinish(dirtyChild);
-        return;
+    if (inFlightDelete.current.has(sessionId) || inFlightResurrectRef.current.has(sessionId)) return false;
+    inFlightDelete.current.add(sessionId);
+    setDeletingSessionIds(new Set(inFlightDelete.current));
+    if (options?.modal) setParentCloseError(null);
+    else if (!options?.preserveError) setDeleteError(null);
+    try {
+      if (childAction === 'close-all' && !options?.skipDirtyChildCheck) {
+        const children = sessions.filter((s) => s.parentSessionId === sessionId);
+        const dirtyChild = children.find((c) => isPossiblyDirty(c));
+        if (dirtyChild) {
+          setPendingCloseAllParentId(sessionId);
+          setSessionToFinish(dirtyChild);
+          return true;
+        }
       }
-    }
 
-    if (window.spawneaApi?.deleteSession) {
-      try {
+      if (window.spawneaApi?.deleteSession) {
         const result = childAction === 'close-all'
           ? await window.spawneaApi.deleteSession(sessionId, childAction)
           : await window.spawneaApi.deleteSession(sessionId);
         if (result === false || (typeof result === 'object' && result !== null && 'success' in result && !(result as any).success)) {
-          console.error('Session deletion failed on backend for session:', sessionId);
-          return;
+          throw new Error('Persistence failure: backend did not confirm session deletion.');
         }
-      } catch (err) {
-        console.error('Failed to delete session on backend:', err);
-        return;
       }
-    }
 
-    setSessions((prev) => {
-      let next: Session[];
-      if (childAction === 'close-all') {
-        next = prev.filter((s) => s.id !== sessionId && s.parentSessionId !== sessionId);
-      } else {
-        next = prev
-          .filter((s) => s.id !== sessionId)
-          .map((s) =>
-            s.parentSessionId === sessionId
-              ? { ...s, parentSessionId: undefined, childAlias: undefined }
-              : s
-          );
-      }
-      setActiveSessionId((currentActiveId) => {
-        const activeWasRemoved = next.every((s) => s.id !== currentActiveId);
-        return activeWasRemoved ? (next[0]?.id ?? null) : currentActiveId;
+      setSessions((prev) => {
+        let next: Session[];
+        if (childAction === 'close-all') {
+          next = prev.filter((s) => s.id !== sessionId && s.parentSessionId !== sessionId);
+        } else {
+          next = prev
+            .filter((s) => s.id !== sessionId)
+            .map((s) =>
+              s.parentSessionId === sessionId
+                ? { ...s, parentSessionId: undefined, childAlias: undefined }
+                : s
+            );
+        }
+        setActiveSessionId((currentActiveId) => {
+          const activeWasRemoved = next.every((s) => s.id !== currentActiveId);
+          return activeWasRemoved ? (next[0]?.id ?? null) : currentActiveId;
+        });
+        return next;
       });
-      return next;
-    });
+      return true;
+    } catch (error) {
+      console.error('Failed to delete session on backend:', error);
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      const message = rawMessage.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
+      const category = /already being finalized|currently being|waiting for child creation/i.test(message) ? 'busy'
+        : /^child-finalization failed:/i.test(message) || /child-finalization|child.*finaliz/i.test(message) ? 'child-finalization'
+        : /persistence|database|context file|metadata|promote child/i.test(message) ? 'persistence'
+        : /\bhost\b|worktree|branch|ssh|connection|tmux|\bremote\b|repository/i.test(message) ? 'host/worktree'
+        : 'unknown';
+      if (options?.modal) {
+        const feedback = `Could not close session (${category}): ${message} Retry, choose Leave Children if available, or cancel to inspect the terminal.`;
+        setParentCloseError(feedback);
+      } else {
+        const feedback = `Could not delete session (${category}): ${message}`;
+        setDeleteError((prev) => (options?.preserveError && prev ? `${prev} | ${feedback}` : feedback));
+      }
+      return false;
+    } finally {
+      inFlightDelete.current.delete(sessionId);
+      setDeletingSessionIds(new Set(inFlightDelete.current));
+    }
   };
 
   const handleDeleteSession = async (sessionId: string) => {
+    if (inFlightDelete.current.has(sessionId)) return;
     const target = sessions.find((s) => s.id === sessionId);
     const children = sessions.filter((s) => s.parentSessionId === sessionId);
     if (target && children.length > 0) {
+      setParentCloseError(null);
       setParentSessionToClose(target);
       return;
     }
@@ -951,7 +983,7 @@ export function App(): React.JSX.Element {
 
   const handleResurrectSession = async (sessionId: string) => {
     if (!window.spawneaApi?.resurrectSession) return;
-    if (inFlightResurrectRef.current.has(sessionId)) return;
+    if (inFlightDelete.current.has(sessionId) || inFlightResurrectRef.current.has(sessionId)) return;
     inFlightResurrectRef.current.add(sessionId);
 
     try {
@@ -982,46 +1014,29 @@ export function App(): React.JSX.Element {
   }, []);
 
   const handleCloseParentModal = useCallback(() => {
+    if (parentSessionToClose && inFlightDelete.current.has(parentSessionToClose.id)) return;
     setParentSessionToClose(null);
-  }, []);
+    setParentCloseError(null);
+  }, [parentSessionToClose]);
 
   const handleConfirmCloseParentModal = useCallback(async (action: ParentCloseAction) => {
     const parent = parentSessionToClose;
-    setParentSessionToClose(null);
-    if (parent) {
-      await executeDeleteSession(parent.id, action);
+    if (parent && !inFlightDelete.current.has(parent.id)) {
+      setParentCloseAction(action);
+      if (await executeDeleteSession(parent.id, action, { modal: true })) {
+        setParentSessionToClose(null);
+      }
     }
   }, [parentSessionToClose, executeDeleteSession]);
 
   const handleClearDoneSessions = async () => {
+    setDeleteError(null);
     const doneSessions = sessions.filter((s) => s.status === 'done');
-    const clearedSessionIds = new Set(doneSessions.map((session) => session.id));
-    setSessions((prev) =>
-      prev
-        .filter((session) => session.status !== 'done')
-        .map((session) =>
-          session.parentSessionId && clearedSessionIds.has(session.parentSessionId)
-            ? { ...session, parentSessionId: undefined, childAlias: undefined }
-            : session
-        )
-    );
-
-    setActiveSessionId((currentActiveId) => {
-      if (doneSessions.some((s) => s.id === currentActiveId)) {
-        const remaining = sessions.filter((s) => s.status !== 'done');
-        return remaining.length > 0 ? remaining[0].id : null;
-      }
-      return currentActiveId;
-    });
-
     for (const s of doneSessions) {
-      if (window.spawneaApi?.deleteSession) {
-        try {
-          await window.spawneaApi.deleteSession(s.id);
-        } catch (err) {
-          console.error('Failed to delete session on backend:', err);
-        }
-      }
+      if (inFlightResurrectRef.current.has(s.id)) continue;
+      const current = sessionsRef.current.find((item) => item.id === s.id);
+      if (!current || current.status !== 'done') continue;
+      await executeDeleteSession(s.id, 'leave-children', { preserveError: true });
     }
   };
 
@@ -1710,6 +1725,23 @@ export function App(): React.JSX.Element {
       />
 
       {/* Close Parent Session Modal */}
+      {deleteError && (
+        <div
+          role="alert"
+          data-testid="session-delete-error"
+          className="fixed bottom-4 right-4 z-[60] max-w-sm rounded-lg border border-rose-500/40 bg-[#2b1620] px-4 py-3 text-xs text-rose-200 shadow-2xl flex items-start justify-between gap-3"
+        >
+          <span className="flex-1">{deleteError}</span>
+          <button
+            type="button"
+            aria-label="Dismiss session deletion error"
+            onClick={() => setDeleteError(null)}
+            className="text-rose-400 hover:text-white p-0.5 rounded cursor-pointer shrink-0"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <CloseParentModal
         isOpen={Boolean(parentSessionToClose)}
         parentSession={parentSessionToClose}
@@ -1719,6 +1751,10 @@ export function App(): React.JSX.Element {
             : []
         }
         gitDirtyBySessionId={gitDirtyBySessionId}
+        gitUnavailableBySessionId={gitUnavailableBySessionId}
+        isLoading={Boolean(parentSessionToClose && deletingSessionIds.has(parentSessionToClose.id))}
+        error={parentCloseError}
+        retryAction={parentCloseAction}
         onClose={handleCloseParentModal}
         onConfirm={handleConfirmCloseParentModal}
       />

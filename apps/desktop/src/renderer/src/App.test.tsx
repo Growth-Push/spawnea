@@ -2065,6 +2065,126 @@ describe('App Desktop Shell', () => {
     });
   });
 
+  it.each([
+    ['busy', "Session 'parent' is already being finalized"],
+    ['host/worktree', 'Managed worktree is not checked out on recorded branch'],
+    ['child-finalization', 'Child-finalization failed: cleanup rejected'],
+    ['child-finalization', "Error invoking remote method 'spawnea:delete-session': Error: Child-finalization failed: cleanup rejected"],
+    ['persistence', 'Persistence failure: database deletion failed'],
+    ['persistence', false],
+  ])('retains parent modal with %s feedback, blocks overlap and retries', async (category, failure) => {
+    const parent = { ...mockSessions[0], status: 'done' as const };
+    const child = { ...mockSessions[1], parentSessionId: parent.id, managedWorktree: false };
+    let reject!: (reason: Error) => void;
+    let resolve!: (value: boolean) => void;
+    const pending = new Promise<boolean>((res, rej) => { resolve = res; reject = rej; });
+    const remove = vi.fn().mockReturnValueOnce(pending).mockResolvedValue(true);
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue([parent, child]), deleteSession: remove,
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('session-delete-button')).toBeDefined());
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    fireEvent.click(screen.getByTestId('parent-close-all-button'));
+    fireEvent.click(screen.getByTestId('parent-close-all-button'));
+    fireEvent.click(screen.getByTestId('parent-close-leave-children-button'));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.getByTestId('close-parent-modal').getAttribute('aria-busy')).toBe('true');
+    expect(remove).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      if (failure === false) resolve(false);
+      else reject(new Error(String(failure)));
+    });
+    expect(screen.getByRole('alert').textContent).toContain(`(${category})`);
+    expect(screen.getByTestId('close-parent-modal').getAttribute('aria-busy')).toBe('false');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByTestId('close-parent-modal')).toBeNull());
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenLastCalledWith(parent.id, 'close-all');
+  });
+
+  it('blocks overlapping deletion outside the parent modal and releases the lock after rejection', async () => {
+    let reject!: (reason: Error) => void;
+    const remove = vi.fn().mockReturnValueOnce(new Promise((_, rej) => { reject = rej; })).mockResolvedValue(true);
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue([{ ...mockSessions[0], status: 'done' }, mockSessions[1]]),
+      deleteSession: remove,
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('session-delete-button')).toBeDefined());
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    fireEvent.click(screen.getByTestId('sidebar-clear-done-button'));
+    expect(remove).toHaveBeenCalledTimes(1);
+    await act(async () => reject(new Error('SSH connection failed')));
+    expect(screen.getByTestId('session-delete-error').textContent).toContain('(host/worktree)');
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(2));
+  });
+
+  it('preserves error banner when clearing multiple done sessions if one fails and another succeeds', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const remove = vi.fn()
+      .mockRejectedValueOnce(new Error('First session failed'))
+      .mockResolvedValueOnce(true);
+    const doneSessions: Session[] = [
+      { ...mockSessions[0], id: 'done-1', status: 'done' },
+      { ...mockSessions[1], id: 'done-2', status: 'done' },
+    ];
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue(doneSessions),
+      deleteSession: remove,
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('sidebar-clear-done-button')).toBeDefined());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sidebar-clear-done-button'));
+    });
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('session-delete-error').textContent).toContain('First session failed');
+    errorSpy.mockRestore();
+  });
+
+  it('does not delete a session resurrected while clear-done waits', async () => {
+    let resolveFirst!: (value: boolean) => void;
+    const remove = vi.fn()
+      .mockReturnValueOnce(new Promise((res) => { resolveFirst = res; }))
+      .mockResolvedValue(true);
+    const done: Session[] = [
+      { ...mockSessions[0], id: 'done-1', name: 'Done One', status: 'done' },
+      { ...mockSessions[1], id: 'done-2', name: 'Done Two', status: 'done' },
+    ];
+    const resurrect = vi.fn().mockImplementation(async (id: string) => ({
+      ...done.find((s) => s.id === id)!,
+      status: 'working' as const,
+    }));
+    window.spawneaApi = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue(done),
+      deleteSession: remove,
+      resurrectSession: resurrect,
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('sidebar-clear-done-button')).toBeDefined());
+    fireEvent.click(screen.getByTestId('sidebar-clear-done-button'));
+    await waitFor(() => expect(remove).toHaveBeenCalledWith('done-1'));
+
+    // Resurrect done-2 while done-1 is still in flight
+    fireEvent.click(screen.getByText('Done Two'));
+    const resurrectBtn = await screen.findByTestId('session-resurrect-button');
+    await act(async () => {
+      fireEvent.click(resurrectBtn);
+    });
+    await waitFor(() => expect(resurrect).toHaveBeenCalledWith('done-2'));
+
+    // Now complete done-1
+    await act(async () => {
+      resolveFirst(true);
+    });
+
+    // done-2 must NOT have been deleted
+    expect(remove).not.toHaveBeenCalledWith('done-2');
+  });
+
   it('preserves the session in UI state when backend deletion fails or returns false', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const deleteMock = vi.fn().mockRejectedValueOnce(new Error('Backend deletion failed'));
@@ -2093,6 +2213,7 @@ describe('App Desktop Shell', () => {
     // Session must not be removed from state
     expect(screen.getByText('Active Sessions (2)')).toBeDefined();
     expect(errorSpy).toHaveBeenCalledWith('Failed to delete session on backend:', expect.any(Error));
+    expect(screen.getByTestId('session-delete-error').textContent).toContain('(unknown)');
 
     // Now test returning false
     deleteMock.mockResolvedValueOnce(false);
@@ -2102,6 +2223,7 @@ describe('App Desktop Shell', () => {
       expect(deleteMock).toHaveBeenCalledTimes(2);
     });
     expect(screen.getByText('Active Sessions (2)')).toBeDefined();
+    await waitFor(() => expect(screen.getByTestId('session-delete-error').textContent).toContain('(persistence)'));
 
     errorSpy.mockRestore();
   });
@@ -2511,7 +2633,7 @@ describe('App Desktop Shell', () => {
     });
   });
 
-  it('handles close-all with dirty child by guiding through finish flow and completing parent deletion', async () => {
+  it.each([false, true])('handles dirty child handoff and reports later parent deletion failure=%s', async (fails) => {
     const parent: Session = {
       id: 'parent-1',
       name: 'Parent Session',
@@ -2559,7 +2681,9 @@ describe('App Desktop Shell', () => {
       targetBranch: 'main',
     });
     api.finishSession = vi.fn().mockResolvedValue({ success: true, removed: true });
-    api.deleteSession = vi.fn().mockResolvedValue({ success: true });
+    api.deleteSession = fails
+      ? vi.fn().mockRejectedValue(new Error('Persistence failure: database unavailable'))
+      : vi.fn().mockResolvedValue({ success: true });
     window.spawneaApi = api;
 
     render(<App />);
@@ -2600,6 +2724,61 @@ describe('App Desktop Shell', () => {
       expect(api.finishSession).toHaveBeenCalledWith('child-1', 'integrate', undefined);
       expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all');
     });
+    if (fails) {
+      await waitFor(() => expect(screen.getByTestId('session-delete-error').textContent).toContain('(persistence)'));
+      expect(screen.queryByTestId('close-parent-modal')).toBeNull();
+    }
+  });
+
+  it('treats managed child with unavailable Git status as dirty and prompts finish before close-all', async () => {
+    const parent: Session = {
+      id: 'parent-1',
+      name: 'Parent Session',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-1',
+      task: 'Parent Task',
+      branch: 'main',
+      worktreePath: '/p/1',
+      tmuxSessionName: 'spawnea-p1',
+      status: 'done',
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+    };
+    const timedOutChild: Session = {
+      ...parent,
+      id: 'child-1',
+      name: 'Timed Out Child Session',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-1',
+      managedWorktree: true,
+      worktreePath: '/p/1-child',
+    };
+
+    const api = createMockSpawneaApi();
+    api.listSessions = vi.fn().mockResolvedValue([parent, timedOutChild]);
+    api.getGitStatus = vi.fn().mockRejectedValue(new Error('SSH command timed out'));
+    api.inspectWorktree = vi.fn().mockResolvedValue({
+      canFastForward: true,
+      hasUncommittedChanges: true,
+      commitsAhead: 0,
+      targetBranch: 'main',
+    });
+    api.finishSession = vi.fn().mockResolvedValue({ success: true, removed: true });
+    api.deleteSession = vi.fn().mockResolvedValue({ success: true });
+    window.spawneaApi = api;
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (1)')).toBeDefined());
+    await waitFor(() => expect(api.getGitStatus).toHaveBeenCalledWith('child-1'));
+
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+    fireEvent.click(screen.getByTestId('parent-close-all-button'));
+
+    // Because child-1 is possibly dirty, FinishSessionModal opens instead of deleting blindly
+    await waitFor(() => expect(screen.getByText('Finish Worktree Session')).toBeDefined());
+    expect(api.deleteSession).not.toHaveBeenCalled();
   });
 
   it('collapses sidebar to icon mode and renders hover popup cards for sessions', async () => {
