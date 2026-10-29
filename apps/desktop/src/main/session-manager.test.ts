@@ -2784,6 +2784,73 @@ up 1 day, 5 hours
       expect(promoted!.childAlias).toBeUndefined();
     });
 
+    it('announces child promotion after parent persistence failure', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude', task: 'Parent persistence failure',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id, task: 'Child promotion check', workspace: 'same-project',
+      });
+      const send = vi.fn();
+      sessionManager.setWebContentsGetter(() => ({ send, isDestroyed: () => false }) as any);
+      const remove = vi.spyOn(repos.sessions, 'delete').mockImplementation(async (id) => {
+        if (id === parent.id) throw new Error('Database unavailable');
+        return true;
+      });
+      await expect(sessionManager.deleteSession(parent.id, 'leave-children')).rejects.toThrow('Persistence failure');
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+      expect((await repos.sessions.findById(child.id))!.parentSessionId).toBeUndefined();
+      expect(send).toHaveBeenCalledWith('control:dataChanged');
+      remove.mockRestore();
+    });
+
+    it.each(['false', 'throws', 'true-with-row'])('rejects unpersisted deletion when repository returns %s and allows retry', async (mode) => {
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude', task: 'Persistence verification',
+      });
+      const remove = vi.spyOn(repos.sessions, 'delete');
+      if (mode === 'throws') remove.mockRejectedValueOnce(new Error('Database unavailable'));
+      else remove.mockResolvedValueOnce(mode === 'true-with-row');
+      await expect(sessionManager.deleteSession(session.id)).rejects.toThrow('Persistence failure');
+      expect(await repos.sessions.findById(session.id)).not.toBeNull();
+      expect(await contextStore.load(session.id)).not.toBeNull();
+      remove.mockRestore();
+      await expect(sessionManager.deleteSession(session.id)).resolves.toBe(true);
+      expect(await repos.sessions.findById(session.id)).toBeNull();
+      expect(await contextStore.load(session.id)).toBeNull();
+    });
+
+    it('notifies partial child deletion before rethrowing and retries only surviving children', async () => {
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude', task: 'Partial child closure',
+      });
+      const first = await sessionManager.createChildSession({ parentSessionId: parent.id, task: 'First', workspace: 'same-project' });
+      const second = await sessionManager.createChildSession({ parentSessionId: parent.id, task: 'Second', workspace: 'same-project' });
+      const send = vi.fn();
+      sessionManager.setWebContentsGetter(() => ({ send, isDestroyed: () => false }) as any);
+      const originalDelete = repos.sessions.delete.bind(repos.sessions);
+      const remove = vi.spyOn(repos.sessions, 'delete').mockImplementation(async (id) => {
+        if (id === second.id) {
+          send.mockClear();
+          throw new Error('Database unavailable');
+        }
+        return originalDelete(id);
+      });
+      await expect(sessionManager.deleteSession(parent.id, 'close-all')).rejects.toThrow('Child-finalization failed: Persistence failure');
+      expect(send.mock.calls.filter(([channel]) => channel === 'control:dataChanged')).toHaveLength(2);
+      expect(await repos.sessions.findById(first.id)).toBeNull();
+      expect(await repos.sessions.findById(second.id)).not.toBeNull();
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+      remove.mockRestore();
+      await expect(sessionManager.deleteSession(parent.id, 'close-all')).resolves.toBe(true);
+      expect(await repos.sessions.findById(second.id)).toBeNull();
+      expect(await repos.sessions.findById(parent.id)).toBeNull();
+    });
+
     it('deletes parent with close-all and closes both parent and child sessions', async () => {
       await enableManagedWorktrees();
       const parent = await sessionManager.createSession({

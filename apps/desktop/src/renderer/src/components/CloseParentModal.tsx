@@ -7,8 +7,23 @@ interface CloseParentModalProps {
   parentSession: Session | null;
   childrenSessions: Session[];
   gitDirtyBySessionId?: Record<string, boolean>;
+  gitUnavailableBySessionId?: Record<string, boolean>;
+  isLoading?: boolean;
+  error?: string | null;
+  retryAction?: 'close-all' | 'leave-children';
   onClose: () => void;
   onConfirm: (action: 'close-all' | 'leave-children') => void;
+}
+
+export function isPossiblyDirtyChild(
+  child: Session,
+  gitDirtyBySessionId: Record<string, boolean> = {},
+  gitUnavailableBySessionId: Record<string, boolean> = {}
+): boolean {
+  return (
+    Boolean(child.managedWorktree) &&
+    (gitUnavailableBySessionId[child.id] === true || gitDirtyBySessionId[child.id] !== false)
+  );
 }
 
 export function CloseParentModal({
@@ -16,6 +31,10 @@ export function CloseParentModal({
   parentSession,
   childrenSessions,
   gitDirtyBySessionId = {},
+  gitUnavailableBySessionId = {},
+  isLoading = false,
+  error = null,
+  retryAction = 'close-all',
   onClose,
   onConfirm,
 }: CloseParentModalProps): React.JSX.Element | null {
@@ -23,16 +42,17 @@ export function CloseParentModal({
   const onCloseRef = React.useRef(onClose);
   onCloseRef.current = onClose;
 
-  // Initial focus on open (only runs when isOpen transitions to true)
+  // Initial focus on open or when loading finishes
   useEffect(() => {
-    if (!isOpen || !parentSession) return;
+    if (!isOpen || !parentSession || isLoading) return;
 
     const timer = setTimeout(() => {
-      if (modalRef.current && !modalRef.current.contains(document.activeElement)) {
+      const active = document.activeElement;
+      if (modalRef.current && (!modalRef.current.contains(active) || active === modalRef.current)) {
         const primaryButton = modalRef.current.querySelector<HTMLElement>(
           '[data-testid="parent-close-leave-children-button"]'
         );
-        if (primaryButton) {
+        if (primaryButton && !primaryButton.hasAttribute('disabled')) {
           primaryButton.focus();
         } else {
           const firstFocusable = modalRef.current.querySelector<HTMLElement>(
@@ -44,7 +64,7 @@ export function CloseParentModal({
     }, 0);
 
     return () => clearTimeout(timer);
-  }, [isOpen, parentSession]);
+  }, [isOpen, parentSession, isLoading]);
 
   // Keyboard navigation: Escape to close, Tab to cycle focus within modal
   useEffect(() => {
@@ -54,20 +74,29 @@ export function CloseParentModal({
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
-        onCloseRef.current();
+        if (!isLoading) onCloseRef.current();
         return;
       }
       if (e.key === 'Tab' && modalRef.current) {
         const elements = modalRef.current.querySelectorAll<HTMLElement>(
           'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
         );
-        if (elements.length === 0) return;
+        if (elements.length === 0) {
+          e.preventDefault();
+          modalRef.current.focus();
+          return;
+        }
         const first = elements[0];
         const last = elements[elements.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
+        const active = document.activeElement;
+        if (active === modalRef.current || !modalRef.current.contains(active)) {
+          e.preventDefault();
+          if (e.shiftKey) last.focus();
+          else first.focus();
+        } else if (e.shiftKey && active === first) {
           e.preventDefault();
           last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
+        } else if (!e.shiftKey && active === last) {
           e.preventDefault();
           first.focus();
         }
@@ -76,12 +105,16 @@ export function CloseParentModal({
 
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [isOpen, parentSession]);
+  }, [isOpen, parentSession, isLoading]);
 
   if (!isOpen || !parentSession) return null;
 
-  const dirtyChildrenCount = childrenSessions.filter(
-    (c) => c.managedWorktree && gitDirtyBySessionId[c.id]
+  const possiblyDirtyChildren = childrenSessions.filter((c) =>
+    isPossiblyDirtyChild(c, gitDirtyBySessionId, gitUnavailableBySessionId)
+  );
+  const dirtyChildrenCount = possiblyDirtyChildren.length;
+  const unverifiedChildrenCount = possiblyDirtyChildren.filter(
+    (c) => gitUnavailableBySessionId[c.id] === true || gitDirtyBySessionId[c.id] === undefined
   ).length;
 
   return (
@@ -89,6 +122,8 @@ export function CloseParentModal({
       ref={modalRef}
       role="dialog"
       aria-modal="true"
+      aria-busy={isLoading}
+      tabIndex={-1}
       aria-labelledby="close-parent-modal-title"
       data-testid="close-parent-modal"
       className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center z-50 p-4"
@@ -110,6 +145,7 @@ export function CloseParentModal({
             type="button"
             onClick={onClose}
             data-testid="close-parent-modal-cancel-x"
+            disabled={isLoading}
             aria-label="Close dialog"
             className="text-zinc-400 hover:text-zinc-200 p-1 rounded-md hover:bg-[#21262d] transition-colors"
           >
@@ -148,17 +184,44 @@ export function CloseParentModal({
 
           {dirtyChildrenCount > 0 && (
             <p className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded px-2.5 py-1.5">
-              {dirtyChildrenCount === 1
-                ? '1 child has uncommitted changes and will prompt for finalization.'
-                : `${dirtyChildrenCount} children have uncommitted changes and will prompt for finalization.`}
+              {unverifiedChildrenCount > 0
+                ? dirtyChildrenCount === 1
+                  ? '1 child may have uncommitted changes and will prompt for finalization.'
+                  : `${dirtyChildrenCount} children may have uncommitted changes and will prompt for finalization.`
+                : dirtyChildrenCount === 1
+                  ? '1 child has uncommitted changes and will prompt for finalization.'
+                  : `${dirtyChildrenCount} children have uncommitted changes and will prompt for finalization.`}
             </p>
           )}
 
+          {isLoading && (
+            <div role="status" className="flex items-center gap-2 p-3 rounded-lg bg-zinc-800/60 border border-[#30363d] text-xs text-zinc-300">
+              <span className="w-3.5 h-3.5 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin shrink-0" />
+              <span>Closing sessions…</span>
+            </div>
+          )}
+
+          {error && (
+            <div role="alert" className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 space-y-2">
+              <p className="leading-snug">{error}</p>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  disabled={isLoading}
+                  onClick={() => onConfirm(retryAction)}
+                  className="px-3 py-1 rounded bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/40 text-xs text-rose-100 font-medium transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
           <div className="pt-2 border-t border-[#30363d] flex flex-col gap-2">
             <button
               type="button"
               data-testid="parent-close-leave-children-button"
               onClick={() => onConfirm('leave-children')}
+              disabled={isLoading}
               className="flex items-center justify-between px-4 py-2.5 rounded-lg border border-purple-500/30 bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 transition-colors cursor-pointer text-left"
             >
               <div>
@@ -176,6 +239,7 @@ export function CloseParentModal({
               type="button"
               data-testid="parent-close-all-button"
               onClick={() => onConfirm('close-all')}
+              disabled={isLoading}
               className="flex items-center justify-between px-4 py-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 transition-colors cursor-pointer text-left"
             >
               <div>
@@ -192,6 +256,7 @@ export function CloseParentModal({
             <button
               type="button"
               data-testid="parent-close-cancel-button"
+              disabled={isLoading}
               onClick={onClose}
               className="w-full py-2 text-xs font-medium text-zinc-400 hover:text-white bg-[#21262d] hover:bg-[#30363d] rounded-lg transition-colors cursor-pointer text-center mt-1"
             >

@@ -410,11 +410,15 @@ export function TerminalView({
             currentOnStatusChange?.(currentSession.id, 'idle');
           }
 
-          setTimeout(() => {
-            if (!document.activeElement?.closest('[role="tab"], input, textarea, select, [contenteditable="true"]')) {
+          const focusTimer = setTimeout(() => {
+            if (
+              typeof document !== 'undefined' &&
+              !document.activeElement?.closest('[role="tab"], input, textarea, select, [contenteditable="true"]')
+            ) {
               term.focus();
             }
           }, 50);
+          cleanupFnsRef.current.push(() => clearTimeout(focusTimer));
 
           // 1. Hook up PTY output streaming with backpressure acknowledgment
           const unData = window.spawneaApi.onPtyData((cid, data) => {

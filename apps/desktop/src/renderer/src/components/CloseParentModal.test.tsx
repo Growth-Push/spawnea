@@ -60,6 +60,47 @@ describe('CloseParentModal', () => {
     },
   ];
 
+  it('disables every action and Escape while closing, then offers retry for the failed action', () => {
+    const onClose = vi.fn();
+    const onConfirm = vi.fn();
+    const props = { isOpen: true, parentSession: mockParent, childrenSessions: mockChildren, onClose, onConfirm };
+    const { rerender } = render(<CloseParentModal {...props} isLoading />);
+    expect(screen.getByRole('status').textContent).toContain('Closing sessions');
+    for (const button of screen.getAllByRole('button')) {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(button);
+    }
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onConfirm).not.toHaveBeenCalled();
+    rerender(<CloseParentModal {...props} error="Could not close session (busy)" retryAction="leave-children" />);
+    expect(screen.getByRole('alert').textContent).toContain('(busy)');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onConfirm).toHaveBeenCalledWith('leave-children');
+    fireEvent.click(screen.getByTestId('parent-close-cancel-button'));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('traps focus including reverse Tab after pending deletion fails when focus is on modal container', () => {
+    const props = {
+      isOpen: true,
+      parentSession: mockParent,
+      childrenSessions: mockChildren,
+      onClose: vi.fn(),
+      onConfirm: vi.fn(),
+      isLoading: true,
+    };
+    const { rerender } = render(<CloseParentModal {...props} />);
+    const modal = screen.getByRole('dialog');
+    fireEvent.keyDown(window, { key: 'Tab' });
+    expect(document.activeElement).toBe(modal);
+
+    rerender(<CloseParentModal {...props} isLoading={false} error="Deletion failed" />);
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it('renders nothing when isOpen is false', () => {
     const { container } = render(
       <CloseParentModal
@@ -155,5 +196,22 @@ describe('CloseParentModal', () => {
 
     fireEvent.click(screen.getByTestId('parent-close-cancel-button'));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('traps Tab key navigation and prevents focus escape when loading', () => {
+    render(
+      <CloseParentModal
+        isOpen={true}
+        isLoading={true}
+        parentSession={mockParent}
+        childrenSessions={mockChildren}
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    );
+
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
   });
 });
