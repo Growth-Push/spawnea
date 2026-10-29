@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { CloseParentModal } from './CloseParentModal';
+import { CloseParentModal, isPossiblyDirtyChild } from './CloseParentModal';
 import type { Session } from '@spawnea/domain';
 
 describe('CloseParentModal', () => {
@@ -213,5 +213,40 @@ describe('CloseParentModal', () => {
     const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
     window.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  describe('isPossiblyDirtyChild', () => {
+    it('returns false when worktree is verified missing on disk', () => {
+      const child = mockChildren[1]; // managedWorktree: true
+      expect(isPossiblyDirtyChild(child, { [child.id]: true }, { [child.id]: true }, { [child.id]: true })).toBe(false);
+    });
+
+    it('returns true when worktree is managed and dirty', () => {
+      const child = mockChildren[1];
+      expect(isPossiblyDirtyChild(child, { [child.id]: true }, { [child.id]: false }, { [child.id]: false })).toBe(true);
+    });
+
+    it('returns false when worktree is not managed', () => {
+      const child = mockChildren[0]; // managedWorktree: undefined
+      expect(isPossiblyDirtyChild(child, { [child.id]: true }, { [child.id]: true }, {})).toBe(false);
+    });
+  });
+
+  it('renders Worktree absent badge and hides uncommitted warning when worktree is absent', () => {
+    render(
+      <CloseParentModal
+        isOpen={true}
+        parentSession={mockParent}
+        childrenSessions={mockChildren}
+        gitDirtyBySessionId={{ 'child-2': false }}
+        gitUnavailableBySessionId={{ 'child-2': false }}
+        gitMissingBySessionId={{ 'child-2': true }}
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Worktree absent')).toBeDefined();
+    expect(screen.queryByText(/may have uncommitted changes/)).toBeNull();
   });
 });

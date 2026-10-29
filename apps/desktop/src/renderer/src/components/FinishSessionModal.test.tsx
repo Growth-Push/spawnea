@@ -321,4 +321,61 @@ describe('FinishSessionModal (Task 6.2.1)', () => {
     });
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('defaults to close, hides stash option, and shows missing banner when worktree is missing', async () => {
+    (window as any).spawneaApi = {
+      inspectWorktree: vi.fn().mockResolvedValue({
+        state: 'missing',
+        message: 'The recorded worktree path is missing.',
+      }),
+    };
+
+    render(
+      <FinishSessionModal
+        isOpen={true}
+        session={mockWorktreeSession}
+        onClose={vi.fn()}
+        onFinish={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('finish-worktree-missing-banner')).toBeDefined();
+    });
+
+    // Stash checkbox should not be rendered
+    expect(screen.queryByLabelText(/Save changes in a Git stash/i)).toBeNull();
+
+    // Close Worktree should be selected
+    const closeRadio = screen.getByText('Close Worktree (Keep Task Branch)');
+    expect(closeRadio).toBeDefined();
+  });
+
+  it('does not invoke onClose when onFinish returns false during multi-child chaining', async () => {
+    const onFinish = vi.fn().mockResolvedValue(false);
+    const onClose = vi.fn();
+
+    render(
+      <FinishSessionModal
+        isOpen={true}
+        session={mockWorktreeSession}
+        onClose={onClose}
+        onFinish={onFinish}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('finish-inspection-loading')).toBeNull();
+    });
+
+    const submitBtn = screen.getByRole('button', { name: /Integrate & Clean Up/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(onFinish).toHaveBeenCalled();
+      expect(submitBtn.hasAttribute('disabled')).toBe(false);
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

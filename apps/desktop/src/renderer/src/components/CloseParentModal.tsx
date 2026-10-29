@@ -8,6 +8,7 @@ interface CloseParentModalProps {
   childrenSessions: Session[];
   gitDirtyBySessionId?: Record<string, boolean>;
   gitUnavailableBySessionId?: Record<string, boolean>;
+  gitMissingBySessionId?: Record<string, boolean>;
   isLoading?: boolean;
   error?: string | null;
   retryAction?: 'close-all' | 'leave-children';
@@ -18,8 +19,12 @@ interface CloseParentModalProps {
 export function isPossiblyDirtyChild(
   child: Session,
   gitDirtyBySessionId: Record<string, boolean> = {},
-  gitUnavailableBySessionId: Record<string, boolean> = {}
+  gitUnavailableBySessionId: Record<string, boolean> = {},
+  gitMissingBySessionId: Record<string, boolean> = {}
 ): boolean {
+  if (gitMissingBySessionId[child.id] === true) {
+    return false;
+  }
   return (
     Boolean(child.managedWorktree) &&
     (gitUnavailableBySessionId[child.id] === true || gitDirtyBySessionId[child.id] !== false)
@@ -32,6 +37,7 @@ export function CloseParentModal({
   childrenSessions,
   gitDirtyBySessionId = {},
   gitUnavailableBySessionId = {},
+  gitMissingBySessionId = {},
   isLoading = false,
   error = null,
   retryAction = 'close-all',
@@ -110,7 +116,7 @@ export function CloseParentModal({
   if (!isOpen || !parentSession) return null;
 
   const possiblyDirtyChildren = childrenSessions.filter((c) =>
-    isPossiblyDirtyChild(c, gitDirtyBySessionId, gitUnavailableBySessionId)
+    isPossiblyDirtyChild(c, gitDirtyBySessionId, gitUnavailableBySessionId, gitMissingBySessionId)
   );
   const dirtyChildrenCount = possiblyDirtyChildren.length;
   const unverifiedChildrenCount = possiblyDirtyChildren.filter(
@@ -171,7 +177,12 @@ export function CloseParentModal({
                     {child.childAlias || 'child'}
                   </span>
                   <span className="text-zinc-200 truncate">{child.name}</span>
-                  {child.managedWorktree && gitDirtyBySessionId[child.id] && (
+                  {child.managedWorktree && gitMissingBySessionId[child.id] && (
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-zinc-500/10 text-zinc-400 border border-zinc-500/30 shrink-0">
+                      Worktree absent
+                    </span>
+                  )}
+                  {child.managedWorktree && !gitMissingBySessionId[child.id] && gitDirtyBySessionId[child.id] && (
                     <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 shrink-0">
                       Uncommitted changes
                     </span>

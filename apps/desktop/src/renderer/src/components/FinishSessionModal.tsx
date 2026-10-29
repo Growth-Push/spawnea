@@ -26,7 +26,7 @@ export interface FinishSessionModalProps {
     sessionId: string,
     action: FinishSessionAction,
     options?: FinishSessionOptions
-  ) => Promise<void>;
+  ) => Promise<boolean | void>;
 }
 
 export function FinishSessionModal({
@@ -87,16 +87,18 @@ export function FinishSessionModal({
   }, [isOpen, session?.id]);
 
   useEffect(() => {
-    if (currentInspection?.state === 'integrated') {
+    if (currentInspection?.state === 'integrated' || currentInspection?.state === 'missing') {
       setSelectedAction('close');
     }
   }, [currentInspection?.state]);
 
+  const isPathMissing = currentInspection?.state === 'missing' && currentInspection?.message === 'The recorded worktree path is missing.';
+
   useEffect(() => {
-    if (currentInspection?.isClean) {
+    if (currentInspection?.isClean || isPathMissing) {
       setStashChanges(false);
     }
-  }, [currentInspection?.isClean]);
+  }, [currentInspection?.isClean, isPathMissing]);
 
   if (!isOpen || !session) return null;
 
@@ -106,7 +108,7 @@ export function FinishSessionModal({
     Boolean(window.spawneaApi?.inspectWorktree) && !currentInspection && !inspectionError
   );
   const isClean = currentInspection?.isClean === true;
-  const showStashOption = !inspectionPending && !isClean;
+  const showStashOption = !inspectionPending && !isClean && !isPathMissing;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -130,16 +132,26 @@ export function FinishSessionModal({
       return;
     }
 
+    if (selectedAction === 'integrate' && currentInspection?.state === 'missing') {
+      setError('The worktree directory is absent from disk. Integration cannot be performed; select Close Worktree.');
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
 
     try {
+      let shouldClose = true;
       if (selectedAction === 'close') {
-        await onFinish(session.id, selectedAction, { stashChanges });
+        const res = await onFinish(session.id, selectedAction, { stashChanges });
+        shouldClose = res !== false;
       } else {
-        await onFinish(session.id, selectedAction);
+        const res = await onFinish(session.id, selectedAction);
+        shouldClose = res !== false;
       }
-      onClose();
+      if (shouldClose) {
+        onClose();
+      }
     } catch (err: any) {
       setError(err?.message || `Failed to ${selectedAction} worktree session`);
     } finally {
@@ -240,6 +252,18 @@ export function FinishSessionModal({
             </div>
           )}
 
+          {currentInspection?.state === 'missing' && (
+            <div
+              data-testid="finish-worktree-missing-banner"
+              className="p-3.5 rounded-lg border border-amber-500/30 bg-amber-950/20 text-xs text-amber-200"
+            >
+              <span className="font-semibold">Worktree directory absent</span>
+              <span className="block mt-0.5 text-amber-300/80">
+                The recorded folder does not exist on disk. Select Close Worktree to clean up Git registrations and delete the session record.
+              </span>
+            </div>
+          )}
+
           <p className="text-xs text-slate-400">
             Close and integration are blocked while another session shares this worktree.
             Close those sessions first; reparenting does not move their workspace.
@@ -306,7 +330,7 @@ export function FinishSessionModal({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-100">
-                    {isClean
+                    {isPathMissing || isClean
                       ? 'Close Worktree (Keep Task Branch)'
                       : 'Close Worktree (Discard Changes, Keep Task Branch)'}
                   </span>
@@ -318,6 +342,8 @@ export function FinishSessionModal({
                   Stops the session, removes the worktree directory, and <strong className="text-slate-300">preserves the task branch in Git</strong>.
                   {inspectionPending
                     ? ' Checking for local changes...'
+                    : isPathMissing
+                    ? ' The recorded folder is absent from disk.'
                     : isClean
                     ? ' No local Git changes were detected.'
                     : ' Uncommitted changes are discarded unless you save them in a stash below.'}

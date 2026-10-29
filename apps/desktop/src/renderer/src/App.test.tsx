@@ -2786,6 +2786,158 @@ describe('App Desktop Shell', () => {
     expect(api.deleteSession).not.toHaveBeenCalled();
   });
 
+  it('deletes parent with close-all directly without prompting finish when child worktree is missing', async () => {
+    const parent: Session = {
+      id: 'parent-1',
+      name: 'Parent Session',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-1',
+      task: 'Parent Task',
+      branch: 'main',
+      worktreePath: '/p/1',
+      tmuxSessionName: 'spawnea-p1',
+      status: 'done',
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+    };
+    const missingChild: Session = {
+      ...parent,
+      id: 'child-1',
+      name: 'Missing Child Session',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-1',
+      managedWorktree: true,
+      worktreePath: '/p/1-missing',
+    };
+
+    const api = createMockSpawneaApi();
+    api.listSessions = vi.fn().mockResolvedValue([parent, missingChild]);
+    api.getGitStatus = vi.fn().mockResolvedValue({
+      isGitRepo: false,
+      missing: true,
+      isClean: true,
+      branch: '',
+      ahead: 0,
+      behind: 0,
+      staged: [],
+      unstaged: [],
+      untracked: [],
+      totalChanges: 0,
+    });
+    api.deleteSession = vi.fn().mockResolvedValue({ success: true });
+    window.spawneaApi = api;
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (1)')).toBeDefined());
+    await waitFor(() => expect(api.getGitStatus).toHaveBeenCalledWith('child-1'));
+
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+
+    // Should indicate worktree is absent in modal
+    expect(screen.getByText('Worktree absent')).toBeDefined();
+
+    // Click Close All
+    fireEvent.click(screen.getByTestId('parent-close-all-button'));
+
+    // Directly deletes with close-all without prompting FinishSessionModal
+    await waitFor(() => {
+      expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all');
+    });
+    expect(screen.queryByText('Finish Worktree Session')).toBeNull();
+  });
+
+  it('chains finish session across multiple dirty children before executing close-all', async () => {
+    const parent: Session = {
+      id: 'parent-1',
+      name: 'Parent Session',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-1',
+      task: 'Parent Task',
+      branch: 'main',
+      worktreePath: '/p/1',
+      tmuxSessionName: 'spawnea-p1',
+      status: 'done',
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+    };
+    const dirtyChild1: Session = {
+      ...parent,
+      id: 'child-1',
+      name: 'Dirty Child One',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-1',
+      managedWorktree: true,
+      worktreePath: '/p/1-child1',
+    };
+    const dirtyChild2: Session = {
+      ...parent,
+      id: 'child-2',
+      name: 'Dirty Child Two',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-2',
+      managedWorktree: true,
+      worktreePath: '/p/1-child2',
+    };
+
+    const api = createMockSpawneaApi();
+    api.listSessions = vi.fn().mockResolvedValue([parent, dirtyChild1, dirtyChild2]);
+    api.getGitStatus = vi.fn().mockImplementation((id: string) => {
+      const isDirty = id === 'child-1' || id === 'child-2';
+      return Promise.resolve({
+        isGitRepo: true,
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        isClean: !isDirty,
+        staged: [],
+        unstaged: isDirty ? ['file.txt'] : [],
+        untracked: [],
+        totalChanges: isDirty ? 1 : 0,
+      });
+    });
+    api.inspectWorktree = vi.fn().mockResolvedValue({
+      canFastForward: true,
+      hasUncommittedChanges: true,
+      commitsAhead: 0,
+      targetBranch: 'main',
+    });
+    api.finishSession = vi.fn().mockResolvedValue({ success: true, removed: true });
+    api.deleteSession = vi.fn().mockResolvedValue({ success: true });
+    window.spawneaApi = api;
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (1)')).toBeDefined());
+    await waitFor(() => expect(api.getGitStatus).toHaveBeenCalledWith('child-1'));
+    await waitFor(() => expect(api.getGitStatus).toHaveBeenCalledWith('child-2'));
+
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+    fireEvent.click(screen.getByTestId('parent-close-all-button'));
+
+    // Modal 1: FinishSessionModal opens for child-1
+    await waitFor(() => expect(screen.getByText('Dirty Child One')).toBeDefined());
+    const submitBtn1 = screen.getByRole('button', { name: /Integrate & Clean Up/i });
+    fireEvent.click(submitBtn1);
+
+    // Modal 2: FinishSessionModal transitions to child-2 without dismissing
+    await waitFor(() => {
+      expect(api.finishSession).toHaveBeenCalledWith('child-1', 'integrate', undefined);
+      expect(screen.getByText('Dirty Child Two')).toBeDefined();
+    });
+
+    const submitBtn2 = screen.getByRole('button', { name: /Integrate & Clean Up/i });
+    fireEvent.click(submitBtn2);
+
+    // After finishing child-2, parent close-all executes
+    await waitFor(() => {
+      expect(api.finishSession).toHaveBeenCalledWith('child-2', 'integrate', undefined);
+      expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all');
+    });
+  });
+
   it('collapses sidebar to icon mode and renders hover popup cards for sessions', async () => {
     window.spawneaApi = createMockSpawneaApi();
 

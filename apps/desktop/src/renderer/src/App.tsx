@@ -140,6 +140,7 @@ export function App(): React.JSX.Element {
   const [gitChangeCountBySessionId, setGitChangeCountBySessionId] = useState<Record<string, number>>({});
   const [gitSyncBySessionId, setGitSyncBySessionId] = useState<Record<string, { ahead: number; behind: number }>>({});
   const [gitUnavailableBySessionId, setGitUnavailableBySessionId] = useState<Record<string, boolean>>({});
+  const [gitMissingBySessionId, setGitMissingBySessionId] = useState<Record<string, boolean>>({});
   const [gitRefreshNonce, setGitRefreshNonce] = useState(0);
   const { refreshingIds, setChecking } = useVisibleRefresh();
   const [statusDetailsMap, setStatusDetailsMap] = useState<Record<string, import('@spawnea/domain').SessionStatusResult>>({});
@@ -226,7 +227,11 @@ export function App(): React.JSX.Element {
     }));
     setGitUnavailableBySessionId((current) => ({
       ...current,
-      [sessionId]: Boolean(status.unavailable),
+      [sessionId]: Boolean(status.unavailable) && !status.missing,
+    }));
+    setGitMissingBySessionId((current) => ({
+      ...current,
+      [sessionId]: Boolean(status.missing),
     }));
   }, []);
 
@@ -455,6 +460,7 @@ export function App(): React.JSX.Element {
       setGitChangeCountBySessionId({});
       setGitSyncBySessionId({});
       setGitUnavailableBySessionId({});
+      setGitMissingBySessionId({});
       return;
     }
 
@@ -550,7 +556,16 @@ export function App(): React.JSX.Element {
         results.forEach((result, index) => {
           const sessionId = sessionIds[index];
           next[sessionId] = result.status === 'rejected'
-            || (result.status === 'fulfilled' && Boolean(result.value.status.unavailable));
+            || (result.status === 'fulfilled' && Boolean(result.value.status.unavailable) && !result.value.status.missing);
+        });
+        return next;
+      });
+
+      setGitMissingBySessionId(() => {
+        const next: Record<string, boolean> = {};
+        results.forEach((result, index) => {
+          const sessionId = sessionIds[index];
+          next[sessionId] = result.status === 'fulfilled' && Boolean(result.value.status.missing);
         });
         return next;
       });
@@ -783,16 +798,16 @@ export function App(): React.JSX.Element {
   };
 
   const isPossiblyDirty = (c: Session): boolean =>
-    isPossiblyDirtyChild(c, gitDirtyBySessionId, gitUnavailableBySessionId);
+    isPossiblyDirtyChild(c, gitDirtyBySessionId, gitUnavailableBySessionId, gitMissingBySessionId);
 
   const handleFinishSession = async (
     sessionId: string,
     action: FinishSessionAction,
     options?: FinishSessionOptions
-  ) => {
+  ): Promise<boolean> => {
     if (action === 'ignore') {
       setSessionToFinish(null);
-      return;
+      return true;
     }
 
     if (window.spawneaApi?.finishSession) {
@@ -817,22 +832,24 @@ export function App(): React.JSX.Element {
 
         if (pendingCloseAllParentId) {
           const parentId = pendingCloseAllParentId;
-          const finishedSession = sessions.find((s) => s.id === sessionId);
-          if (finishedSession?.parentSessionId !== parentId) {
+          const finishedSession = sessionsRef.current.find((s) => s.id === sessionId);
+          if (finishedSession && finishedSession.parentSessionId !== parentId) {
             setPendingCloseAllParentId(null);
             setSessionToFinish(null);
-            return;
+            return true;
           }
-          const remainingChildren = sessions.filter(
+          const remainingChildren = sessionsRef.current.filter(
             (s) => s.parentSessionId === parentId && s.id !== sessionId
           );
           const nextDirtyChild = remainingChildren.find((c) => isPossiblyDirty(c));
           if (nextDirtyChild) {
             setSessionToFinish(nextDirtyChild);
-            return;
+            return false;
           } else {
             setPendingCloseAllParentId(null);
+            setSessionToFinish(null);
             await executeDeleteSession(parentId, 'close-all', { skipDirtyChildCheck: true });
+            return true;
           }
         }
       } else {
@@ -840,6 +857,7 @@ export function App(): React.JSX.Element {
       }
     }
     setSessionToFinish(null);
+    return true;
   };
 
   const handleAttachSession = async (sessionId: string) => {
@@ -1753,6 +1771,7 @@ export function App(): React.JSX.Element {
         }
         gitDirtyBySessionId={gitDirtyBySessionId}
         gitUnavailableBySessionId={gitUnavailableBySessionId}
+        gitMissingBySessionId={gitMissingBySessionId}
         isLoading={Boolean(parentSessionToClose && deletingSessionIds.has(parentSessionToClose.id))}
         error={parentCloseError}
         retryAction={parentCloseAction}
