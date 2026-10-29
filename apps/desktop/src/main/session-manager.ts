@@ -1704,7 +1704,12 @@ export class SessionManager {
               this.logger.error('Failed to restore session context after database deletion failed', restoreError, { sessionId });
             }
           }
-          throw new Error('Persistence failure: could not verify session deletion from the database', { cause: deleteError ?? error });
+          const cause = deleteError ?? error;
+          const causeMessage = cause instanceof Error ? cause.message : String(cause);
+          throw new Error(
+            `Persistence failure: could not verify session deletion from the database (${causeMessage})`,
+            { cause }
+          );
         }
       } catch (error) {
         const wc = this.getWebContents();

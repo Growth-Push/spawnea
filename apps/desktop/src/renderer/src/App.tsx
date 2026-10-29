@@ -988,6 +988,7 @@ export function App(): React.JSX.Element {
 
     try {
       const resurrected = await window.spawneaApi.resurrectSession(sessionId);
+      sessionsRef.current = sessionsRef.current.map((s) => (s.id === sessionId ? resurrected : s));
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? resurrected : s))
       );
