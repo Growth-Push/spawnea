@@ -1919,45 +1919,53 @@ export class SessionManager {
         if (!worktreeAlreadyRemoved) {
           // 1. Verify identity, but allow the explicit close flow to handle local changes.
           const inspection = await this.gitService.inspectManagedWorktree(host, identity);
-          await this.gitService.verifyManagedWorktreeForFinalization(
-            host,
-            identity,
-            false,
-            false,
-            inspection.state === 'integrated'
-          );
-
-          // 2. Verify termination before changing any files.
-          await this.stopSession(sessionId);
-
-          // agent-validated closes that discard changes (stashChanges: false) never discard work:
-          // with the runtime stopped, require a verified clean worktree so late writes or an unreadable status cannot be lost.
-          if (origin === 'agent-validated' && !options.stashChanges) {
-            const postStopStatus = await this.getGitStatus(sessionId).catch(() => null);
-            if (!postStopStatus || postStopStatus.unavailable) {
-              throw new Error(`Session '${sessionId}' worktree status could not be verified; aborting close to prevent data loss`);
+          const isAbsent = inspection.state === 'missing' && (await this.gitService.isWorktreeAbsent(host, identity.worktreePath));
+          if (isAbsent) {
+            if (options.stashChanges) {
+              throw new Error(`Cannot stash changes for session '${sessionId}': managed worktree directory '${identity.worktreePath}' is missing`);
             }
-            if (!postStopStatus.isClean || postStopStatus.totalChanges > 0) {
-              throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
-            }
-
-            const ignoredStatus = await host.execute('git status --porcelain=v1 --ignored --untracked-files=all', {
-              cwd: identity.worktreePath,
-            }).catch(() => null);
-            if (!ignoredStatus || ignoredStatus.exitCode !== 0) {
-              throw new Error(`Session '${sessionId}' worktree ignored status could not be verified; aborting close to prevent data loss`);
-            }
-            const hasIgnored = ignoredStatus.stdout.split('\n').some((line) => line.startsWith('!! '));
-            if (hasIgnored) {
-              throw new Error(`Session '${sessionId}' has ignored files in managed worktree; finalize or stash changes before closing`);
-            }
-          }
-
-          // 3. Preserve or discard local changes before removing the worktree.
-          if (options.stashChanges) {
-            await this.gitService.stashManagedWorktreeChanges(host, identity);
+            await this.stopSession(sessionId);
           } else {
-            await this.gitService.discardManagedWorktreeChanges(host, identity);
+            await this.gitService.verifyManagedWorktreeForFinalization(
+              host,
+              identity,
+              false,
+              false,
+              inspection.state === 'integrated'
+            );
+
+            // 2. Verify termination before changing any files.
+            await this.stopSession(sessionId);
+
+            // agent-validated closes that discard changes (stashChanges: false) never discard work:
+            // with the runtime stopped, require a verified clean worktree so late writes or an unreadable status cannot be lost.
+            if (origin === 'agent-validated' && !options.stashChanges) {
+              const postStopStatus = await this.getGitStatus(sessionId).catch(() => null);
+              if (!postStopStatus || postStopStatus.unavailable) {
+                throw new Error(`Session '${sessionId}' worktree status could not be verified; aborting close to prevent data loss`);
+              }
+              if (!postStopStatus.isClean || postStopStatus.totalChanges > 0) {
+                throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
+              }
+
+              const ignoredStatus = await host.execute('git status --porcelain=v1 --ignored --untracked-files=all', {
+                cwd: identity.worktreePath,
+              }).catch(() => null);
+              if (!ignoredStatus || ignoredStatus.exitCode !== 0) {
+                throw new Error(`Session '${sessionId}' worktree ignored status could not be verified; aborting close to prevent data loss`);
+              }
+              const hasIgnored = ignoredStatus.stdout.split('\n').some((line) => line.startsWith('!! '));
+              if (hasIgnored) {
+                throw new Error(`Session '${sessionId}' has ignored files in managed worktree; finalize or stash changes before closing`);
+              }
+            }
+
+            // 3. Preserve or discard local changes before removing the worktree.
+            if (options.stashChanges) {
+              await this.gitService.stashManagedWorktreeChanges(host, identity);
+            } else {
+              await this.gitService.discardManagedWorktreeChanges(host, identity);
+            }
           }
         }
 

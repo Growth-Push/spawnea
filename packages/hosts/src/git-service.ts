@@ -297,21 +297,40 @@ export class GitService {
     return { copied, skipped };
   }
 
-  /** Attempts normal worktree removal and never deletes its branch. */
+  /** Checks if a worktree directory is absent on disk while verifying nearest ancestor accessibility. */
+  async isWorktreeAbsent(host: HostAdapter, worktreePath: string): Promise<boolean> {
+    const escaped = escapeShellPath(worktreePath);
+    const script = `wt=${escaped}; p=$(dirname "$wt"); while [ "$p" != "/" ] && [ ! -e "$p" ] && [ ! -L "$p" ]; do p=$(dirname "$p"); done; [ -d "$p" ] && [ -x "$p" ] && [ ! -e "$wt" ] && [ ! -L "$wt" ]`;
+    const absent = await host.execute(script);
+    return absent.exitCode === 0;
+  }
+
   async removeManagedWorktree(
     host: HostAdapter,
     repositoryPath: string,
     worktreePath: string
   ): Promise<boolean> {
+    const escaped = escapeShellPath(worktreePath);
     const result = await host.execute(
-      `git worktree remove -- ${escapeShellPath(worktreePath)}`,
+      `git worktree remove -- ${escaped}`,
       { cwd: repositoryPath }
     );
-    const absent = await host.execute(
-      `test ! -e ${escapeShellPath(worktreePath)} && test ! -L ${escapeShellPath(worktreePath)}`
-    );
-    if (result.exitCode !== 0) return absent.exitCode === 0;
-    return absent.exitCode === 0;
+    const isAbsent = await this.isWorktreeAbsent(host, worktreePath);
+    if (result.exitCode !== 0) {
+      // Never remove a directory that still exists or whose absence cannot be verified.
+      if (!isAbsent) return false;
+
+      // When the directory is absent, check whether Git still tracks the worktree registration
+      // (e.g. if removal failed because it was locked, preserve the lock and report false).
+      const list = await host.execute('git worktree list --porcelain', { cwd: repositoryPath }).catch(() => null);
+      if (!list || list.exitCode !== 0) {
+        return false;
+      }
+      const target = trimTrailingSlashes(worktreePath);
+      const stillRegistered = parseWorktreeList(list.stdout).some((entry) => entry.path === target);
+      return !stillRegistered;
+    }
+    return isAbsent;
   }
 
   /** Saves all local worktree changes, including ignored files, in a named stash. */

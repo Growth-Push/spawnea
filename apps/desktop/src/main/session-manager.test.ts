@@ -2395,6 +2395,116 @@ up 1 day, 5 hours
       expect(await contextStore.load(session.id)).toBeNull();
     });
 
+    it('finalizes a managed worktree session with action close when worktree is already missing on disk', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Missing worktree close test',
+        baseBranch: 'main',
+      });
+
+      const inspectSpy = vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree')
+        .mockResolvedValueOnce({ state: 'missing', message: 'The recorded worktree path is missing.' });
+      const verifySpy = vi.spyOn((sessionManager as any).gitService, 'verifyManagedWorktreeForFinalization');
+
+      const result = await sessionManager.finishSession(session.id, 'close');
+      expect(result).toEqual({ action: 'close', removed: true });
+
+      // verifyManagedWorktreeForFinalization should NOT be called when worktree is missing
+      expect(verifySpy).not.toHaveBeenCalled();
+
+      // Session record and context removed
+      expect(await repos.sessions.findById(session.id)).toBeNull();
+      expect(await contextStore.load(session.id)).toBeNull();
+
+      inspectSpy.mockRestore();
+      verifySpy.mockRestore();
+    });
+
+    it('does not bypass safeguards if inspectManagedWorktree reports missing but the directory is present on disk', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Present directory mismatch check',
+        baseBranch: 'main',
+      });
+
+      const inspectSpy = vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree')
+        .mockResolvedValueOnce({ state: 'missing', message: 'The recorded worktree path is missing.' });
+      const absentSpy = vi.spyOn((sessionManager as any).gitService, 'isWorktreeAbsent')
+        .mockResolvedValueOnce(false);
+      const verifySpy = vi.spyOn((sessionManager as any).gitService, 'verifyManagedWorktreeForFinalization')
+        .mockRejectedValueOnce(new Error('Mismatched worktree directory'));
+
+      await expect(sessionManager.finishSession(session.id, 'close')).rejects.toThrow('Mismatched worktree directory');
+      expect(verifySpy).toHaveBeenCalledOnce();
+
+      inspectSpy.mockRestore();
+      absentSpy.mockRestore();
+      verifySpy.mockRestore();
+    });
+
+    it('rejects finishSession with action close when worktree is missing and stashChanges is requested', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Missing worktree stash test',
+        baseBranch: 'main',
+      });
+
+      const inspectSpy = vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree')
+        .mockResolvedValueOnce({ state: 'missing', message: 'The recorded worktree path is missing.' });
+
+      await expect(
+        sessionManager.finishSession(session.id, 'close', { stashChanges: true })
+      ).rejects.toThrow('Cannot stash changes');
+
+      // Session record and context preserved
+      expect(await repos.sessions.findById(session.id)).not.toBeNull();
+      expect(await contextStore.load(session.id)).not.toBeNull();
+
+      inspectSpy.mockRestore();
+    });
+
+    it('reconciles and closes parent session with close-all when a child worktree is missing on disk', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Missing worktree parent test',
+        baseBranch: 'main',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Missing worktree child test',
+        workspace: 'new-worktree',
+      });
+
+      const inspectSpy = vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree')
+        .mockImplementation(async (_host: unknown, identity: any) => {
+          if (identity.worktreePath === child.worktreePath) {
+            return { state: 'missing', message: 'The recorded worktree path is missing.' };
+          }
+          return { state: 'ready', isClean: true };
+        });
+
+      const result = await sessionManager.deleteSession(parent.id, 'close-all');
+      expect(result).toBe(true);
+
+      // Both child and parent removed
+      expect(await repos.sessions.findById(child.id)).toBeNull();
+      expect(await repos.sessions.findById(parent.id)).toBeNull();
+
+      inspectSpy.mockRestore();
+    });
+
     it('reports whether worktree removal was recorded in session context', async () => {
       await enableManagedWorktrees();
       const session = await sessionManager.createSession({
