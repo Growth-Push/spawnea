@@ -298,10 +298,10 @@ export class GitService {
   }
 
   /** Checks if a worktree directory is absent on disk while verifying nearest ancestor accessibility. */
-  async isWorktreeAbsent(host: HostAdapter, worktreePath: string): Promise<boolean> {
+  async isWorktreeAbsent(host: HostAdapter, worktreePath: string, timeoutMs: number = GitService.statusTimeoutMs): Promise<boolean> {
     const escaped = escapeShellPath(worktreePath);
     const script = `wt=${escaped}; p=$(dirname "$wt"); while [ "$p" != "/" ] && [ ! -e "$p" ] && [ ! -L "$p" ]; do p=$(dirname "$p"); done; [ -d "$p" ] && [ -x "$p" ] && [ ! -e "$wt" ] && [ ! -L "$wt" ]`;
-    const absent = await host.execute(script);
+    const absent = await host.execute(script, { timeoutMs });
     return absent.exitCode === 0;
   }
 
@@ -665,6 +665,22 @@ export class GitService {
         if (/not a git repository|must be run in a work tree/i.test(checkRepo.stderr)) {
           return {
             isGitRepo: false,
+            branch: '',
+            ahead: 0,
+            behind: 0,
+            isClean: true,
+            staged: [],
+            unstaged: [],
+            untracked: [],
+            totalChanges: 0,
+          };
+        }
+        const isPathMissingError =
+          /no such file or directory|cannot change to|can't cd to|does not exist|ENOENT/i.test(checkRepo.stderr);
+        if (isPathMissingError && (await this.isWorktreeAbsent(host, cwd, GitService.statusTimeoutMs))) {
+          return {
+            isGitRepo: false,
+            missing: true,
             branch: '',
             ahead: 0,
             behind: 0,

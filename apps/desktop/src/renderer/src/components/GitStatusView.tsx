@@ -69,6 +69,20 @@ export function GitStatusView({
     );
   }
 
+  if (status?.missing) {
+    return (
+      <div className="p-4 bg-[#161b22] border border-[#30363d] rounded-lg text-xs text-zinc-400 flex items-center gap-3">
+        <FolderMinus className="w-5 h-5 text-zinc-500 shrink-0" />
+        <div>
+          <p className="font-semibold text-zinc-200">Worktree directory absent</p>
+          <p className="text-[11px] text-zinc-500 mt-0.5">
+            The recorded directory for this worktree does not exist on disk.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!status?.isGitRepo) {
     return (
       <div className="p-4 bg-[#161b22] border border-[#30363d] rounded-lg text-xs text-zinc-400 flex items-center gap-3">

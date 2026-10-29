@@ -117,6 +117,66 @@ describe('GitService', () => {
     expect(status.isClean).toBe(false);
   });
 
+  it('reports absent worktree directories as clean and missing without marking them unavailable', async () => {
+    mockHost.customRules.push(
+      {
+        pattern: 'git rev-parse --is-inside-work-tree',
+        response: { stdout: '', stderr: 'spawn /bin/sh ENOENT', exitCode: -2 },
+      },
+      {
+        pattern: 'wt=',
+        response: { stdout: '', stderr: '', exitCode: 0 },
+      }
+    );
+
+    const status = await gitService.getGitStatus(mockHost, '/worktrees/absent-task');
+
+    expect(status.isGitRepo).toBe(false);
+    expect(status.missing).toBe(true);
+    expect(status.unavailable).toBeUndefined();
+    expect(status.isClean).toBe(true);
+    expect(status.totalChanges).toBe(0);
+  });
+
+  it('reports SSH can\'t cd to error as absent when worktree path is missing', async () => {
+    mockHost.customRules.push(
+      {
+        pattern: 'git rev-parse --is-inside-work-tree',
+        response: { stdout: '', stderr: 'sh: cd: can\'t cd to /worktrees/absent-ssh-task\n', exitCode: 2 },
+      },
+      {
+        pattern: 'wt=',
+        response: { stdout: '', stderr: '', exitCode: 0 },
+      }
+    );
+
+    const status = await gitService.getGitStatus(mockHost, '/worktrees/absent-ssh-task');
+
+    expect(status.isGitRepo).toBe(false);
+    expect(status.missing).toBe(true);
+    expect(status.unavailable).toBeUndefined();
+    expect(status.isClean).toBe(true);
+  });
+
+  it('reports path error as unavailable when target directory still exists', async () => {
+    mockHost.customRules.push(
+      {
+        pattern: 'git rev-parse --is-inside-work-tree',
+        response: { stdout: '', stderr: 'cannot change to directory /worktrees/corrupt', exitCode: 1 },
+      },
+      {
+        pattern: 'wt=',
+        response: { stdout: '', stderr: '', exitCode: 1 },
+      }
+    );
+
+    const status = await gitService.getGitStatus(mockHost, '/worktrees/corrupt');
+
+    expect(status.unavailable).toBe(true);
+    expect(status.missing).toBeUndefined();
+    expect(status.isClean).toBe(false);
+  });
+
   it('parses clean Git repository status with branch and tracking info', async () => {
     mockHost.customRules.push(
       {
