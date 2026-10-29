@@ -186,6 +186,8 @@ uses the worktree. A failed or inconclusive tmux termination check fails the
 operation before merge, stash, discard, or worktree removal. Integration is
 accepted only for a local managed-worktree child whose parent is local, and the
 parent's branch must be checked out in the project's primary checkout.
+When a managed worktree directory is already missing on disk, close with discard
+completes safely without failing on missing paths, whereas stash is rejected.
 
 ## Plain shell harness
 

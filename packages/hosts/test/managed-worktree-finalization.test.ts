@@ -112,4 +112,68 @@ describe('managed worktree finalization with real Git', () => {
 
     expect(existsSync(identity.worktreePath)).toBe(true);
   });
+
+  it('refuses to remove a present dirty worktree when normal removal fails', async () => {
+    const identity = await createIdentity('refuse-force');
+    writeFileSync(join(identity.worktreePath, 'dirty.txt'), 'do not lose\n');
+
+    expect(await service.removeManagedWorktree(host, repositoryPath, identity.worktreePath)).toBe(false);
+    expect(existsSync(join(identity.worktreePath, 'dirty.txt'))).toBe(true);
+    expect(existsSync(identity.worktreePath)).toBe(true);
+  });
+
+  it('drops stale registration when worktree directory is already absent', async () => {
+    const identity = await createIdentity('stale-absent');
+    rmSync(identity.worktreePath, { recursive: true, force: true });
+    expect(existsSync(identity.worktreePath)).toBe(false);
+
+    expect(await service.removeManagedWorktree(host, repositoryPath, identity.worktreePath)).toBe(true);
+    expect(git(repositoryPath, 'worktree', 'list')).not.toContain(identity.worktreePath);
+  });
+
+  it('preserves locked worktree registration when directory is absent and reports false', async () => {
+    const identity = await createIdentity('stale-locked-absent');
+    git(repositoryPath, 'worktree', 'lock', identity.worktreePath);
+    rmSync(identity.worktreePath, { recursive: true, force: true });
+    expect(existsSync(identity.worktreePath)).toBe(false);
+
+    expect(await service.removeManagedWorktree(host, repositoryPath, identity.worktreePath)).toBe(false);
+    expect(git(repositoryPath, 'worktree', 'list')).toContain(identity.worktreePath);
+  });
+
+  it('returns true when worktree directory is absent and was already unregistered in Git', async () => {
+    const identity = await createIdentity('already-unregistered');
+    rmSync(identity.worktreePath, { recursive: true, force: true });
+    expect(await service.removeManagedWorktree(host, repositoryPath, identity.worktreePath)).toBe(true);
+    expect(await service.removeManagedWorktree(host, repositoryPath, identity.worktreePath)).toBe(true);
+  });
+
+  it('refuses removal and protects uncommitted work if worktree directory reappears with dirty files', async () => {
+    const identity = await createIdentity('race-reappear');
+    git(repositoryPath, 'worktree', 'lock', identity.worktreePath);
+
+    // Directory exists with uncommitted file
+    writeFileSync(join(identity.worktreePath, 'reappeared.txt'), 'valuable unsaved work\n');
+
+    expect(await service.removeManagedWorktree(host, repositoryPath, identity.worktreePath)).toBe(false);
+    expect(existsSync(join(identity.worktreePath, 'reappeared.txt'))).toBe(true);
+    expect(git(repositoryPath, 'worktree', 'list')).toContain(identity.worktreePath);
+  });
+
+  it('correctly verifies worktree absence and ancestor accessibility', async () => {
+    const identity = await createIdentity('absence-check');
+    expect(await service.isWorktreeAbsent(host, identity.worktreePath)).toBe(false);
+
+    rmSync(identity.worktreePath, { recursive: true, force: true });
+    expect(await service.isWorktreeAbsent(host, identity.worktreePath)).toBe(true);
+
+    // Also absent when parent container was removed
+    const deepAbsentPath = join(tempRoot, 'deleted-parent', 'sub', 'wt');
+    expect(await service.isWorktreeAbsent(host, deepAbsentPath)).toBe(true);
+
+    // Returns false if nearest existing ancestor is not a directory
+    const fileAncestor = join(tempRoot, 'file-ancestor');
+    writeFileSync(fileAncestor, 'not a directory');
+    expect(await service.isWorktreeAbsent(host, join(fileAncestor, 'child'))).toBe(false);
+  });
 });

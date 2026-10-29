@@ -607,6 +607,10 @@ finalization and deletion. Close and integration refuse to mutate a workspace
 referenced by another session, including an unmanaged same-project child.
 Deletion with surviving children preserves that directory and transfers managed
 ownership. Independent-worktree children are promoted without stopping them.
+When a managed worktree directory is already absent on host disk, `finishSession` with
+action `close` safely finalizes the session, cleans up any stale Git registration
+(preserving locked worktrees), and deletes session records without failing on missing
+files; stashing changes is rejected as unfeasible without directory contents.
 
 A per-session removal guard prevents overlapping removal, unadoption, and new child creation.
 Child creation holds its counter until startup succeeds or rollback finishes;
