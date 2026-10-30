@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { FinishSessionModal } from './FinishSessionModal';
-import type { Session } from '@spawnea/domain';
+import type { ManagedWorktreeInspection, Session } from '@spawnea/domain';
 
 describe('FinishSessionModal (Task 6.2.1)', () => {
   afterEach(() => {
@@ -377,5 +377,63 @@ describe('FinishSessionModal (Task 6.2.1)', () => {
     });
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('renders branch mismatch banner, disables integrate, and submits close with preserveWorktree: true', async () => {
+    let resolveInspection!: (inspection: ManagedWorktreeInspection) => void;
+    const inspectionPromise = new Promise<ManagedWorktreeInspection>((resolve) => {
+      resolveInspection = resolve;
+    });
+    (window as any).spawneaApi = {
+      ...(window as any).spawneaApi,
+      inspectWorktree: vi.fn().mockReturnValue(inspectionPromise),
+    };
+
+    const onFinish = vi.fn().mockResolvedValue(true);
+    const onClose = vi.fn();
+
+    render(
+      <FinishSessionModal
+        isOpen={true}
+        session={mockWorktreeSession}
+        onClose={onClose}
+        onFinish={onFinish}
+      />
+    );
+
+    expect(screen.getByTestId('finish-inspection-loading')).toBeDefined();
+    expect(screen.queryByTestId('finish-close-confirm-checkbox')).toBeNull();
+    // Wait for the confirmation mounted by the Close-selection effect, not just its banner.
+    const confirmationPromise = screen.findByTestId('finish-close-confirm-checkbox');
+    resolveInspection({
+      state: 'mismatch',
+      currentBranch: 'feature/divergent',
+      isClean: false,
+      message: "Worktree is on 'feature/divergent', not recorded branch 'spawnea/task-worktree-1'.",
+    });
+    const confirmCheckbox = await confirmationPromise;
+
+    expect(screen.getByTestId('finish-worktree-mismatch-banner')).toBeDefined();
+
+    expect(screen.getAllByText(/Branch mismatch detected/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Close Session (Preserve Worktree & Branches)')).toBeDefined();
+
+    // Stash checkbox should not be rendered
+    expect(screen.queryByLabelText(/Save changes in a Git stash/i)).toBeNull();
+
+    // Confirm checkbox
+    expect(confirmCheckbox).toBeDefined();
+    fireEvent.click(confirmCheckbox);
+
+    const submitBtn = screen.getByRole('button', { name: /Close Worktree/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(onFinish).toHaveBeenCalledWith('sess-worktree-1', 'close', {
+        stashChanges: false,
+        preserveWorktree: true,
+      });
+      expect(onClose).toHaveBeenCalled();
+    });
   });
 });

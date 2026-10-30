@@ -87,18 +87,23 @@ export function FinishSessionModal({
   }, [isOpen, session?.id]);
 
   useEffect(() => {
-    if (currentInspection?.state === 'integrated' || currentInspection?.state === 'missing') {
+    if (
+      currentInspection?.state === 'integrated' ||
+      currentInspection?.state === 'missing' ||
+      currentInspection?.state === 'mismatch'
+    ) {
       setSelectedAction('close');
     }
   }, [currentInspection?.state]);
 
   const isPathMissing = currentInspection?.state === 'missing' && currentInspection?.message === 'The recorded worktree path is missing.';
+  const isMismatch = currentInspection?.state === 'mismatch';
 
   useEffect(() => {
-    if (currentInspection?.isClean || isPathMissing) {
+    if (currentInspection?.isClean || isPathMissing || isMismatch) {
       setStashChanges(false);
     }
-  }, [currentInspection?.isClean, isPathMissing]);
+  }, [currentInspection?.isClean, isPathMissing, isMismatch]);
 
   if (!isOpen || !session) return null;
 
@@ -108,7 +113,7 @@ export function FinishSessionModal({
     Boolean(window.spawneaApi?.inspectWorktree) && !currentInspection && !inspectionError
   );
   const isClean = currentInspection?.isClean === true;
-  const showStashOption = !inspectionPending && !isClean && !isPathMissing;
+  const showStashOption = !inspectionPending && !isClean && !isPathMissing && !isMismatch;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -137,13 +142,21 @@ export function FinishSessionModal({
       return;
     }
 
+    if (selectedAction === 'integrate' && isMismatch) {
+      setError('Cannot integrate a worktree with a branch mismatch. Integration is blocked.');
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
 
     try {
       let shouldClose = true;
       if (selectedAction === 'close') {
-        const res = await onFinish(session.id, selectedAction, { stashChanges });
+        const res = await onFinish(session.id, selectedAction, {
+          stashChanges: isMismatch ? false : stashChanges,
+          ...(isMismatch ? { preserveWorktree: true } : {}),
+        });
         shouldClose = res !== false;
       } else {
         const res = await onFinish(session.id, selectedAction);
@@ -264,6 +277,21 @@ export function FinishSessionModal({
             </div>
           )}
 
+          {currentInspection?.state === 'mismatch' && (
+            <div
+              data-testid="finish-worktree-mismatch-banner"
+              className="p-3.5 rounded-lg border border-amber-500/30 bg-amber-950/20 text-xs text-amber-200"
+            >
+              <span className="font-semibold">Branch mismatch detected</span>
+              <span className="block mt-0.5 text-amber-300/80">
+                Worktree is checked out on branch <code className="text-amber-200">{currentInspection.currentBranch || 'detached HEAD'}</code>,
+                not recorded branch <code className="text-amber-200">{taskBranch}</code>.
+                Integration and destructive cleanup are blocked to protect uncommitted or divergent work.
+                Select Close Session to safely stop the session and preserve the worktree and all files.
+              </span>
+            </div>
+          )}
+
           <p className="text-xs text-slate-400">
             Close and integration are blocked while another session shares this worktree.
             Close those sessions first; reparenting does not move their workspace.
@@ -278,12 +306,12 @@ export function FinishSessionModal({
 
             {/* Option 1: Integrate */}
             <div
-              onClick={() => !isSubmitting && !inspectionPending && currentInspection?.state !== 'integrated' && setSelectedAction('integrate')}
+              onClick={() => !isSubmitting && !inspectionPending && currentInspection?.state !== 'integrated' && !isMismatch && setSelectedAction('integrate')}
               className={`p-3.5 rounded-xl border transition-all flex items-start gap-3.5 ${
                 selectedAction === 'integrate'
                   ? 'bg-emerald-950/30 border-emerald-500/50 ring-1 ring-emerald-500/20'
                   : 'bg-slate-950/40 border-slate-800 hover:border-slate-700'
-              } ${currentInspection?.state === 'integrated' || inspectionPending ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              } ${currentInspection?.state === 'integrated' || isMismatch || inspectionPending ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
             >
               <div
                 className={`p-2 rounded-lg mt-0.5 ${
@@ -330,7 +358,9 @@ export function FinishSessionModal({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-100">
-                    {isPathMissing || isClean
+                    {isMismatch
+                      ? 'Close Session (Preserve Worktree & Branches)'
+                      : isPathMissing || isClean
                       ? 'Close Worktree (Keep Task Branch)'
                       : 'Close Worktree (Discard Changes, Keep Task Branch)'}
                   </span>
@@ -339,9 +369,13 @@ export function FinishSessionModal({
                   )}
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  Stops the session, removes the worktree directory, and <strong className="text-slate-300">preserves the task branch in Git</strong>.
+                  {isMismatch
+                    ? 'Stops the session and deletes the session record, while preserving the worktree folder, branches, and all files.'
+                    : 'Stops the session, removes the worktree directory, and preserves the task branch in Git.'}
                   {inspectionPending
                     ? ' Checking for local changes...'
+                    : isMismatch
+                    ? ' Branch mismatch detected; destructive removal is blocked.'
                     : isPathMissing
                     ? ' The recorded folder is absent from disk.'
                     : isClean
@@ -423,12 +457,14 @@ export function FinishSessionModal({
                       data-testid="finish-close-confirm-checkbox"
                     />
                     <span>
-                      I understand this will stop the session and remove the worktree.
-                      {isClean
-                        ? ' No local Git changes were detected.'
-                        : stashChanges
-                        ? ' My changes will be saved in the named stash.'
-                        : ' Any uncommitted changes will be permanently discarded.'}
+                      {isMismatch
+                        ? 'I understand this will stop the session while preserving the worktree, branches, and all files on disk.'
+                        : 'I understand this will stop the session and remove the worktree.' +
+                          (isClean
+                            ? ' No local Git changes were detected.'
+                            : stashChanges
+                            ? ' My changes will be saved in the named stash.'
+                            : ' Any uncommitted changes will be permanently discarded.')}
                     </span>
                   </label>
                 </>

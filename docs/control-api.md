@@ -240,7 +240,7 @@ hosts when no custom shell entry is configured.
 | Reentrant root input | Scoped connections prompt direct children only. |
 | Retry creates duplicates | Request IDs plus payload fingerprints; exact replay returns the original result. |
 | Autonomous destructive Git | Integrate and unvalidated requests require trusted UI approval; validated close still passes the finalization guards. |
-| Accidental dirty-work loss | Close requires an explicit `stash` or `discard` choice. |
+| Accidental dirty-work loss | Close requires an explicit `stash` or `discard` choice; branch mismatches block destructive cleanup and require explicit preservation. |
 | False success | Finalization status and the actual result or error remain queryable. |
 
 ## Manual smoke checklist

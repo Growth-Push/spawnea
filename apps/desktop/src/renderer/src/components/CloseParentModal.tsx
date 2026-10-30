@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import type { Session } from '@spawnea/domain';
+import type { Session, ParentCloseAction } from '@spawnea/domain';
 import { AlertTriangle, X, ArrowUpRight, Trash2 } from 'lucide-react';
 
 interface CloseParentModalProps {
@@ -9,11 +9,12 @@ interface CloseParentModalProps {
   gitDirtyBySessionId?: Record<string, boolean>;
   gitUnavailableBySessionId?: Record<string, boolean>;
   gitMissingBySessionId?: Record<string, boolean>;
+  gitBranchMismatchBySessionId?: Record<string, { currentBranch: string; recordedBranch: string }>;
   isLoading?: boolean;
   error?: string | null;
-  retryAction?: 'close-all' | 'leave-children';
+  retryAction?: ParentCloseAction;
   onClose: () => void;
-  onConfirm: (action: 'close-all' | 'leave-children') => void;
+  onConfirm: (action: ParentCloseAction) => void;
 }
 
 export function isPossiblyDirtyChild(
@@ -38,6 +39,7 @@ export function CloseParentModal({
   gitDirtyBySessionId = {},
   gitUnavailableBySessionId = {},
   gitMissingBySessionId = {},
+  gitBranchMismatchBySessionId = {},
   isLoading = false,
   error = null,
   retryAction = 'close-all',
@@ -182,7 +184,12 @@ export function CloseParentModal({
                       Worktree absent
                     </span>
                   )}
-                  {child.managedWorktree && !gitMissingBySessionId[child.id] && gitDirtyBySessionId[child.id] && (
+                  {child.managedWorktree && !gitMissingBySessionId[child.id] && gitBranchMismatchBySessionId[child.id] && (
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 shrink-0">
+                      Branch mismatch ({gitBranchMismatchBySessionId[child.id].currentBranch})
+                    </span>
+                  )}
+                  {child.managedWorktree && !gitMissingBySessionId[child.id] && !gitBranchMismatchBySessionId[child.id] && gitDirtyBySessionId[child.id] && (
                     <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 shrink-0">
                       Uncommitted changes
                     </span>
@@ -215,7 +222,18 @@ export function CloseParentModal({
           {error && (
             <div role="alert" className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 space-y-2">
               <p className="leading-snug">{error}</p>
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2">
+                {/checked out on|not recorded branch|mismatch/i.test(error) && (
+                  <button
+                    type="button"
+                    disabled={isLoading}
+                    onClick={() => onConfirm('close-all-preserve-mismatched')}
+                    data-testid="parent-close-preserve-mismatched-button"
+                    className="px-3 py-1 rounded bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/40 text-xs text-amber-100 font-medium transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    Close & Preserve Worktree
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={isLoading}
@@ -228,6 +246,27 @@ export function CloseParentModal({
             </div>
           )}
           <div className="pt-2 border-t border-[#30363d] flex flex-col gap-2">
+            {(Boolean(error && /checked out on|not recorded branch|mismatch/i.test(error)) ||
+              childrenSessions.some((c) => gitBranchMismatchBySessionId[c.id])) && (
+              <button
+                type="button"
+                data-testid="parent-close-preserve-mismatched-action"
+                onClick={() => onConfirm('close-all-preserve-mismatched')}
+                disabled={isLoading}
+                className="flex items-center justify-between px-4 py-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 transition-colors cursor-pointer text-left"
+              >
+                <div>
+                  <div className="text-xs font-medium flex items-center gap-1.5">
+                    <Trash2 className="w-3.5 h-3.5 text-amber-400" />
+                    Close & Preserve Worktrees
+                  </div>
+                  <div className="text-[11px] text-zinc-400 mt-0.5">
+                    Stops sessions while preserving mismatched worktrees, branches, and all files.
+                  </div>
+                </div>
+              </button>
+            )}
+
             <button
               type="button"
               data-testid="parent-close-leave-children-button"

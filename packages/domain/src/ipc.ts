@@ -51,7 +51,7 @@ export interface CreateChildSessionInput {
   baseBranch?: string;
 }
 
-export type ParentCloseAction = 'close-all' | 'leave-children';
+export type ParentCloseAction = 'close-all' | 'leave-children' | 'close-all-preserve-mismatched';
 
 export interface AddProjectToCatalogInput {
   serverId: string;
@@ -133,6 +133,8 @@ export type FinishSessionOrigin = 'ui' | 'agent-validated';
 export interface FinishSessionOptions {
   /** Preserve dirty worktree contents in a named Git stash before closing. */
   stashChanges?: boolean;
+  /** Explicitly preserve worktree directory, branches, and all files when closing a mismatched session. */
+  preserveWorktree?: boolean;
 }
 
 export type ManagedWorktreeInspectionState = 'active' | 'integrated' | 'mismatch' | 'missing' | 'unavailable';
@@ -148,6 +150,7 @@ export interface ManagedWorktreeInspection {
 export interface FinishSessionResult {
   action: FinishSessionAction;
   removed: boolean;
+  workspacePreserved?: boolean;
 }
 
 export interface IpcChannels {
