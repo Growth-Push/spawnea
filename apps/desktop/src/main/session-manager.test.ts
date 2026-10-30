@@ -3363,7 +3363,11 @@ up 1 day, 5 hours
         .rejects.toThrow(failure.startsWith('late-') ? 'has uncommitted changes' : 'could not be verified');
 
       expect(stopSpy).toHaveBeenCalledWith(child.id);
-      expect(statusSpy.mock.invocationCallOrder[0]).toBeGreaterThan(stopSpy.mock.invocationCallOrder[0]);
+      expect(statusSpy).toHaveBeenCalledWith(child.id);
+      const childStopCall = stopSpy.mock.calls.findIndex(([id]) => id === child.id);
+      const childStatusCall = statusSpy.mock.calls.findIndex(([id]) => id === child.id);
+      expect(statusSpy.mock.invocationCallOrder[childStatusCall])
+        .toBeGreaterThan(stopSpy.mock.invocationCallOrder[childStopCall]);
       expect(discardSpy).not.toHaveBeenCalled();
       expect(removeSpy).not.toHaveBeenCalled();
       expect(deleteContextSpy).not.toHaveBeenCalled();

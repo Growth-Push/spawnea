@@ -3098,10 +3098,16 @@ describe('App Desktop Shell', () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText('Active Sessions (1)')).toBeDefined());
 
-    // Switch active session to child1 by selecting it or verifying active session logic
-    // Open close parent modal on parent
+    // Open parent closure, then activate the child through the existing control event.
     fireEvent.click(screen.getByTestId('session-delete-button'));
     await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+    act(() => {
+      vi.mocked(api.onSessionActivate).mock.calls[0][0](child1.id);
+    });
+    await waitFor(() => {
+      expect(api.setActiveSession).toHaveBeenLastCalledWith(child1.id);
+      expect(screen.getByTestId('session-delete-button').closest('header')?.textContent).toContain(child1.name);
+    });
 
     // Click Close All
     fireEvent.click(screen.getByTestId('parent-close-all-button'));
@@ -3115,7 +3121,11 @@ describe('App Desktop Shell', () => {
     // Verify surviving sessions were refreshed
     await waitFor(() => {
       expect(screen.queryByText('Active Child To Be Deleted')).toBeNull();
-      expect(screen.getByText('Failing Child Sibling')).toBeDefined();
+      expect(screen.getByTestId('session-title-child-2').textContent).toBe(child2.name);
+      expect(screen.getByTestId('session-item-parent-1').getAttribute('aria-current')).toBe('page');
+      expect(screen.queryByTestId('session-item-child-1')).toBeNull();
+      expect(screen.getByTestId('session-delete-button').closest('header')?.textContent).toContain(parent.name);
+      expect(api.setActiveSession).toHaveBeenLastCalledWith(parent.id);
     });
   });
 
