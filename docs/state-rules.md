@@ -59,8 +59,18 @@ TypeScript and only remove lines before the rules run:
 - **Grok:** scrollbar rows are removed. A question card that the ready composer
   or later activity replaced is removed. A `Worked for` line ends the previous
   turn. The composer only counts as ready when nothing newer than the last
-  completion (or the welcome panel) is on screen.
-- **All harnesses except Codex and the generic shell:** an error line followed by
+  completion (or the welcome panel) is on screen. A current
+  `Server error (500) | Retrying (attempt N)...` line remains an error through
+  spinner, retry-timer, interrupt/cancel and composer redraws, including unsent
+  drafts. These controls
+  do not demonstrate recovery. Later response/tool content, a question card or
+  a completion marker supersedes the retry. Retry lines in fenced Markdown
+  examples are removed; other code content can establish recovery. An unmatched
+  bare fence does not hide the following live rows when its opener was cut off.
+  Quoted/recap rows and example prefixes do not match the anchored retry rule.
+  The latest unresolved retry and the last nine following chrome rows stay
+  within the evaluated window.
+- **Other harnesses except Codex and the generic shell:** an error line followed by
   a line that matches a rule for another state is historical.
 - **Generic shell sessions:** evaluation starts at the newest shell prompt or
   error line.
