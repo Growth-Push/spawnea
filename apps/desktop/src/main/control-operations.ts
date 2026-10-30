@@ -333,6 +333,10 @@ export function createControlOperations(
         model: z.string().trim().regex(MODEL_ID_PATTERN).optional(),
         initialPrompt: z.string().min(1).max(32_000).optional(),
         clientRequestId: z.string().min(1).max(120).optional(),
+        baseBranch: z.string().trim().min(1).max(240).optional(),
+      }).refine((input) => input.baseBranch === undefined || input.workspace === 'new-worktree', {
+        message: "baseBranch is only valid with workspace 'new-worktree'",
+        path: ['baseBranch'],
       }),
       async (input) => {
         let agentId = input.agentId;

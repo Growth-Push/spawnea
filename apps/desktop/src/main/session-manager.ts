@@ -747,9 +747,6 @@ export class SessionManager {
       const projectName = catProject?.name || dbProject?.name || 'Project';
       const gitUrl = catProject?.git_url || dbProject?.repoUrl || undefined;
       const configuredBaseBranch = catProject?.base_branch?.trim() || dbProject?.baseBranch?.trim() || undefined;
-      const effectiveBaseBranch = options.creationSource === 'control'
-        ? options.baseBranch?.trim() || configuredBaseBranch || undefined
-        : configuredBaseBranch || options.baseBranch?.trim() || undefined;
 
       const dbServer = await this.repos.servers.findById(options.serverId);
       const isConfirmedLocalHost =
@@ -789,87 +786,107 @@ export class SessionManager {
       const worktreeConfig = catProject?.worktree;
 
 
+      const hasExplicitWorktreePath = Boolean(options.worktreePath?.trim());
+      const shouldUseWorktree = !hasExplicitWorktreePath && (options.useWorktree ?? (worktreeConfig?.enabled ?? false));
+      const isChildNewWorktree = Boolean(options.parentSessionId && shouldUseWorktree);
       let runtimePath = prepResult.path;
       let repositoryPath = prepResult.path;
-      const currentBranchResult = await host.execute('git branch --show-current', { cwd: prepResult.path });
-      let branchName = currentBranchResult.exitCode === 0 && currentBranchResult.stdout.trim()
-        ? currentBranchResult.stdout.trim()
-        : effectiveBaseBranch || `spawnea/session-${sessionId.slice('sess-'.length)}`;
+      let branchName: string | undefined;
       let baseBranch: string | undefined;
       let baseCommit: string | undefined;
       let managedWorktree = false;
       let tmuxCreated = false;
       let sessionPersisted = false;
-      const hasExplicitWorktreePath = Boolean(options.worktreePath?.trim());
-      const shouldUseWorktree = !hasExplicitWorktreePath && (options.useWorktree ?? (worktreeConfig?.enabled ?? false));
       let inheritedWorktreeLocator: string | undefined;
 
-      if (hasExplicitWorktreePath) {
-        const rawWorktreePath = options.worktreePath!.trim();
-        const candidatePath = posix.isAbsolute(rawWorktreePath)
-          ? posix.normalize(rawWorktreePath).replace(/\/+$/, '')
-          : posix.resolve(prepResult.path, rawWorktreePath).replace(/\/+$/, '');
-
-        const check = await host.execute('git rev-parse --show-toplevel', { cwd: candidatePath });
-        if (check.exitCode !== 0 || !check.stdout.trim()) {
-          throw new Error(`Worktree path '${candidatePath}' is not a valid Git worktree or repository`);
-        }
-        runtimePath = check.stdout.trim().replace(/\/+$/, '');
-
-        const [candidateCommonDirCheck, repoCommonDirCheck] = await Promise.all([
-          host.execute('git rev-parse --git-common-dir', { cwd: runtimePath }),
-          host.execute('git rev-parse --git-common-dir', { cwd: prepResult.path }),
-        ]);
-
-        if (
-          candidateCommonDirCheck.exitCode !== 0 ||
-          !candidateCommonDirCheck.stdout.trim() ||
-          repoCommonDirCheck.exitCode !== 0 ||
-          !repoCommonDirCheck.stdout.trim()
-        ) {
-          throw new Error(
-            `Failed to verify repository ownership for worktree '${candidatePath}' against project repository '${prepResult.path}'`
-          );
-        }
-
-        const candidateCommonDir = posix.resolve(runtimePath, candidateCommonDirCheck.stdout.trim());
-        const repoCommonDir = posix.resolve(prepResult.path, repoCommonDirCheck.stdout.trim());
-
-        const [canonicalCandidateCommonDir, canonicalRepoCommonDir] = await Promise.all([
-          this.resolveCanonicalHostPath(host, candidateCommonDir),
-          this.resolveCanonicalHostPath(host, repoCommonDir),
-        ]);
-
-        if (canonicalCandidateCommonDir !== canonicalRepoCommonDir) {
-          throw new Error(
-            `Worktree path '${candidatePath}' does not belong to project repository '${prepResult.path}'`
-          );
-        }
-
-        repositoryPath = prepResult.path;
-
-        const branchCheck = await host.execute('git branch --show-current', { cwd: runtimePath });
-        if (branchCheck.exitCode === 0 && branchCheck.stdout.trim()) {
-          branchName = branchCheck.stdout.trim();
-        } else {
-          const commitCheck = await host.execute('git rev-parse --short HEAD', { cwd: runtimePath });
-          branchName = commitCheck.exitCode === 0 && commitCheck.stdout.trim() ? commitCheck.stdout.trim() : 'HEAD';
-        }
-        managedWorktree = false;
-      } else if (options.parentSessionId && !shouldUseWorktree) {
-        const parent = await this.repos.sessions.findById(options.parentSessionId);
-        if (!parent) throw new Error(`Parent session '${options.parentSessionId}' not found`);
-        if (!parent.worktreePath.trim()) {
-          throw new Error(`Parent session '${parent.id}' has no worktree path to inherit`);
-        }
-        const parentPathLease = await this.resolveCatalogPathLocator(parent.worktreePath);
-        releaseParentPath = parentPathLease.release;
-        runtimePath = parentPathLease.value;
-        branchName = parent.branch;
-        inheritedWorktreeLocator = parent.worktreePath;
-      }
-
       try {
+        let effectiveBaseBranch: string | undefined;
+        let resolvedBaseCommit: string | undefined;
+
+        if (isChildNewWorktree) {
+          const targetBaseBranch = options.baseBranch?.trim() || configuredBaseBranch;
+          if (!targetBaseBranch) {
+            throw new Error(`No base branch configured for project '${projectName}' or specified in request`);
+          }
+          const fetched = await this.gitService.fetchRemoteBranchCommit(host, prepResult.path, targetBaseBranch);
+          effectiveBaseBranch = fetched.branch;
+          resolvedBaseCommit = fetched.commit;
+        } else {
+          effectiveBaseBranch = options.creationSource === 'control'
+            ? options.baseBranch?.trim() || configuredBaseBranch || undefined
+            : configuredBaseBranch || options.baseBranch?.trim() || undefined;
+        }
+
+        const currentBranchResult = await host.execute('git branch --show-current', { cwd: prepResult.path });
+        branchName = currentBranchResult.exitCode === 0 && currentBranchResult.stdout.trim()
+          ? currentBranchResult.stdout.trim()
+          : effectiveBaseBranch || `spawnea/session-${sessionId.slice('sess-'.length)}`;
+
+        if (hasExplicitWorktreePath) {
+          const rawWorktreePath = options.worktreePath!.trim();
+          const candidatePath = posix.isAbsolute(rawWorktreePath)
+            ? posix.normalize(rawWorktreePath).replace(/\/+$/, '')
+            : posix.resolve(prepResult.path, rawWorktreePath).replace(/\/+$/, '');
+
+          const check = await host.execute('git rev-parse --show-toplevel', { cwd: candidatePath });
+          if (check.exitCode !== 0 || !check.stdout.trim()) {
+            throw new Error(`Worktree path '${candidatePath}' is not a valid Git worktree or repository`);
+          }
+          runtimePath = check.stdout.trim().replace(/\/+$/, '');
+
+          const [candidateCommonDirCheck, repoCommonDirCheck] = await Promise.all([
+            host.execute('git rev-parse --git-common-dir', { cwd: runtimePath }),
+            host.execute('git rev-parse --git-common-dir', { cwd: prepResult.path }),
+          ]);
+
+          if (
+            candidateCommonDirCheck.exitCode !== 0 ||
+            !candidateCommonDirCheck.stdout.trim() ||
+            repoCommonDirCheck.exitCode !== 0 ||
+            !repoCommonDirCheck.stdout.trim()
+          ) {
+            throw new Error(
+              `Failed to verify repository ownership for worktree '${candidatePath}' against project repository '${prepResult.path}'`
+            );
+          }
+
+          const candidateCommonDir = posix.resolve(runtimePath, candidateCommonDirCheck.stdout.trim());
+          const repoCommonDir = posix.resolve(prepResult.path, repoCommonDirCheck.stdout.trim());
+
+          const [canonicalCandidateCommonDir, canonicalRepoCommonDir] = await Promise.all([
+            this.resolveCanonicalHostPath(host, candidateCommonDir),
+            this.resolveCanonicalHostPath(host, repoCommonDir),
+          ]);
+
+          if (canonicalCandidateCommonDir !== canonicalRepoCommonDir) {
+            throw new Error(
+              `Worktree path '${candidatePath}' does not belong to project repository '${prepResult.path}'`
+            );
+          }
+
+          repositoryPath = prepResult.path;
+
+          const branchCheck = await host.execute('git branch --show-current', { cwd: runtimePath });
+          if (branchCheck.exitCode === 0 && branchCheck.stdout.trim()) {
+            branchName = branchCheck.stdout.trim();
+          } else {
+            const commitCheck = await host.execute('git rev-parse --short HEAD', { cwd: runtimePath });
+            branchName = commitCheck.exitCode === 0 && commitCheck.stdout.trim() ? commitCheck.stdout.trim() : 'HEAD';
+          }
+          managedWorktree = false;
+        } else if (options.parentSessionId && !shouldUseWorktree) {
+          const parent = await this.repos.sessions.findById(options.parentSessionId);
+          if (!parent) throw new Error(`Parent session '${options.parentSessionId}' not found`);
+          if (!parent.worktreePath.trim()) {
+            throw new Error(`Parent session '${parent.id}' has no worktree path to inherit`);
+          }
+          const parentPathLease = await this.resolveCatalogPathLocator(parent.worktreePath);
+          releaseParentPath = parentPathLease.release;
+          runtimePath = parentPathLease.value;
+          branchName = parent.branch;
+          inheritedWorktreeLocator = parent.worktreePath;
+        }
+
         if (shouldUseWorktree) {
           const configuredWorktreesDir = resolveProjectWorktreesDir(catProject);
           const provisioned = await this.gitService.createManagedWorktree({
@@ -878,6 +895,7 @@ export class SessionManager {
             taskSlug: 'task',
             sessionSuffix: sessionId.slice('sess-'.length),
             baseBranch: effectiveBaseBranch,
+            baseCommit: resolvedBaseCommit,
             worktreesDir: configuredWorktreesDir,
           });
           runtimePath = provisioned.worktreePath;
@@ -1114,6 +1132,10 @@ export class SessionManager {
       throw new Error('Task description is required to create a child session');
     }
 
+    if (input.baseBranch !== undefined && input.workspace !== 'new-worktree') {
+      throw new Error("baseBranch is only valid with workspace 'new-worktree'");
+    }
+
     const parent = await this.repos.sessions.findById(input.parentSessionId);
     if (!parent) {
       throw new Error(`Parent session '${input.parentSessionId}' not found`);
@@ -1202,8 +1224,7 @@ export class SessionManager {
         initialStatus: 'starting',
         creationSource,
         model: input.model,
-        baseBranch: creationSource === 'control' && childServerId === parent.serverId && childProjectId === parent.projectId
-          ? parent.branch : undefined,
+        baseBranch: input.baseBranch?.trim() || undefined,
       });
     } finally {
       creations.count -= 1;

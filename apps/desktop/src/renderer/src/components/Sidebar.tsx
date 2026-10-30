@@ -1213,7 +1213,7 @@ export function Sidebar({
           <div
             id={`session-child-list-${session.id}`}
             data-testid={`session-child-list-${session.id}`}
-            className="ml-3 pl-2 border-l-2 border-purple-500/30 space-y-1 py-0.5 max-h-48 overflow-y-auto"
+            className="ml-3 pl-2 border-l-2 border-purple-500/30 space-y-1 py-0.5"
           >
             {visibleChildren.map((child) => renderChildListItem(child))}
           </div>

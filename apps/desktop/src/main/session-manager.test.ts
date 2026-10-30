@@ -45,6 +45,7 @@ hosts:
       spawnea:
         name: Spawnea
         path: /workspace/spawnea
+        base_branch: main
         worktree:
           enabled: true
           copy_files: []
@@ -1298,7 +1299,6 @@ hosts:
       serverId: 'dev-workstation',
       name: 'Spawnea',
       rootPath: '/workspace/spawnea',
-      baseBranch: 'main',
     });
     await enableManagedWorktrees();
     mockHost.customRules.unshift({

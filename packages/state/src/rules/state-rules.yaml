@@ -183,6 +183,11 @@ harnesses:
 
   grok:
     rules:
+      # A current provider retry remains an error despite busy/ready chrome.
+      # Anchoring excludes quoted prose, recap rows and example prefixes.
+      - state: error
+        patterns:
+          - '^[^\S\n]*(?:[│|][^\S\n]*)?(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◆●▶][^\S\n]+)?Server error[^\S\n]+\(500\)[^\S\n]*\|[^\S\n]*Retrying[^\S\n]+\(attempt[^\S\n]+\d+\)\.{3}(?:[^\S\n]|$)'
       # Question card.
       - state: needs_input
         patterns:

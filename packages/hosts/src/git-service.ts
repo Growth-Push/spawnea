@@ -122,6 +122,50 @@ export class GitService {
     }
   }
 
+  /** Fetches a remote branch from origin and returns the resolved commit SHA. */
+  async fetchRemoteBranchCommit(
+    host: HostAdapter,
+    repositoryPath: string,
+    branch: string,
+    remote: string = 'origin'
+  ): Promise<{ commit: string; branch: string }> {
+    const rootResult = await host.execute('git rev-parse --show-toplevel', { cwd: repositoryPath });
+    if (rootResult.exitCode !== 0 || !rootResult.stdout.trim()) {
+      throw new Error(`Project path '${repositoryPath}' is not a Git repository`);
+    }
+    const repositoryRoot = rootResult.stdout.trim().replace(/\/+$/, '');
+
+    const remotePrefix = `${remote}/`;
+    const cleanBranch = branch.startsWith(remotePrefix) ? branch.slice(remotePrefix.length) : branch;
+
+    await this.assertValidLocalBranchName(host, repositoryRoot, cleanBranch, 'base');
+
+    const remoteCheck = await host.execute(`git remote get-url ${escapeShellPath(remote)}`, { cwd: repositoryRoot });
+    if (remoteCheck.exitCode !== 0) {
+      throw new Error(`Remote '${remote}' is not configured for destination repository '${repositoryRoot}'`);
+    }
+
+    const fetchResult = await host.execute(
+      `git fetch ${escapeShellPath(remote)} +refs/heads/${escapeShellPath(cleanBranch)}:refs/remotes/${escapeShellPath(remote)}/${escapeShellPath(cleanBranch)}`,
+      { cwd: repositoryRoot, timeoutMs: 60_000 }
+    );
+    if (fetchResult.exitCode !== 0) {
+      const details = fetchResult.stderr.trim() || fetchResult.stdout.trim() || `exit code ${fetchResult.exitCode}`;
+      throw new Error(`Failed to fetch remote branch '${remote}/${cleanBranch}': ${details}`);
+    }
+
+    const commitResult = await host.execute(
+      `git rev-parse ${escapeShellPath(`refs/remotes/${remote}/${cleanBranch}^{commit}`)}`,
+      { cwd: repositoryRoot }
+    );
+    const commit = commitResult.stdout.trim();
+    if (commitResult.exitCode !== 0 || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(commit)) {
+      throw new Error(`Could not resolve commit for remote branch '${remote}/${cleanBranch}'`);
+    }
+
+    return { commit, branch: cleanBranch };
+  }
+
   /** Creates and verifies a Spawnea-owned branch and sibling worktree. */
   async createManagedWorktree(options: {
     host: HostAdapter;
@@ -129,6 +173,7 @@ export class GitService {
     taskSlug: string;
     sessionSuffix: string;
     baseBranch?: string;
+    baseCommit?: string;
     worktreesDir?: string;
   }): Promise<ManagedWorktreeResult> {
     const { host, repositoryPath, taskSlug, sessionSuffix } = options;
@@ -155,17 +200,32 @@ export class GitService {
     }
     const worktreePath = `${worktreesRoot}/${leaf}`;
 
-    await this.assertValidLocalBranch(host, repositoryRoot, baseBranch, 'base');
-    await this.assertValidLocalBranchName(host, repositoryRoot, branch, 'generated task');
-
-    const baseCommitResult = await host.execute(
-      `git rev-parse ${escapeShellPath(`${baseBranch}^{commit}`)}`,
-      { cwd: repositoryRoot }
-    );
-    const baseCommit = baseCommitResult.stdout.trim();
-    if (baseCommitResult.exitCode !== 0 || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(baseCommit)) {
-      throw new Error(`Could not resolve the creation commit for base branch '${baseBranch}'`);
+    let baseCommit = options.baseCommit?.trim();
+    if (baseCommit) {
+      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(baseCommit)) {
+        throw new Error(`Invalid base commit ID '${baseCommit}'`);
+      }
+      const verifyCommit = await host.execute(
+        `git rev-parse ${escapeShellPath(`${baseCommit}^{commit}`)}`,
+        { cwd: repositoryRoot }
+      );
+      if (verifyCommit.exitCode !== 0) {
+        throw new Error(`Could not resolve creation commit '${baseCommit}' in repository`);
+      }
+      await this.assertValidLocalBranchName(host, repositoryRoot, baseBranch, 'base');
+    } else {
+      await this.assertValidLocalBranch(host, repositoryRoot, baseBranch, 'base');
+      const baseCommitResult = await host.execute(
+        `git rev-parse ${escapeShellPath(`${baseBranch}^{commit}`)}`,
+        { cwd: repositoryRoot }
+      );
+      baseCommit = baseCommitResult.stdout.trim();
+      if (baseCommitResult.exitCode !== 0 || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(baseCommit)) {
+        throw new Error(`Could not resolve the creation commit for base branch '${baseBranch}'`);
+      }
     }
+
+    await this.assertValidLocalBranchName(host, repositoryRoot, branch, 'generated task');
 
     const branchCollision = await host.execute(
       `git show-ref --verify --quiet ${escapeShellPath(`refs/heads/${branch}`)}`,
@@ -195,7 +255,7 @@ export class GitService {
     }
 
     const addResult = await host.execute(
-      `git worktree add -b ${escapeShellPath(branch)} ${escapeShellPath(worktreePath)} ${escapeShellPath(baseBranch)}`,
+      `git worktree add -b ${escapeShellPath(branch)} ${escapeShellPath(worktreePath)} ${escapeShellPath(baseCommit)}`,
       { cwd: repositoryRoot }
     );
     if (addResult.exitCode !== 0) {
@@ -388,15 +448,17 @@ export class GitService {
   ): Promise<ManagedWorktreeInspection> {
     const repositoryPath = identity.repositoryPath.replace(/\/+$/, '');
     const worktreePath = identity.worktreePath.replace(/\/+$/, '');
-    const [primaryRoot, worktreeList, taskRoot, currentBranch, taskBranch, baseBranch, integrated, taskStatus] = await Promise.all([
+    const taskRef = `refs/heads/${identity.branch}`;
+    const localBaseRef = `refs/heads/${identity.baseBranch}`;
+    const [primaryRoot, worktreeList, taskRoot, currentBranch, taskBranch, localBaseBranch, localIntegrated, taskStatus] = await Promise.all([
       host.execute('git rev-parse --show-toplevel', { cwd: repositoryPath }),
       host.execute('git worktree list --porcelain', { cwd: repositoryPath }),
       host.execute('git rev-parse --show-toplevel', { cwd: worktreePath }),
       host.execute('git branch --show-current', { cwd: worktreePath }),
-      host.execute(`git rev-parse ${escapeShellPath(`${identity.branch}^{commit}`)}`, { cwd: repositoryPath }),
-      host.execute(`git rev-parse ${escapeShellPath(`${identity.baseBranch}^{commit}`)}`, { cwd: repositoryPath }),
+      host.execute(`git rev-parse ${escapeShellPath(`${taskRef}^{commit}`)}`, { cwd: repositoryPath }),
+      host.execute(`git rev-parse ${escapeShellPath(`${localBaseRef}^{commit}`)}`, { cwd: repositoryPath }),
       host.execute(
-        `git merge-base --is-ancestor ${escapeShellPath(identity.branch)} ${escapeShellPath(identity.baseBranch)}`,
+        `git merge-base --is-ancestor ${escapeShellPath(taskRef)} ${escapeShellPath(localBaseRef)}`,
         { cwd: repositoryPath }
       ),
       host.execute('git status --porcelain=v1 --untracked-files=all', { cwd: worktreePath }),
@@ -415,6 +477,17 @@ export class GitService {
     const managedEntry = registered.find((entry) => entry.path === worktreePath);
     if (!managedEntry) {
       return { state: 'missing', currentBranch: branchName || undefined, message: 'The path is no longer registered as a Git worktree.' };
+    }
+    // A child may be pinned to an origin branch that has never existed locally.
+    // Inspection reads that ref without creating or updating a local base branch.
+    let baseBranch = localBaseBranch;
+    let integrated = localIntegrated;
+    if (baseBranch.exitCode !== 0) {
+      const remoteBase = `refs/remotes/origin/${identity.baseBranch}`;
+      baseBranch = await host.execute(`git rev-parse ${escapeShellPath(`${remoteBase}^{commit}`)}`, { cwd: repositoryPath });
+      integrated = baseBranch.exitCode === 0
+        ? await host.execute(`git merge-base --is-ancestor ${escapeShellPath(taskRef)} ${escapeShellPath(remoteBase)}`, { cwd: repositoryPath })
+        : localIntegrated;
     }
     if (baseBranch.exitCode !== 0 || taskBranch.exitCode !== 0) {
       return { state: 'unavailable', currentBranch: branchName || undefined, message: 'The recorded Git branches could not be inspected.' };
@@ -534,7 +607,12 @@ export class GitService {
       throw new Error('Recorded worktree path and branch do not match Git\'s worktree registry');
     }
 
-    await this.assertValidLocalBranch(host, repositoryPath, identity.baseBranch, 'base');
+    if (requireCleanPrimary) {
+      await this.assertValidLocalBranch(host, repositoryPath, identity.baseBranch, 'base');
+    } else {
+      // Closing owns only the task worktree; it never mutates the base branch.
+      await this.assertValidLocalBranchName(host, repositoryPath, identity.baseBranch, 'base');
+    }
     await this.assertValidLocalBranch(host, repositoryPath, identity.branch, 'task');
 
     if (requireCleanPrimary) {

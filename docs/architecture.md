@@ -349,6 +349,17 @@ Each profile owns subsequent catalog writes. An explicit user-data directory
 disables default-catalog copying; without a default catalog, normal catalog
 creation uses the profile path. Database and session context remain profile-specific.
 
+### Child worktree bases
+
+Child `new-worktree` creation fetches the destination project's selected origin
+branch with a 60-second timeout, then creates the managed worktree from the exact
+resolved SHA recorded as `baseCommit`. An explicit base overrides configuration;
+missing bases and fetch failures abort before child creation without local fallback.
+Only GitService removes the optional leading `origin/`. Root and shared-directory
+creation keep their existing behavior; an explicit child base requires new-worktree.
+Inspection and close allow remote-only bases without mutating local base branches.
+Integration retains its local-base and matching-parent-branch requirements.
+
 ### Local control boundary
 
 The local control gateway remains a main-process adapter, not a renderer or host concern. It is enabled by default on Unix-like systems and can be disabled explicitly for diagnostics or environments that do not want a local control socket; Windows remains disabled until named-pipe transport is implemented. The `spawnea` CLI authenticates to an owner-only Unix-domain socket and sends named operations that the gateway validates and delegates to `SessionApplicationService` (exported from the existing control-service module). Overlapping renderer file, Git, and artifact reads use the same boundary. Read DTOs are deliberately narrower than persisted host records and omit connection targets and credentials.

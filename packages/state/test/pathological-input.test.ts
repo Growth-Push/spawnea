@@ -36,9 +36,16 @@ const adapterCases: Array<[string, RuleBasedStatusAdapter, string]> = [
   ['Grok line repeating the shortcut-bar mode hint', new GrokStatusAdapter(), 'shift+tab:mode'.repeat(LONG / 2)],
   ['Grok line repeating a box glyph', new GrokStatusAdapter(), `${'─'.repeat(LONG)}x`],
   ['Grok line with a long tab run before text', new GrokStatusAdapter(), `${'\t'.repeat(LONG)}x`],
+  ['Grok line with internal whitespace and no closing frame', new GrokStatusAdapter(), `a${' '.repeat(LONG)}x`],
 ];
 
 describe('pathological terminal lines', () => {
+  it('classifies recovery after a retry quickly with a long framed header-like line', () => {
+    const adapter = new GrokStatusAdapter();
+    const tail = ['Server error (500) | Retrying (attempt 7)... 42s', `│ main /s/c/demo${' '.repeat(LONG)}x │`];
+    expect(elapsedMs(() => adapter.evaluateStatus(signals(tail)))).toBeLessThan(TIME_LIMIT_MS);
+  });
+
   it.each(adapterCases)('%s finishes quickly', (_name, adapter, line) => {
     expect(elapsedMs(() => adapter.evaluateStatus(signals([line])))).toBeLessThan(TIME_LIMIT_MS);
   });

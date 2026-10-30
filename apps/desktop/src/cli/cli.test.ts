@@ -66,12 +66,15 @@ describe('Spawnea Control CLI', () => {
         'Child task',
         '--workspace',
         'new-worktree',
+        '--branch',
+        'develop',
       ]);
       expect(parsed.command).toBe('child');
       expect(parsed.subcommand).toBe('create');
       expect(parsed.flags.parent).toBe('root-1');
       expect(parsed.flags.task).toBe('Child task');
       expect(parsed.flags.workspace).toBe('new-worktree');
+      expect(parsed.flags.branch).toBe('develop');
     });
 
     it('parses prompt send and prompt wait', () => {
@@ -310,6 +313,42 @@ describe('Spawnea Control CLI', () => {
         createChild(mockClient, { parent: 'sess', task: 'task', timeoutMs: 0 })
       ).rejects.toThrow('Invalid timeoutMs');
       expect(mockClient.callTool).not.toHaveBeenCalled();
+    });
+
+    it('forwards baseBranch and logs baseCommit in createChild', async () => {
+      const mockClient = {
+        callTool: vi.fn().mockResolvedValue({
+          apiVersion: 'v1',
+          sessionId: 'child-123',
+          parentSessionId: 'root-1',
+          childAlias: 'child-1',
+          baseCommit: '0123456789abcdef0123456789abcdef01234567',
+        }),
+      } as unknown as ControlCliClient;
+
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await createChild(mockClient, {
+          parent: 'root-1',
+          task: 'Child task',
+          workspace: 'new-worktree',
+          branch: 'develop',
+        });
+
+        expect(mockClient.callTool).toHaveBeenCalledWith(
+          'spawnea_create_child_session',
+          expect.objectContaining({
+            parentSession: 'root-1',
+            task: 'Child task',
+            workspace: 'new-worktree',
+            baseBranch: 'develop',
+          }),
+          undefined
+        );
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Base commit:           0123456789abcdef0123456789abcdef01234567'));
+      } finally {
+        logSpy.mockRestore();
+      }
     });
 
     it('accumulates streamed output across working polls until turn completion', async () => {
@@ -789,6 +828,11 @@ describe('Spawnea Control CLI', () => {
       await expect(
         runCli(['child', 'create', '--parent', 'sess-e2e-1', '--task', 'Subtask', '--workspace', 'invalid-type', '--runtime-file', runtimeFile])
       ).rejects.toThrow("Invalid --workspace: 'invalid-type'");
+
+      for (const workspaceArgs of [[], ['--workspace', 'same-project']]) {
+        await expect(runCli(['child', 'create', '--parent', 'sess-e2e-1', '--task', 'Subtask', '--branch', 'develop', ...workspaceArgs, '--runtime-file', runtimeFile]))
+          .rejects.toThrow('--branch requires --workspace new-worktree');
+      }
 
       // Test invalid timeout rejection
       await expect(

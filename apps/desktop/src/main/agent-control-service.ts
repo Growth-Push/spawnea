@@ -1015,6 +1015,7 @@ export class AgentControlService {
           serverId: request.serverId,
           projectId: request.projectId,
           model: request.model,
+          baseBranch: request.baseBranch,
         },
         'control',
       );
