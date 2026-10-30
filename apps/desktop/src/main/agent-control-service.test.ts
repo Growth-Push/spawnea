@@ -173,6 +173,18 @@ describe('AgentControlService', () => {
     expect(result.status).toBe('failed');
   });
 
+  it('fails a Grok turn on a current provider retry without reopening it after recovery', async () => {
+    await repositories.agents.save({ id: 'agent-1', name: 'Grok', harness: 'grok', command: 'grok' });
+    const sent = await service.sendPrompt({ target: 'existing', prompt: 'Run task' });
+    terminalOutput = 'Server error (500) | Retrying (attempt 7)... 42s\n│ ⠋ │\nCtrl+c:cancel';
+    await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'failed' });
+
+    terminalOutput = 'The response succeeded.\nWorked for 48s\n│ ❯ │';
+    await repositories.sessions.updateStatus('existing', 'idle');
+    await expect(service.getTurn({ turnId: sent.turnId })).resolves.toMatchObject({ status: 'failed' });
+    expect(sessionManager.stopSession).not.toHaveBeenCalled();
+  });
+
   it('reads Agent Context without refreshing live turn state', async () => {
     const sent = await service.sendPrompt({ target: 'existing', prompt: 'Review' });
     terminalOutput += '\nCaptured result';
