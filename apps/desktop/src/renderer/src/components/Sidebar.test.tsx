@@ -91,6 +91,7 @@ const renderSidebar = (
     onOpenCreateChildModal?: (parentSessionId?: string) => void;
     onOpenAgentSetup?: () => void;
     refreshingSessionIds?: ReadonlySet<string>;
+    onVisibleSessionIdsChange?: (ids: string[]) => void;
     wrapper?: React.JSXElementConstructor<{ children: React.ReactNode }>;
   } = {}
 ) => render(
@@ -109,6 +110,7 @@ const renderSidebar = (
     onRefresh={vi.fn()}
     isCollapsed={options.isCollapsed}
     refreshingSessionIds={options.refreshingSessionIds}
+    onVisibleSessionIdsChange={options.onVisibleSessionIdsChange}
   />,
   { wrapper: options.wrapper }
 );
@@ -982,6 +984,195 @@ describe('Sidebar session hierarchy', () => {
     expect(agyIcon).not.toBeNull();
     expect(childItem.contains(childAlias)).toBe(true);
     expect(childItem.contains(agyIcon!)).toBe(true);
+  });
+
+  describe('expanded children without independent scroll (zero, four, ten children)', () => {
+    const createParent = (id: string, name: string): Session => ({
+      ...mockSessions[0],
+      id,
+      name,
+      task: `Task for ${name}`,
+      branch: 'main',
+      status: 'working',
+    });
+
+    const createChildren = (parentId: string, count: number): Session[] =>
+      Array.from({ length: count }, (_, idx) => {
+        const num = String(idx + 1).padStart(2, '0');
+        return {
+          ...mockSessions[0],
+          id: `${parentId}-child-${num}`,
+          parentSessionId: parentId,
+          childAlias: `child-${idx + 1}`,
+          name: `${parentId} Child Task ${num}`,
+          task: `Subtask ${num}`,
+          branch: `feat/subtask-${num}`,
+          status: idx === 1 ? 'needs_input' : 'working',
+          createdAt: new Date(),
+          lastActivityAt: new Date(),
+        };
+      });
+
+    it('renders no child toggle or child container for zero children', () => {
+      const parent = createParent('parent-zero', 'Zero Children Parent');
+      renderSidebar([parent]);
+
+      expect(screen.queryByTestId('session-toggle-children-parent-zero')).toBeNull();
+      expect(screen.queryByTestId('session-child-list-parent-zero')).toBeNull();
+    });
+
+    it('renders four children without independent scroll container, supports collapse/re-expand and selection', () => {
+      const onSelectSession = vi.fn();
+      const parent = createParent('parent-four', 'Four Children Parent');
+      const children = createChildren('parent-four', 4);
+
+      renderSidebar([parent, ...children], { onSelectSession });
+
+      const toggleBtn = screen.getByTestId('session-toggle-children-parent-four');
+      expect(toggleBtn.textContent).toContain('4 children');
+
+      // Expand children
+      fireEvent.click(toggleBtn);
+      const childList = screen.getByTestId('session-child-list-parent-four');
+      expect(childList).toBeDefined();
+
+      // Regression check: Must NOT have independent scroll classes (max-h-48 or overflow-y-auto)
+      expect(childList.className).not.toContain('max-h-');
+      expect(childList.className).not.toContain('overflow-y-auto');
+      expect(childList.className).toContain('ml-3 pl-2 border-l-2 border-purple-500/30 space-y-1 py-0.5');
+
+      // Verify all 4 children are visible
+      for (const child of children) {
+        expect(screen.getByTestId(`session-item-${child.id}`)).toBeDefined();
+      }
+
+      // Selecting the 4th child works
+      fireEvent.click(screen.getByTestId(`session-item-${children[3].id}`));
+      expect(onSelectSession).toHaveBeenCalledWith(children[3].id);
+
+      // Collapse hides children
+      fireEvent.click(toggleBtn);
+      expect(screen.queryByTestId('session-child-list-parent-four')).toBeNull();
+
+      // Re-expand brings all 4 back
+      fireEvent.click(toggleBtn);
+      expect(screen.getByTestId('session-child-list-parent-four')).toBeDefined();
+      for (const child of children) {
+        expect(screen.getByTestId(`session-item-${child.id}`)).toBeDefined();
+      }
+    });
+
+    it('renders ten children and a later root session, selects the tenth child, and preserves general hierarchy', () => {
+      const onSelectSession = vi.fn();
+      const onVisibleSessionIdsChange = vi.fn();
+      const parent = createParent('parent-ten', 'Ten Children Parent');
+      const children = createChildren('parent-ten', 10);
+      const laterRoot = createParent('parent-zeta', 'Zeta Root Session');
+
+      const { rerender } = renderSidebar([parent, ...children, laterRoot], {
+        onSelectSession,
+        onVisibleSessionIdsChange,
+      });
+
+      const toggleBtn = screen.getByTestId('session-toggle-children-parent-ten');
+      expect(toggleBtn.textContent).toContain('10 children');
+
+      // Expand children
+      fireEvent.click(toggleBtn);
+      const childList = screen.getByTestId('session-child-list-parent-ten');
+      expect(childList).toBeDefined();
+
+      // Verify no independent max-height or scroll container
+      expect(childList.className).not.toContain('max-h-');
+      expect(childList.className).not.toContain('overflow-');
+
+      // All 10 children and the later root session are rendered in the DOM
+      for (const child of children) {
+        expect(screen.getByTestId(`session-item-${child.id}`)).toBeDefined();
+      }
+      expect(screen.getByTestId('session-item-parent-zeta')).toBeDefined();
+
+      // Verify 10th child details and selection
+      const tenthChild = children[9];
+      const tenthItem = screen.getByTestId(`session-item-${tenthChild.id}`);
+      expect(screen.getByTestId(`session-child-alias-${tenthChild.id}`).textContent).toBe('child-10');
+      expect(screen.getByTestId(`session-title-${tenthChild.id}`).textContent).toBe(tenthChild.name);
+
+      fireEvent.click(tenthItem);
+      expect(onSelectSession).toHaveBeenCalledWith(tenthChild.id);
+
+      // Verify keyboard session ids order includes parent, all 10 children, and later root
+      expect(onVisibleSessionIdsChange).toHaveBeenLastCalledWith([
+        'parent-ten',
+        ...children.map((c) => c.id),
+        'parent-zeta',
+      ]);
+
+      // Rerender with activeSessionId as tenth child: verify selection styling
+      rerender(
+        <Sidebar
+          sessions={[parent, ...children, laterRoot]}
+          servers={mockServers}
+          projects={mockProjects}
+          agents={mockAgents}
+          activeSessionId={tenthChild.id}
+          onSelectSession={onSelectSession}
+          onOpenCreateModal={vi.fn()}
+          onRefresh={vi.fn()}
+        />
+      );
+      const updatedTenthItem = screen.getByTestId(`session-item-${tenthChild.id}`);
+      expect(updatedTenthItem.getAttribute('aria-current')).toBe('page');
+      expect(updatedTenthItem.className).toContain('border-purple-500');
+
+      // Filter: search for tenth child alias
+      const searchInput = screen.getByTestId('session-search-input');
+      fireEvent.change(searchInput, { target: { value: 'child-10' } });
+
+      // Parent remains visible and only 10th child matches
+      expect(screen.getByTestId('session-item-parent-ten')).toBeDefined();
+      expect(screen.getByTestId(`session-item-${tenthChild.id}`)).toBeDefined();
+      expect(screen.queryByTestId(`session-item-${children[0].id}`)).toBeNull();
+      expect(screen.queryByTestId('session-item-parent-zeta')).toBeNull();
+
+      // Reset filter restores all
+      fireEvent.change(searchInput, { target: { value: '' } });
+      for (const child of children) {
+        expect(screen.getByTestId(`session-item-${child.id}`)).toBeDefined();
+      }
+      expect(screen.getByTestId('session-item-parent-zeta')).toBeDefined();
+    });
+
+    it('preserves access to all ten children in dense and compact views', () => {
+      const onSelectSession = vi.fn();
+      const parent = createParent('parent-ten', 'Ten Children Parent');
+      const children = createChildren('parent-ten', 10);
+      const extraSessions = makeSessions(12);
+
+      // In dense view (large session list)
+      const { unmount } = renderSidebar([...extraSessions, parent, ...children], { onSelectSession });
+      const subgrid = screen.getByTestId('session-dense-subgrid-parent-ten');
+      expect(subgrid).toBeDefined();
+      for (const child of children) {
+        expect(screen.getByTestId(`session-item-${child.id}`)).toBeDefined();
+      }
+      fireEvent.click(screen.getByTestId(`session-item-${children[9].id}`));
+      expect(onSelectSession).toHaveBeenCalledWith(children[9].id);
+      unmount();
+
+      // In compact view
+      const onSelectCompact = vi.fn();
+      renderSidebar([parent, ...children], { isCollapsed: true, onSelectSession: onSelectCompact });
+      const countBadge = screen.getByTestId('session-compact-child-count-parent-ten');
+      expect(countBadge.textContent).toBe('10');
+
+      // All 10 children exist in popup and tenth is selectable
+      for (const child of children) {
+        expect(screen.getByTestId(`session-compact-child-item-${child.id}`)).toBeDefined();
+      }
+      fireEvent.click(screen.getByTestId(`session-compact-child-item-${children[9].id}`));
+      expect(onSelectCompact).toHaveBeenCalledWith(children[9].id);
+    });
   });
 });
 
