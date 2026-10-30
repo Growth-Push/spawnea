@@ -130,6 +130,8 @@ export interface CreateChildOptions extends OutputOptions {
   initialPrompt?: string;
   clientRequestId?: string;
   timeoutMs?: number;
+  baseBranch?: string;
+  branch?: string;
 }
 
 export async function createChild(client: ControlCliClient, options: CreateChildOptions): Promise<void> {
@@ -145,6 +147,7 @@ export async function createChild(client: ControlCliClient, options: CreateChild
     model: options.model,
     initialPrompt: options.initialPrompt,
     clientRequestId: options.clientRequestId,
+    baseBranch: options.baseBranch ?? options.branch,
   }, options.timeoutMs);
 
   if (options.json) {
@@ -159,6 +162,9 @@ export async function createChild(client: ControlCliClient, options: CreateChild
   }
   if (result.worktree?.path) {
     console.log(`Worktree path:         ${result.worktree.path}`);
+  }
+  if (result.baseCommit) {
+    console.log(`Base commit:           ${result.baseCommit}`);
   }
   if (result.harness?.name) {
     console.log(`Harness:               ${result.harness.name}`);

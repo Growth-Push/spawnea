@@ -48,6 +48,7 @@ export interface CreateChildSessionInput {
   serverId?: string;
   projectId?: string;
   model?: string;
+  baseBranch?: string;
 }
 
 export type ParentCloseAction = 'close-all' | 'leave-children';

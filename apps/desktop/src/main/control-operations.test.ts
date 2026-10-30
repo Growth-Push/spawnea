@@ -350,6 +350,56 @@ describe('Spawnea control operations contract', () => {
     });
   });
 
+  it.each([undefined, 'same-project'])('rejects baseBranch with workspace %s at the API boundary', async (workspace) => {
+    const createChildSession = vi.fn();
+    const client = await connect({ createChildSession });
+    const result = await client.callTool({ name: 'spawnea_create_child_session', arguments: {
+      parentSession: 'parent', task: 'Invalid base', baseBranch: 'develop', ...(workspace ? { workspace } : {}),
+    } });
+    expect(result.isError).toBe(true);
+    expect(createChildSession).not.toHaveBeenCalled();
+  });
+
+  it('handles spawnea_create_child_session with explicit baseBranch', async () => {
+    const childResult = {
+      apiVersion: 'v1' as const,
+      parentSessionId: 'parent-1',
+      childAlias: 'child-1',
+      sessionId: 'session-child-1',
+      childSessionId: 'session-child-1',
+      name: 'Child task',
+      displayName: 'Child task',
+      workspace: 'new-worktree' as const,
+      workspaceMode: 'new-worktree' as const,
+      baseCommit: '0123456789abcdef0123456789abcdef01234567',
+      status: 'starting' as const,
+      initialStatus: 'starting' as const,
+    };
+    const createChildSession = vi.fn().mockResolvedValue(childResult);
+    const client = await connect({ createChildSession } as Partial<AgentControlService>);
+
+    const result = await client.callTool({
+      name: 'spawnea_create_child_session',
+      arguments: {
+        parentSession: 'parent-1',
+        task: 'Child task',
+        workspace: 'new-worktree',
+        baseBranch: 'develop',
+      },
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      sessionId: 'session-child-1',
+      baseCommit: '0123456789abcdef0123456789abcdef01234567',
+    });
+    expect(createChildSession).toHaveBeenCalledWith({
+      parentSession: 'parent-1',
+      task: 'Child task',
+      workspace: 'new-worktree',
+      baseBranch: 'develop',
+    });
+  });
+
   it('handles spawnea_list_sessions tool call', async () => {
     const listResult: ControlListSessionsResult = {
       apiVersion: 'v1' as const,

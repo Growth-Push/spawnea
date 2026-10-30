@@ -190,6 +190,7 @@ export interface ControlCreateChildSessionRequest {
   projectId?: string;
   model?: string;
   initialPrompt?: string;
+  baseBranch?: string;
 }
 
 export interface ControlCreateChildSessionResult {

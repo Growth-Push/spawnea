@@ -756,6 +756,32 @@ describe('AgentControlService', () => {
           serverId: undefined,
           projectId: undefined,
           model: undefined,
+          baseBranch: undefined,
+        },
+        'control'
+      );
+    });
+
+    it('creates a child session with explicit baseBranch and forwards to session manager', async () => {
+      await service.createChildSession({
+        parentSession: 'existing',
+        task: 'New worktree subtask',
+        name: 'Child Worktree',
+        workspace: 'new-worktree',
+        baseBranch: 'develop',
+      });
+
+      expect(sessionManager.createChildSession).toHaveBeenCalledWith(
+        {
+          parentSessionId: 'existing',
+          task: 'New worktree subtask',
+          name: 'Child Worktree',
+          workspace: 'new-worktree',
+          agentId: undefined,
+          serverId: undefined,
+          projectId: undefined,
+          model: undefined,
+          baseBranch: 'develop',
         },
         'control'
       );

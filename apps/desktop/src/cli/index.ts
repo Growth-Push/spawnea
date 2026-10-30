@@ -46,6 +46,7 @@ COMMANDS:
     --task "<description>"      Task description (required)
     [--agent <id>]              Harness (defaults to parent harness)
     [--workspace <type>]        Workspace: same-project | new-worktree (default: same-project)
+    [--branch <branch>]         Base git branch on origin for new-worktree
     [--name <name>]             Display title for the child
     [--request-id <id>]         Client request ID for idempotent retries
     [--timeout <sec>]           Operation timeout in seconds (default: 120)
@@ -281,6 +282,10 @@ export async function runCli(argv: string[]): Promise<void> {
             workspace = rawWorkspace;
           }
           const name = typeof parsed.flags.name === 'string' ? parsed.flags.name : undefined;
+          const branch = typeof parsed.flags.branch === 'string' ? parsed.flags.branch : undefined;
+          if (branch !== undefined && workspace !== 'new-worktree') {
+            throw new Error('--branch requires --workspace new-worktree');
+          }
           const model = typeof parsed.flags.model === 'string' ? parsed.flags.model : undefined;
           const clientRequestId = typeof parsed.flags['request-id'] === 'string'
             ? parsed.flags['request-id']
@@ -297,6 +302,7 @@ export async function runCli(argv: string[]): Promise<void> {
             workspace,
             name,
             model,
+            baseBranch: branch,
             clientRequestId,
             timeoutMs,
             json: isJson,
