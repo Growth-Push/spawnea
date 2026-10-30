@@ -55,6 +55,7 @@ Options:
 - `--task "<description>"`: Subtask description (required)
 - `--agent <id>`: Harness identifier (defaults to parent's harness)
 - `--workspace <type>`: `same-project` (shared directory) or `new-worktree` (isolated git worktree)
+- `--branch <branch>`: Explicit base branch on origin; requires `--workspace new-worktree` and overrides the project's configured base branch.
 - `--name <title>`: Display title for the child session
 
 ```bash
@@ -63,7 +64,20 @@ spawnea child create --parent root-1 --task "Review changes" --agent codex --wor
 
 # Create a child in a new worktree:
 spawnea child create --parent root-1 --task "Investigate bug" --workspace new-worktree
+
+# Create a child in a new worktree from an explicit origin branch:
+spawnea child create --parent root-1 --task "Feature review" --workspace new-worktree --branch develop
 ```
+
+New worktrees fetch the selected origin branch with a 60-second timeout and
+return its refreshed SHA as `baseCommit`. Creation fails if no base is configured
+or supplied, or if origin, the branch, or fetch is unavailable; there is no local
+fallback. `--branch` with the default `same-project` workspace is rejected.
+A single `origin/` prefix is optional; use `origin/origin/topic` for a remote branch
+named `origin/topic`. Primary checkouts and local base branches stay unchanged.
+Remote-only bases support inspection and safe close. Integration still requires
+the parent branch to match the recorded base and a local base branch checked out
+in the primary checkout; it never retargets automatically.
 
 ### `spawnea prompt send --session <id> "<prompt>"`
 Submits text directly into the session's terminal.

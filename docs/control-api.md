@@ -136,12 +136,25 @@ remain unrecorded and are shown as "Harness default / not recorded".
 
 `spawnea_create_child_session` takes `parentSession`, `task`, and optionally
 `name`, `workspace` (`same-project` or `new-worktree`), `agentId`, `serverId`,
-`projectId`, `model`, `initialPrompt`, and `clientRequestId`. Without `agentId`,
+`projectId`, `model`, `initialPrompt`, `baseBranch`, and `clientRequestId`. Without `agentId`,
 the child inherits the parent's harness; an unavailable harness fails
 explicitly and is never replaced silently. Children cannot create
 grandchildren. A different-host child requires `serverId`, `projectId`, and
-`workspace: "new-worktree"`. With `initialPrompt`, Spawnea waits a bounded time
-for the session to leave `starting` and reports `promptStatus` and `turnId`
+`workspace: "new-worktree"`. For `workspace: "new-worktree"`, the child defaults
+to the destination project's configured base branch or uses the explicit
+`baseBranch`, fetching that branch from `origin`, pinning the fetched commit as
+`baseCommit`, and creating the worktree directly from that commit. Missing
+remote, branch, or fetch failure aborts creation without creating a partial child
+or falling back to local branches. Fetch execution has a 60-second timeout.
+Creation also fails if neither an explicit nor a configured base is available.
+`baseBranch` is valid only with explicit `workspace: "new-worktree"`; omitting
+workspace defaults to `same-project` and rejects an explicit base. The explicit
+base overrides configuration. A single leading `origin/` is optional; for a
+remote branch named `origin/topic`, use `origin/origin/topic`.
+The recorded `baseBranch` is the remote branch name without that optional prefix;
+no local base branch is created or updated. Both primary checkout HEAD and its
+checked-out branch remain unchanged. With `initialPrompt`, Spawnea waits a bounded
+time for the session to leave `starting` and reports `promptStatus` and `turnId`
 separately from creation success.
 
 ### Prompts and turns
@@ -185,7 +198,13 @@ Close and integration refuse to proceed while another session on the same host
 uses the worktree. A failed or inconclusive tmux termination check fails the
 operation before merge, stash, discard, or worktree removal. Integration is
 accepted only for a local managed-worktree child whose parent is local, and the
-parent's branch must be checked out in the project's primary checkout.
+parent's branch must equal the child's recorded `baseBranch` and be checked out
+in the project's primary checkout. A child created from a different base cannot
+be integrated through this flow; Spawnea does not retarget or merge it automatically.
+Inspection and safe close support a base that exists only on `origin` without
+creating or updating a local base branch. Close retains task ownership, registry,
+path, dirty-change policy, shared-worktree and verified termination checks.
+Integration still requires a local base branch and all existing integration guards.
 When a managed worktree directory is already missing on disk, close with discard
 completes safely without failing on missing paths, whereas stash is rejected.
 
