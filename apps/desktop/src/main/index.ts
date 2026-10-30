@@ -590,7 +590,12 @@ function registerIpcHandlers(
   });
 
   ipcMain.handle('sessions:delete', async (_event, sessionId: string, childAction?: unknown) => {
-    if (childAction !== undefined && childAction !== 'close-all' && childAction !== 'leave-children') {
+    if (
+      childAction !== undefined &&
+      childAction !== 'close-all' &&
+      childAction !== 'leave-children' &&
+      childAction !== 'close-all-preserve-mismatched'
+    ) {
       throw new Error(`Unsupported parent close action: ${String(childAction)}`);
     }
     return sessManager.deleteSession(sessionId, childAction);

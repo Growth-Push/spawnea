@@ -611,6 +611,13 @@ When a managed worktree directory is already absent on host disk, `finishSession
 action `close` safely finalizes the session, cleans up any stale Git registration
 (preserving locked worktrees), and deletes session records without failing on missing
 files; stashing changes is rejected as unfeasible without directory contents.
+When a managed worktree branch differs from the recorded branch, destructive cleanup
+and integration remain strictly blocked by identity guards. Closing an affected session
+requires explicit user confirmation (`preserveWorktree: true` or parent
+`close-all-preserve-mismatched`), which stops runtime processes and deletes session
+records while preserving the worktree directory, both recorded and actual branches, and
+all tracked, untracked, and ignored files.
+Implicit parent cleanup of an ordinary child rechecks Git cleanliness after verified runtime termination and aborts if changes appeared or status cannot be read.
 
 A per-session removal guard prevents overlapping removal, unadoption, and new child creation.
 Child creation holds its counter until startup succeeds or rollback finishes;

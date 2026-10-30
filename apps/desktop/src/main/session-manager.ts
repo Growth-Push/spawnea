@@ -1437,15 +1437,37 @@ export class SessionManager {
       return;
     }
 
-    if (childAction === 'close-all') {
-      this.logger.info('Closing child sessions under parent', { parentId, count: children.length });
+    if (childAction === 'close-all' || childAction === 'close-all-preserve-mismatched') {
+      this.logger.info('Closing child sessions under parent', { parentId, childAction, count: children.length });
       let closedChildren = 0;
+      const preserveMismatched = childAction === 'close-all-preserve-mismatched';
       try {
         for (const child of children) {
           if (child.managedWorktree) {
-            await this.finishSession(child.id, 'close', { stashChanges: false }, 'ui');
+            let shouldPreserve = false;
+            const inspection = await this.inspectManagedWorktree(child.id);
+            if (inspection.state === 'unavailable') {
+              throw new Error(inspection.message || 'Managed worktree inspection is unavailable');
+            }
+            if (inspection.state === 'mismatch') {
+              if (preserveMismatched) {
+                shouldPreserve = true;
+              } else {
+                const currentBranch = inspection.currentBranch || 'detached HEAD';
+                const childLabel = child.childAlias || child.name || child.id;
+                throw new Error(
+                  `Managed worktree for child '${childLabel}' is checked out on '${currentBranch}', not recorded branch '${child.branch}'. Destructive cleanup is blocked to protect uncommitted or divergent work.`
+                );
+              }
+            } else if (inspection.state !== 'missing' && inspection.isClean !== true) {
+              const childLabel = child.childAlias || child.name || child.id;
+              throw new Error(
+                `Managed worktree for child '${childLabel}' has uncommitted changes. Ordinary dirty siblings require explicit finalization (stash or discard) before parent closure.`
+              );
+            }
+            await this.finishSession(child.id, 'close', { stashChanges: false, preserveWorktree: shouldPreserve, requireCleanAfterStop: !shouldPreserve }, 'ui');
           } else {
-            await this.deleteSession(child.id, 'close-all');
+            await this.deleteSession(child.id, childAction);
           }
           if (await this.repos.sessions.findById(child.id)) {
             throw new Error('Persistence failure: child session remains in the database');
@@ -1786,7 +1808,7 @@ export class SessionManager {
   async finishSession(
     sessionId: string,
     action: FinishSessionAction,
-    options: FinishSessionOptions = {},
+    options: FinishSessionOptions & { requireCleanAfterStop?: boolean } = {},
     origin: FinishSessionOrigin = 'ui'
   ): Promise<FinishSessionResult> {
     this.logger.info('Finishing managed worktree session', { sessionId, action, origin });
@@ -1919,13 +1941,28 @@ export class SessionManager {
         if (!worktreeAlreadyRemoved) {
           // 1. Verify identity, but allow the explicit close flow to handle local changes.
           const inspection = await this.gitService.inspectManagedWorktree(host, identity);
+          if (options.preserveWorktree && inspection.state !== 'mismatch') {
+            throw new Error(
+              `Cannot preserve worktree for session '${sessionId}': session is not in a branch mismatch state (current state: '${inspection.state}')`
+            );
+          }
           const isAbsent = inspection.state === 'missing' && (await this.gitService.isWorktreeAbsent(host, identity.worktreePath));
           if (isAbsent) {
             if (options.stashChanges) {
               throw new Error(`Cannot stash changes for session '${sessionId}': managed worktree directory '${identity.worktreePath}' is missing`);
             }
             await this.stopSession(sessionId);
+          } else if (options.preserveWorktree) {
+            // Explicit close with worktree preservation: verify termination before changing persistence
+            await this.stopSession(sessionId);
           } else {
+            if (inspection.state === 'mismatch') {
+              const currentBranch = inspection.currentBranch || 'detached HEAD';
+              const childLabel = session.childAlias || session.name || session.id;
+              throw new Error(
+                `Managed worktree for child '${childLabel}' is checked out on '${currentBranch}', not recorded branch '${identity.branch}'. Destructive cleanup is blocked to protect uncommitted or divergent work.`
+              );
+            }
             await this.gitService.verifyManagedWorktreeForFinalization(
               host,
               identity,
@@ -1937,9 +1974,9 @@ export class SessionManager {
             // 2. Verify termination before changing any files.
             await this.stopSession(sessionId);
 
-            // agent-validated closes that discard changes (stashChanges: false) never discard work:
+            // Agent-validated and implicit parent closes must not discard unconfirmed changes:
             // with the runtime stopped, require a verified clean worktree so late writes or an unreadable status cannot be lost.
-            if (origin === 'agent-validated' && !options.stashChanges) {
+            if ((origin === 'agent-validated' || options.requireCleanAfterStop) && !options.stashChanges) {
               const postStopStatus = await this.getGitStatus(sessionId).catch(() => null);
               if (!postStopStatus || postStopStatus.unavailable) {
                 throw new Error(`Session '${sessionId}' worktree status could not be verified; aborting close to prevent data loss`);
@@ -1948,6 +1985,9 @@ export class SessionManager {
                 throw new Error(`Session '${sessionId}' has uncommitted changes in managed worktree; finalize or stash changes before closing`);
               }
 
+            }
+
+            if (origin === 'agent-validated' && !options.stashChanges) {
               const ignoredStatus = await host.execute('git status --porcelain=v1 --ignored --untracked-files=all', {
                 cwd: identity.worktreePath,
               }).catch(() => null);
@@ -1977,7 +2017,7 @@ export class SessionManager {
 
         // 4. Record cleanup progress before removing the worktree. This makes a
         // later retry safe if database cleanup fails.
-        if (!worktreeAlreadyRemoved && existingContext) {
+        if (!worktreeAlreadyRemoved && !options.preserveWorktree && existingContext) {
           await this.contextStore.save({
             ...existingContext,
             finalization: { action, worktreeRemoved: false },
@@ -1985,7 +2025,7 @@ export class SessionManager {
         }
 
         // 5. Remove worktree (preserves task branch)
-        if (!worktreeAlreadyRemoved) {
+        if (!worktreeAlreadyRemoved && !options.preserveWorktree) {
           const removed = await this.gitService.removeManagedWorktree(host, repositoryPath.value, worktreePath.value);
           if (!removed) {
             throw new Error(`Failed to remove managed worktree for session '${sessionId}'`);
@@ -2001,12 +2041,25 @@ export class SessionManager {
 
         // 6. Clean up session DB
         await this.repos.sessions.delete(sessionId);
+        if (await this.repos.sessions.findById(sessionId)) {
+          throw new Error('Persistence failure: session remains in database');
+        }
 
-        this.logger.info('Session worktree closed and session record removed while preserving branch', {
-          sessionId,
-          branch: identity.branch,
-        });
-        return { action: 'close', removed: true };
+        this.logger.info(
+          options.preserveWorktree
+            ? 'Session stopped and record removed while preserving worktree, branches, and files'
+            : 'Session worktree closed and session record removed while preserving branch',
+          {
+            sessionId,
+            branch: identity.branch,
+            preserved: options.preserveWorktree === true,
+          }
+        );
+        return {
+          action: 'close',
+          removed: true,
+          workspacePreserved: options.preserveWorktree ? true : undefined,
+        };
       }
 
       throw new Error(`Unsupported finalization action: ${action}`);

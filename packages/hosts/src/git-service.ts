@@ -438,7 +438,9 @@ export class GitService {
     );
     const worktreeIsOnBaseBranch =
       managedEntry.branch === identity.baseBranch && branchName === identity.baseBranch;
-    if (integrated.exitCode === 0 && (worktreeIsOnBaseBranch || branchAdvancedSinceCreation)) {
+    if (integrated.exitCode === 0 && (worktreeIsOnBaseBranch || (
+      branchAdvancedSinceCreation && managedEntry.branch === identity.branch && branchName === identity.branch
+    ))) {
       return {
         state: 'integrated',
         currentBranch: branchName || undefined,
@@ -507,7 +509,9 @@ export class GitService {
       integratedWorktreeAllowed = merged.exitCode === 0 && currentBranch === identity.baseBranch;
     }
     if (!branchIdentityMatches && !integratedWorktreeAllowed) {
-      throw new Error(`Managed worktree '${worktreePath}' is not checked out on recorded branch '${identity.branch}'`);
+      throw new Error(
+        `Managed worktree '${worktreePath}' is not checked out on recorded branch '${identity.branch}' (currently on '${currentBranch || 'detached HEAD'}')`
+      );
     }
     if (taskStatus.exitCode !== 0) {
       throw new Error(`Could not inspect managed worktree status for '${worktreePath}'`);

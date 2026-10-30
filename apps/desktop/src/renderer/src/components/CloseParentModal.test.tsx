@@ -249,4 +249,33 @@ describe('CloseParentModal', () => {
     expect(screen.getByText('Worktree absent')).toBeDefined();
     expect(screen.queryByText(/may have uncommitted changes/)).toBeNull();
   });
+
+  it('renders branch mismatch badge and offers Close & Preserve Worktree button upon mismatch error', () => {
+    const onConfirm = vi.fn();
+    render(
+      <CloseParentModal
+        isOpen={true}
+        parentSession={mockParent}
+        childrenSessions={mockChildren}
+        gitBranchMismatchBySessionId={{
+          'child-2': { currentBranch: 'feature/divergent', recordedBranch: 'spawnea/task-2' },
+        }}
+        error="Managed worktree for child 'child-2' is checked out on 'feature/divergent', not recorded branch 'spawnea/task-2'. Destructive cleanup is blocked to protect uncommitted or divergent work."
+        onClose={vi.fn()}
+        onConfirm={onConfirm}
+      />
+    );
+
+    expect(screen.getByText('Branch mismatch (feature/divergent)')).toBeDefined();
+
+    const preserveButton = screen.getByTestId('parent-close-preserve-mismatched-button');
+    expect(preserveButton).toBeDefined();
+    fireEvent.click(preserveButton);
+    expect(onConfirm).toHaveBeenCalledWith('close-all-preserve-mismatched');
+
+    const preserveAction = screen.getByTestId('parent-close-preserve-mismatched-action');
+    expect(preserveAction).toBeDefined();
+    fireEvent.click(preserveAction);
+    expect(onConfirm).toHaveBeenCalledWith('close-all-preserve-mismatched');
+  });
 });

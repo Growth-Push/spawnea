@@ -141,6 +141,9 @@ export function App(): React.JSX.Element {
   const [gitSyncBySessionId, setGitSyncBySessionId] = useState<Record<string, { ahead: number; behind: number }>>({});
   const [gitUnavailableBySessionId, setGitUnavailableBySessionId] = useState<Record<string, boolean>>({});
   const [gitMissingBySessionId, setGitMissingBySessionId] = useState<Record<string, boolean>>({});
+  const [gitBranchMismatchBySessionId, setGitBranchMismatchBySessionId] = useState<
+    Record<string, { currentBranch: string; recordedBranch: string }>
+  >({});
   const [gitRefreshNonce, setGitRefreshNonce] = useState(0);
   const { refreshingIds, setChecking } = useVisibleRefresh();
   const [statusDetailsMap, setStatusDetailsMap] = useState<Record<string, import('@spawnea/domain').SessionStatusResult>>({});
@@ -175,6 +178,7 @@ export function App(): React.JSX.Element {
   const [parentCloseAction, setParentCloseAction] = useState<ParentCloseAction>('close-all');
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [pendingCloseAllParentId, setPendingCloseAllParentId] = useState<string | null>(null);
+  const [pendingCloseAllAction, setPendingCloseAllAction] = useState<ParentCloseAction>('close-all');
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   const restoreWorkspaceFocus = useCallback(() => {
     requestAnimationFrame(() => {
@@ -461,6 +465,7 @@ export function App(): React.JSX.Element {
       setGitSyncBySessionId({});
       setGitUnavailableBySessionId({});
       setGitMissingBySessionId({});
+      setGitBranchMismatchBySessionId({});
       return;
     }
 
@@ -580,6 +585,38 @@ export function App(): React.JSX.Element {
       if (pollTimer !== undefined) clearTimeout(pollTimer);
     };
   }, [sessionIdsKey, activeSessionId, gitRefreshNonce]);
+
+  // Authoritative inspection for managed children when the parent close modal is opened
+  useEffect(() => {
+    if (!parentSessionToClose || !window.spawneaApi?.inspectWorktree) return;
+    const parentId = parentSessionToClose.id;
+    const managedChildren = sessionsRef.current.filter(
+      (s) => s.parentSessionId === parentId && s.managedWorktree
+    );
+    if (managedChildren.length === 0) return;
+
+    let cancelled = false;
+    Promise.allSettled(
+      managedChildren.map((child) => window.spawneaApi.inspectWorktree(child.id))
+    ).then((results) => {
+      if (cancelled) return;
+      const mismatches: Record<string, { currentBranch: string; recordedBranch: string }> = {};
+      results.forEach((res, index) => {
+        if (res.status === 'fulfilled' && res.value.state === 'mismatch') {
+          const child = managedChildren[index];
+          mismatches[child.id] = {
+            currentBranch: res.value.currentBranch || 'unknown',
+            recordedBranch: child.branch || '',
+          };
+        }
+      });
+      setGitBranchMismatchBySessionId(mismatches);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [parentSessionToClose]);
 
   const handleControlFinalizationDecision = async (
     requestId: string,
@@ -832,6 +869,7 @@ export function App(): React.JSX.Element {
 
         if (pendingCloseAllParentId) {
           const parentId = pendingCloseAllParentId;
+          const actionToResume = pendingCloseAllAction;
           const finishedSession = sessionsRef.current.find((s) => s.id === sessionId);
           if (finishedSession && finishedSession.parentSessionId !== parentId) {
             setPendingCloseAllParentId(null);
@@ -841,14 +879,19 @@ export function App(): React.JSX.Element {
           const remainingChildren = sessionsRef.current.filter(
             (s) => s.parentSessionId === parentId && s.id !== sessionId
           );
-          const nextDirtyChild = remainingChildren.find((c) => isPossiblyDirty(c));
+          const nextDirtyChild = remainingChildren.find(
+            (c) =>
+              (actionToResume === 'close-all-preserve-mismatched'
+                ? !gitBranchMismatchBySessionId[c.id]
+                : true) && isPossiblyDirty(c)
+          );
           if (nextDirtyChild) {
             setSessionToFinish(nextDirtyChild);
             return false;
           } else {
             setPendingCloseAllParentId(null);
             setSessionToFinish(null);
-            await executeDeleteSession(parentId, 'close-all', { skipDirtyChildCheck: true });
+            await executeDeleteSession(parentId, actionToResume, { skipDirtyChildCheck: true });
             return true;
           }
         }
@@ -883,18 +926,27 @@ export function App(): React.JSX.Element {
     if (options?.modal) setParentCloseError(null);
     else if (!options?.preserveError) setDeleteError(null);
     try {
-      if (childAction === 'close-all' && !options?.skipDirtyChildCheck) {
+      if (
+        (childAction === 'close-all' || childAction === 'close-all-preserve-mismatched') &&
+        !options?.skipDirtyChildCheck
+      ) {
         const children = sessions.filter((s) => s.parentSessionId === sessionId);
-        const dirtyChild = children.find((c) => isPossiblyDirty(c));
+        const dirtyChild = children.find(
+          (c) =>
+            (childAction === 'close-all-preserve-mismatched'
+              ? !gitBranchMismatchBySessionId[c.id]
+              : true) && isPossiblyDirty(c)
+        );
         if (dirtyChild) {
           setPendingCloseAllParentId(sessionId);
+          setPendingCloseAllAction(childAction);
           setSessionToFinish(dirtyChild);
           return true;
         }
       }
 
       if (window.spawneaApi?.deleteSession) {
-        const result = childAction === 'close-all'
+        const result = (childAction === 'close-all' || childAction === 'close-all-preserve-mismatched')
           ? await window.spawneaApi.deleteSession(sessionId, childAction)
           : await window.spawneaApi.deleteSession(sessionId);
         if (result === false || (typeof result === 'object' && result !== null && 'success' in result && !(result as any).success)) {
@@ -904,7 +956,7 @@ export function App(): React.JSX.Element {
 
       setSessions((prev) => {
         let next: Session[];
-        if (childAction === 'close-all') {
+        if (childAction === 'close-all' || childAction === 'close-all-preserve-mismatched') {
           next = prev.filter((s) => s.id !== sessionId && s.parentSessionId !== sessionId);
         } else {
           next = prev
@@ -921,9 +973,30 @@ export function App(): React.JSX.Element {
         });
         return next;
       });
+      if (childAction === 'close-all-preserve-mismatched') {
+        const hadMismatch =
+          Object.keys(gitBranchMismatchBySessionId).length > 0 ||
+          Boolean(parentCloseError && /checked out on|not (?:checked out on )?recorded branch/i.test(parentCloseError));
+        if (hadMismatch) {
+          setReloadNotice('Closed sessions. Mismatched worktrees, branches, and files were preserved.');
+          setTimeout(() => setReloadNotice(null), 4000);
+        }
+      }
       return true;
     } catch (error) {
       console.error('Failed to delete session on backend:', error);
+      if (window.spawneaApi?.listSessions) {
+        try {
+          const freshSessions = await window.spawneaApi.listSessions();
+          setSessions(freshSessions);
+          setActiveSessionId((currentActiveId) => {
+            if (currentActiveId && freshSessions.some((s) => s.id === currentActiveId)) {
+              return currentActiveId;
+            }
+            return freshSessions.length > 0 ? freshSessions[0].id : null;
+          });
+        } catch {}
+      }
       const rawMessage = error instanceof Error ? error.message : String(error);
       const message = rawMessage.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
       const category = /already being finalized|currently being|waiting for child creation/i.test(message) ? 'busy'
@@ -1036,6 +1109,7 @@ export function App(): React.JSX.Element {
     if (parentSessionToClose && inFlightDelete.current.has(parentSessionToClose.id)) return;
     setParentSessionToClose(null);
     setParentCloseError(null);
+    setGitBranchMismatchBySessionId({});
   }, [parentSessionToClose]);
 
   const handleConfirmCloseParentModal = useCallback(async (action: ParentCloseAction) => {
@@ -1772,6 +1846,7 @@ export function App(): React.JSX.Element {
         gitDirtyBySessionId={gitDirtyBySessionId}
         gitUnavailableBySessionId={gitUnavailableBySessionId}
         gitMissingBySessionId={gitMissingBySessionId}
+        gitBranchMismatchBySessionId={gitBranchMismatchBySessionId}
         isLoading={Boolean(parentSessionToClose && deletingSessionIds.has(parentSessionToClose.id))}
         error={parentCloseError}
         retryAction={parentCloseAction}

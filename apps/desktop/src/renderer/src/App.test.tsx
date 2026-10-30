@@ -2940,6 +2940,413 @@ describe('App Desktop Shell', () => {
     });
   });
 
+  it('handles Close All branch mismatch failure by retaining surviving sessions and retrying with preservation', async () => {
+    const parent: Session = {
+      id: 'parent-1',
+      name: 'Parent Session',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-1',
+      task: 'Parent Task',
+      branch: 'main',
+      worktreePath: '/p/1',
+      tmuxSessionName: 'spawnea-p1',
+      status: 'done',
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+    };
+    const child1: Session = {
+      ...parent,
+      id: 'child-1',
+      name: 'Child One Normal',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-1',
+      managedWorktree: true,
+      worktreePath: '/p/wt1',
+    };
+    const child2: Session = {
+      ...parent,
+      id: 'child-2',
+      name: 'Child Two Divergent',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-2',
+      managedWorktree: true,
+      worktreePath: '/p/wt2',
+    };
+
+    const api = createMockSpawneaApi();
+    api.listSessions = vi
+      .fn()
+      .mockResolvedValueOnce([parent, child1, child2]) // initial load
+      .mockResolvedValueOnce([parent, child2]); // after partial failure (child1 was closed)
+
+    api.getGitStatus = vi.fn().mockResolvedValue({
+      isGitRepo: true,
+      isClean: true,
+      branch: 'main',
+      totalChanges: 0,
+      staged: [],
+      unstaged: [],
+      untracked: [],
+      ahead: 0,
+      behind: 0,
+    });
+
+    api.deleteSession = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          "Child-finalization failed: Managed worktree for child 'child-2' is checked out on 'feature/divergent', not recorded branch 'spawnea/task-child-2'. Destructive cleanup is blocked to protect uncommitted or divergent work."
+        )
+      )
+      .mockResolvedValueOnce(true);
+
+    window.spawneaApi = api;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('Active Sessions (1)')).toBeDefined());
+
+    // Open CloseParentModal
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+
+    // Click Close All
+    fireEvent.click(screen.getByTestId('parent-close-all-button'));
+
+    // First attempt fails due to branch mismatch on child2
+    await waitFor(() => {
+      expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all');
+      expect(screen.getByText(/checked out on 'feature\/divergent'/)).toBeDefined();
+    });
+
+    // Verify surviving sessions were refreshed (child 1 is gone, child 2 remains)
+    await waitFor(() => {
+      expect(screen.queryByText('Child One Normal')).toBeNull();
+      expect(screen.getByText('Child Two Divergent')).toBeDefined();
+    });
+
+    // Actionable button to Close & Preserve Worktree is offered
+    const preserveBtn = screen.getByTestId('parent-close-preserve-mismatched-button');
+    expect(preserveBtn).toBeDefined();
+
+    // Click Close & Preserve Worktree
+    fireEvent.click(preserveBtn);
+
+    // Second attempt invokes close-all-preserve-mismatched
+    await waitFor(() => {
+      expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all-preserve-mismatched');
+      // Modal closes upon success
+      expect(screen.queryByTestId('close-parent-modal')).toBeNull();
+      // Visible notice appears indicating preservation
+      expect(screen.getByText(/Mismatched worktrees, branches, and files were preserved/i)).toBeDefined();
+    });
+  });
+
+  it('restores a valid active surviving session when the active child is closed before another child fails', async () => {
+    const parent: Session = {
+      id: 'parent-1',
+      name: 'Parent Root',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-claude',
+      task: 'Parent task',
+      worktreePath: '/repo/root',
+      branch: 'main',
+      tmuxSessionName: 'spawnea-parent',
+      status: 'done',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      lastActivityAt: new Date('2026-01-01T01:00:00Z'),
+    };
+    const child1: Session = {
+      ...parent,
+      id: 'child-1',
+      name: 'Active Child To Be Deleted',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-1',
+      managedWorktree: true,
+      worktreePath: '/repo/worktrees/child-1',
+      branch: 'feature/child-1',
+    };
+    const child2: Session = {
+      ...parent,
+      id: 'child-2',
+      name: 'Failing Child Sibling',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-2',
+      managedWorktree: true,
+      worktreePath: '/repo/worktrees/child-2',
+      branch: 'feature/child-2',
+    };
+
+    const initialSessions = [parent, child1, child2];
+    const survivingSessions = [parent, child2];
+
+    const api = createMockSpawneaApi({
+      listSessions: vi
+        .fn()
+        .mockResolvedValueOnce(initialSessions)
+        .mockResolvedValueOnce(survivingSessions),
+    });
+
+    api.deleteSession = vi.fn().mockRejectedValue(
+      new Error("Child-finalization failed: Managed worktree for child 'child-2' failed")
+    );
+
+    window.spawneaApi = api;
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (1)')).toBeDefined());
+
+    // Switch active session to child1 by selecting it or verifying active session logic
+    // Open close parent modal on parent
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+
+    // Click Close All
+    fireEvent.click(screen.getByTestId('parent-close-all-button'));
+
+    // Deletion fails partially: child1 was closed, child2 survived
+    await waitFor(() => {
+      expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all');
+      expect(screen.getByText(/Managed worktree for child 'child-2' failed/)).toBeDefined();
+    });
+
+    // Verify surviving sessions were refreshed
+    await waitFor(() => {
+      expect(screen.queryByText('Active Child To Be Deleted')).toBeNull();
+      expect(screen.getByText('Failing Child Sibling')).toBeDefined();
+    });
+  });
+
+  it('does not misclassify an integrated worktree as branch mismatch and allows normal closure without claiming preservation', async () => {
+    const parent: Session = {
+      id: 'parent-1',
+      name: 'Parent Root',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-claude',
+      task: 'Parent task',
+      worktreePath: '/repo/root',
+      branch: 'main',
+      tmuxSessionName: 'spawnea-parent',
+      status: 'done',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      lastActivityAt: new Date('2026-01-01T01:00:00Z'),
+    };
+    const integratedChild: Session = {
+      ...parent,
+      id: 'child-integrated',
+      name: 'Integrated Child',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-int',
+      managedWorktree: true,
+      worktreePath: '/repo/worktrees/integrated',
+      branch: 'feature/already-merged', // recorded branch differs from current branch 'main'
+    };
+
+    const api = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue([parent, integratedChild]),
+    });
+    api.inspectWorktree = vi.fn().mockResolvedValue({
+      state: 'integrated',
+      currentBranch: 'main',
+      isClean: true,
+      message: 'Worktree was already integrated into the target branch.',
+    });
+    api.deleteSession = vi.fn().mockResolvedValue(true);
+
+    window.spawneaApi = api;
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (1)')).toBeDefined());
+
+    // Open close parent modal
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+
+    // Child name appears in the modal
+    expect(screen.getByText('Integrated Child')).toBeDefined();
+
+    // Verify no "Branch mismatch" badge appears for the integrated child
+    expect(screen.queryByText(/Branch mismatch/i)).toBeNull();
+    // Verify "Close & Preserve Worktrees" action button is NOT shown
+    expect(screen.queryByTestId('parent-close-preserve-mismatched-action')).toBeNull();
+
+    // Confirm normal Close All
+    fireEvent.click(screen.getByTestId('parent-close-all-button'));
+
+    await waitFor(() => {
+      expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all');
+      expect(screen.queryByTestId('close-parent-modal')).toBeNull();
+      // Does not falsely claim preservation
+      expect(screen.queryByText(/Mismatched worktrees, branches, and files were preserved/i)).toBeNull();
+    });
+  });
+
+  it('prompts dirty sibling for finalization before close-all-preserve-mismatched and preserves chosen action', async () => {
+    const parent: Session = {
+      id: 'parent-1',
+      name: 'Parent Root',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-claude',
+      task: 'Parent task',
+      worktreePath: '/repo/root',
+      branch: 'main',
+      tmuxSessionName: 'spawnea-parent',
+      status: 'done',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      lastActivityAt: new Date('2026-01-01T01:00:00Z'),
+    };
+    const dirtySibling: Session = {
+      ...parent,
+      id: 'child-dirty',
+      name: 'Dirty Sibling',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-dirty',
+      managedWorktree: true,
+      worktreePath: '/repo/worktrees/dirty',
+      branch: 'feature/dirty',
+    };
+
+    const mismatchedChild: Session = {
+      ...dirtySibling,
+      id: 'child-mismatch',
+      name: 'Mismatched Child',
+      childAlias: 'child-mismatch',
+      worktreePath: '/repo/worktrees/mismatch',
+      branch: 'feature/recorded',
+    };
+
+    const api = createMockSpawneaApi({
+      listSessions: vi.fn().mockResolvedValue([parent, mismatchedChild, dirtySibling]),
+      getGitStatus: vi.fn().mockResolvedValue({
+        isGitRepo: true,
+        branch: 'feature/dirty',
+        isClean: false,
+        totalChanges: 2,
+        modified: ['src/file.ts'],
+        staged: [],
+        unstaged: [],
+        untracked: [],
+        ahead: 0,
+        behind: 0,
+      }),
+    });
+    api.inspectWorktree = vi.fn().mockImplementation(async (id: string) => id === 'child-mismatch'
+      ? { state: 'mismatch', currentBranch: 'feature/divergent', isClean: true }
+      : { state: 'active', currentBranch: 'feature/dirty', isClean: false });
+    api.deleteSession = vi.fn().mockResolvedValue(true);
+    api.finishSession = vi.fn().mockResolvedValue({ action: 'close', removed: true });
+
+    window.spawneaApi = api;
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (1)')).toBeDefined());
+
+    // Open parent closure with a canonical mismatch and a dirty sibling.
+    // Open modal
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+
+    // In modal, child name appears
+    expect(screen.getByText('Dirty Sibling')).toBeDefined();
+
+    await waitFor(() => expect(screen.getByTestId('parent-close-preserve-mismatched-action')).toBeDefined());
+    fireEvent.click(screen.getByTestId('parent-close-preserve-mismatched-action'));
+
+    // Dirty child check intercepts and displays FinishSessionModal for dirtySibling!
+    await waitFor(() => {
+      expect(screen.getByText('Finish Worktree Session')).toBeDefined();
+    });
+
+    expect(api.deleteSession).not.toHaveBeenCalled();
+
+    // Select Close Worktree action
+    const closeAction = screen.getByText(/Close Worktree/);
+    fireEvent.click(closeAction);
+
+    // Confirm close checkbox
+    const confirmCheckbox = screen.getByTestId('finish-close-confirm-checkbox');
+    fireEvent.click(confirmCheckbox);
+
+    // Submit finish
+    fireEvent.click(screen.getByRole('button', { name: /Close Worktree/i }));
+
+    // Once finalized, the parent deletion resumes
+    await waitFor(() => {
+      expect(api.finishSession).toHaveBeenCalledWith('child-dirty', 'close', expect.anything());
+      expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all-preserve-mismatched');
+    });
+  });
+
+  it('prevents repeated clicks while parent deletion is in flight', async () => {
+    const parent: Session = {
+      id: 'parent-1',
+      name: 'Parent Session',
+      serverId: 'srv-1',
+      projectId: 'proj-1',
+      agentId: 'agent-1',
+      task: 'Parent Task',
+      branch: 'main',
+      worktreePath: '/p/1',
+      tmuxSessionName: 'spawnea-p1',
+      status: 'done',
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+    };
+    const child: Session = {
+      ...parent,
+      id: 'child-1',
+      name: 'Child One',
+      parentSessionId: 'parent-1',
+      childAlias: 'child-1',
+      managedWorktree: true,
+      worktreePath: '/p/wt1',
+    };
+
+    let resolveDelete: (value: boolean) => void = () => {};
+    const deletePromise = new Promise<boolean>((resolve) => {
+      resolveDelete = resolve;
+    });
+
+    const api = createMockSpawneaApi();
+    api.listSessions = vi.fn().mockResolvedValue([parent, child]);
+    api.getGitStatus = vi.fn().mockResolvedValue({
+      isGitRepo: true,
+      isClean: true,
+      branch: 'main',
+      totalChanges: 0,
+      staged: [],
+      unstaged: [],
+      untracked: [],
+      ahead: 0,
+      behind: 0,
+    });
+    api.deleteSession = vi.fn().mockReturnValue(deletePromise);
+    window.spawneaApi = api;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('Active Sessions (1)')).toBeDefined());
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+
+    const closeAllBtn = screen.getByTestId('parent-close-all-button');
+    fireEvent.click(closeAllBtn);
+    fireEvent.click(closeAllBtn);
+
+    // Even if clicked twice, api.deleteSession is only called once
+    expect(api.deleteSession).toHaveBeenCalledTimes(1);
+
+    // Resolve deletion
+    resolveDelete(true);
+    await waitFor(() => {
+      expect(screen.queryByTestId('close-parent-modal')).toBeNull();
+    });
+  });
+
   it('collapses sidebar to icon mode and renders hover popup cards for sessions', async () => {
     window.spawneaApi = createMockSpawneaApi();
 

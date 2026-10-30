@@ -176,4 +176,61 @@ describe('managed worktree finalization with real Git', () => {
     writeFileSync(fileAncestor, 'not a directory');
     expect(await service.isWorktreeAbsent(host, join(fileAncestor, 'child'))).toBe(false);
   });
+
+  it.each(['unrelated', 'detached'] as const)('reports mismatch for an advanced merged task with an %s checkout', async (checkout) => {
+    const identity = await createIdentity(`merged-${checkout}`);
+    writeFileSync(join(identity.worktreePath, 'feature.txt'), 'integrated task work\n');
+    git(identity.worktreePath, 'add', 'feature.txt');
+    git(identity.worktreePath, 'commit', '-m', 'implement task');
+    git(repositoryPath, 'merge', '--ff-only', identity.branch);
+    if (checkout === 'unrelated') {
+      git(identity.worktreePath, 'switch', '-c', 'unrelated-feature');
+    } else {
+      git(identity.worktreePath, 'switch', '--detach');
+    }
+
+    const inspection = await service.inspectManagedWorktree(host, identity);
+
+    expect(inspection.state).toBe('mismatch');
+    expect(inspection.currentBranch).toBe(checkout === 'unrelated' ? 'unrelated-feature' : undefined);
+    expect(inspection.message).toContain(checkout === 'unrelated' ? 'unrelated-feature' : 'detached HEAD');
+    expect(inspection.message).toContain(identity.branch);
+    await expect(service.verifyManagedWorktreeForFinalization(host, identity, false, false, true))
+      .rejects.toThrow(/not checked out on recorded branch/);
+    expect(existsSync(join(identity.worktreePath, 'feature.txt'))).toBe(true);
+    expect(git(repositoryPath, 'show-ref', '--verify', `refs/heads/${identity.branch}`)).toContain(identity.branch);
+  });
+
+  it('detects real Git branch mismatch and protects all tracked, untracked, and ignored files', async () => {
+    const identity = await createIdentity('mismatch-real');
+    // Check out a genuinely different branch in the worktree
+    git(identity.worktreePath, 'checkout', '-b', 'feature-divergent');
+    writeFileSync(join(identity.worktreePath, 'tracked.txt'), 'committed on divergent branch\n');
+    git(identity.worktreePath, 'add', 'tracked.txt');
+    git(identity.worktreePath, 'commit', '-m', 'divergent commit');
+
+    // Add untracked and ignored files
+    writeFileSync(join(identity.worktreePath, 'untracked.txt'), 'untracked work\n');
+    writeFileSync(join(identity.worktreePath, '.gitignore'), 'ignored.txt\n');
+    writeFileSync(join(identity.worktreePath, 'ignored.txt'), 'ignored work\n');
+
+    // 1. inspectManagedWorktree reports mismatch state with actual branch
+    const inspection = await service.inspectManagedWorktree(host, identity);
+    expect(inspection.state).toBe('mismatch');
+    expect(inspection.currentBranch).toBe('feature-divergent');
+    expect(inspection.message).toContain('feature-divergent');
+    expect(inspection.message).toContain(identity.branch);
+
+    // 2. Destructive verification throws with actionable message
+    await expect(service.verifyManagedWorktreeForFinalization(host, identity, false)).rejects.toThrow(
+      /not checked out on recorded branch.*feature-divergent/
+    );
+
+    // 3. Worktree, branches, and all files remain intact
+    expect(existsSync(join(identity.worktreePath, 'tracked.txt'))).toBe(true);
+    expect(existsSync(join(identity.worktreePath, 'untracked.txt'))).toBe(true);
+    expect(existsSync(join(identity.worktreePath, 'ignored.txt'))).toBe(true);
+    expect(git(identity.worktreePath, 'branch', '--show-current')).toBe('feature-divergent');
+    expect(git(repositoryPath, 'branch', '--list', identity.branch)).toContain(identity.branch);
+  });
 });

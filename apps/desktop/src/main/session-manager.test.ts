@@ -2423,6 +2423,35 @@ up 1 day, 5 hours
       verifySpy.mockRestore();
     });
 
+    it('rejects preservation of a missing worktree before stopping or deleting anything', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Missing worktree preservation test',
+        baseBranch: 'main',
+      });
+      vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree')
+        .mockResolvedValueOnce({ state: 'missing', message: 'The recorded worktree path is missing.' });
+      const absentSpy = vi.spyOn((sessionManager as any).gitService, 'isWorktreeAbsent').mockResolvedValueOnce(true);
+      const stopSpy = vi.spyOn(sessionManager, 'stopSession');
+      const removeSpy = vi.spyOn((sessionManager as any).gitService, 'removeManagedWorktree');
+      const deleteContextSpy = vi.spyOn(contextStore, 'delete');
+      const deleteSessionSpy = vi.spyOn(repos.sessions, 'delete');
+
+      await expect(sessionManager.finishSession(session.id, 'close', { preserveWorktree: true }))
+        .rejects.toThrow("is not in a branch mismatch state (current state: 'missing')");
+
+      expect(absentSpy).not.toHaveBeenCalled();
+      expect(stopSpy).not.toHaveBeenCalled();
+      expect(removeSpy).not.toHaveBeenCalled();
+      expect(deleteContextSpy).not.toHaveBeenCalled();
+      expect(deleteSessionSpy).not.toHaveBeenCalled();
+      expect(await repos.sessions.findById(session.id)).not.toBeNull();
+      expect(await contextStore.load(session.id)).not.toBeNull();
+    });
+
     it('does not bypass safeguards if inspectManagedWorktree reports missing but the directory is present on disk', async () => {
       await enableManagedWorktrees();
       const session = await sessionManager.createSession({
@@ -3047,6 +3076,377 @@ up 1 day, 5 hours
       expect(await repos.sessions.findById(child.id)).not.toBeNull();
       expect(await (sessionManager as any).tmuxManager.hasSession(mockHost, child.tmuxSessionName)).toBe(true);
       merge.mockRestore();
+    });
+
+    it('blocks close-all on child branch mismatch with actionable feedback and visible survivors, then succeeds on retry with preservation', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent session with mismatch children',
+      });
+
+      const child1 = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child 1 normal',
+        workspace: 'new-worktree',
+      });
+
+      const child2 = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child 2 divergent branch',
+        workspace: 'new-worktree',
+      });
+
+      const removeSpy = vi.spyOn((sessionManager as any).gitService, 'removeManagedWorktree').mockResolvedValue(true);
+      const inspectSpy = vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree')
+        .mockImplementation(async (_host: any, identity: any) => {
+          if (identity.branch === child2.branch) {
+            return {
+              state: 'mismatch',
+              currentBranch: 'feature/divergent-branch',
+              isClean: true,
+              message: `Worktree is on 'feature/divergent-branch', not recorded branch '${identity.branch}'.`,
+            };
+          }
+          return {
+            state: 'active',
+            currentBranch: identity.branch,
+            isClean: true,
+            message: 'Worktree is on its recorded task branch.',
+          };
+        });
+
+      // Attempting close-all fails on child2 due to mismatch
+      await expect(sessionManager.deleteSession(parent.id, 'close-all')).rejects.toThrow(
+        /Child-finalization failed: Managed worktree for child '.*' is checked out on 'feature\/divergent-branch', not recorded branch/
+      );
+
+      // Child 1 was deleted
+      expect(await repos.sessions.findById(child1.id)).toBeNull();
+      // Child 2 survived
+      expect(await repos.sessions.findById(child2.id)).not.toBeNull();
+      // Parent survived
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+
+      // Reset spy call count
+      removeSpy.mockClear();
+
+      // User confirms close with preservation for mismatched worktree
+      const retryResult = await sessionManager.deleteSession(parent.id, 'close-all-preserve-mismatched');
+      expect(retryResult).toBe(true);
+
+      // Child 2 is now deleted from DB
+      expect(await repos.sessions.findById(child2.id)).toBeNull();
+      // Parent is now deleted from DB
+      expect(await repos.sessions.findById(parent.id)).toBeNull();
+      // Worktree removal was NOT called for child 2 because it was preserved
+      expect(removeSpy).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), child2.worktreePath);
+
+      inspectSpy.mockRestore();
+      removeSpy.mockRestore();
+    });
+
+    it('finishSession with preserveWorktree: true verifies termination and deletes metadata without deleting worktree', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent session',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child to preserve',
+        workspace: 'new-worktree',
+      });
+
+      const inspectSpy = vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree').mockResolvedValue({
+        state: 'mismatch',
+        currentBranch: 'feature/divergent-branch',
+        isClean: true,
+        message: 'The worktree is checked out on a branch different from the recorded task branch.',
+      });
+      const removeSpy = vi.spyOn((sessionManager as any).gitService, 'removeManagedWorktree').mockResolvedValue(true);
+      const stopSpy = vi.spyOn(sessionManager as any, 'stopSession');
+
+      const result = await sessionManager.finishSession(child.id, 'close', { preserveWorktree: true });
+      expect(result).toEqual({ action: 'close', removed: true, workspacePreserved: true });
+
+      // stopSession was called to verify runtime termination
+      expect(stopSpy).toHaveBeenCalledWith(child.id);
+      // removeManagedWorktree was NOT called
+      expect(removeSpy).not.toHaveBeenCalled();
+      // Session context and record were deleted
+      expect(await repos.sessions.findById(child.id)).toBeNull();
+      expect(await contextStore.load(child.id)).toBeNull();
+
+      inspectSpy.mockRestore();
+      removeSpy.mockRestore();
+      stopSpy.mockRestore();
+    });
+
+    it('finishSession rejects preserveWorktree: true for non-mismatch states (active, integrated, unavailable)', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent session',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child to check states',
+        workspace: 'new-worktree',
+      });
+
+      const inspectSpy = vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree');
+
+      // 1. Active state (recorded branch matches current branch)
+      inspectSpy.mockResolvedValueOnce({
+        state: 'active',
+        currentBranch: child.branch,
+        isClean: true,
+        message: 'Worktree is on its recorded task branch.',
+      });
+      await expect(sessionManager.finishSession(child.id, 'close', { preserveWorktree: true })).rejects.toThrow(
+        /is not in a branch mismatch state \(current state: 'active'\)/
+      );
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+
+      // 2. Integrated state
+      inspectSpy.mockResolvedValueOnce({
+        state: 'integrated',
+        currentBranch: 'main',
+        isClean: true,
+        message: 'Worktree was already integrated.',
+      });
+      await expect(sessionManager.finishSession(child.id, 'close', { preserveWorktree: true })).rejects.toThrow(
+        /is not in a branch mismatch state \(current state: 'integrated'\)/
+      );
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+
+      // 3. Unavailable state
+      inspectSpy.mockResolvedValueOnce({
+        state: 'unavailable',
+        currentBranch: undefined,
+        message: 'Primary checkout is unavailable.',
+      });
+      await expect(sessionManager.finishSession(child.id, 'close', { preserveWorktree: true })).rejects.toThrow(
+        /is not in a branch mismatch state \(current state: 'unavailable'\)/
+      );
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+
+      inspectSpy.mockRestore();
+    });
+
+    it('finishSession fails closed when termination or persistence fails during preserveWorktree', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent session',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Child for fail-closed checks',
+        workspace: 'new-worktree',
+      });
+
+      const inspectSpy = vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree').mockResolvedValue({
+        state: 'mismatch',
+        currentBranch: 'divergent-branch',
+        isClean: true,
+        message: 'Branch mismatch.',
+      });
+
+      // 1. Unverified runtime termination: stopSession fails
+      const stopSpy = vi.spyOn(sessionManager as any, 'stopSession').mockRejectedValueOnce(new Error('Process termination failed'));
+      await expect(sessionManager.finishSession(child.id, 'close', { preserveWorktree: true })).rejects.toThrow(
+        'Process termination failed'
+      );
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+
+      // 2. Unverified persistence failure: contextStore.delete returns false
+      const deleteContextSpy = vi.spyOn(contextStore, 'delete').mockResolvedValueOnce(false);
+      await expect(sessionManager.finishSession(child.id, 'close', { preserveWorktree: true })).rejects.toThrow(
+        /Failed to delete context file/
+      );
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+
+      inspectSpy.mockRestore();
+      stopSpy.mockRestore();
+      deleteContextSpy.mockRestore();
+    });
+
+    it.each(['rejected', 'unavailable', 'unknown-active', 'unknown-integrated'] as const)('rejects parent closure on %s inspection before a later dirty inspection can discard child work', async (failure) => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Inspection failure parent',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Unverified dirty child',
+        workspace: 'new-worktree',
+      });
+      const inspectionSpy = vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree');
+      if (failure === 'rejected') {
+        inspectionSpy.mockRejectedValueOnce(new Error('Temporary inspection failure'));
+      } else if (failure === 'unavailable') {
+        inspectionSpy.mockResolvedValueOnce({ state: 'unavailable', message: 'Temporary inspection failure' });
+      } else {
+        inspectionSpy.mockResolvedValueOnce({ state: failure === 'unknown-active' ? 'active' : 'integrated', currentBranch: child.branch });
+      }
+      inspectionSpy.mockResolvedValue({ state: 'active', currentBranch: child.branch, isClean: false });
+      const finishSpy = vi.spyOn(sessionManager, 'finishSession');
+      const discardSpy = vi.spyOn((sessionManager as any).gitService, 'discardManagedWorktreeChanges');
+      const removeSpy = vi.spyOn((sessionManager as any).gitService, 'removeManagedWorktree');
+      const deleteContextSpy = vi.spyOn(contextStore, 'delete');
+      const deleteSessionSpy = vi.spyOn(repos.sessions, 'delete');
+
+      await expect(sessionManager.deleteSession(parent.id, 'close-all-preserve-mismatched'))
+        .rejects.toThrow(failure.startsWith('unknown-') ? 'require explicit finalization' : 'Temporary inspection failure');
+
+      expect(inspectionSpy).toHaveBeenCalledOnce();
+      expect(finishSpy).not.toHaveBeenCalled();
+      expect(discardSpy).not.toHaveBeenCalled();
+      expect(removeSpy).not.toHaveBeenCalled();
+      expect(deleteContextSpy).not.toHaveBeenCalled();
+      expect(deleteSessionSpy).not.toHaveBeenCalled();
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+      expect(await contextStore.load(parent.id)).not.toBeNull();
+      expect(await contextStore.load(child.id)).not.toBeNull();
+    });
+
+    it.each(['late-before-stop', 'late-during-stop', 'unavailable', 'rejected'] as const)('blocks implicit child cleanup on %s post-stop changes or status failure', async (failure) => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude', task: 'Late write parent',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id, task: 'Late write child', workspace: 'new-worktree',
+      });
+      const lateFile = join(child.worktreePath, 'late-write.txt');
+      vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree')
+        .mockResolvedValue({ state: 'active', currentBranch: child.branch, isClean: true });
+      if (failure === 'late-before-stop') {
+        vi.spyOn(sessionManager, 'inspectManagedWorktree').mockImplementationOnce(async () => {
+          await mockHost.writeFile(lateFile, 'unconfirmed work');
+          return { state: 'active', currentBranch: child.branch, isClean: true, message: 'Initial clean inspection' };
+        });
+      }
+      const originalStop = sessionManager.stopSession.bind(sessionManager);
+      const stopSpy = vi.spyOn(sessionManager, 'stopSession').mockImplementation(async (id) => {
+        if (id === child.id && failure === 'late-during-stop') {
+          await mockHost.writeFile(lateFile, 'unconfirmed work');
+        }
+        await originalStop(id);
+      });
+      const statusSpy = vi.spyOn(sessionManager, 'getGitStatus');
+      if (failure === 'rejected') statusSpy.mockRejectedValue(new Error('Status read failed'));
+      else statusSpy.mockResolvedValue({
+        isClean: false, totalChanges: 1, unavailable: failure === 'unavailable',
+      } as any);
+      const discardSpy = vi.spyOn((sessionManager as any).gitService, 'discardManagedWorktreeChanges');
+      const removeSpy = vi.spyOn((sessionManager as any).gitService, 'removeManagedWorktree');
+      const deleteContextSpy = vi.spyOn(contextStore, 'delete');
+      const deleteSessionSpy = vi.spyOn(repos.sessions, 'delete');
+
+      await expect(sessionManager.deleteSession(parent.id, 'close-all-preserve-mismatched'))
+        .rejects.toThrow(failure.startsWith('late-') ? 'has uncommitted changes' : 'could not be verified');
+
+      expect(stopSpy).toHaveBeenCalledWith(child.id);
+      expect(statusSpy.mock.invocationCallOrder[0]).toBeGreaterThan(stopSpy.mock.invocationCallOrder[0]);
+      expect(discardSpy).not.toHaveBeenCalled();
+      expect(removeSpy).not.toHaveBeenCalled();
+      expect(deleteContextSpy).not.toHaveBeenCalled();
+      expect(deleteSessionSpy).not.toHaveBeenCalled();
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+      expect(await contextStore.load(child.id)).not.toBeNull();
+      if (failure.startsWith('late-')) {
+        expect((await mockHost.readFileRaw(lateFile, 1024)).toString()).toBe('unconfirmed work');
+      }
+    });
+
+    it.each(['implicit-clean', 'explicit-dirty'] as const)('allows %s child closure under its existing confirmation contract', async (mode) => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude', task: 'Confirmed close parent',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id, task: 'Confirmed close child', workspace: 'new-worktree',
+      });
+      vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree')
+        .mockResolvedValue({ state: 'active', currentBranch: child.branch, isClean: mode === 'implicit-clean' });
+      const statusSpy = vi.spyOn(sessionManager, 'getGitStatus')
+        .mockResolvedValue({ isClean: mode === 'implicit-clean', totalChanges: mode === 'implicit-clean' ? 0 : 1 } as any);
+      const discardSpy = vi.spyOn((sessionManager as any).gitService, 'discardManagedWorktreeChanges');
+      if (mode === 'implicit-clean') {
+        await expect(sessionManager.deleteSession(parent.id, 'close-all')).resolves.toBe(true);
+        expect(statusSpy).toHaveBeenCalledWith(child.id);
+      } else {
+        await expect(sessionManager.finishSession(child.id, 'close', { stashChanges: false }, 'ui'))
+          .resolves.toEqual({ action: 'close', removed: true });
+        expect(statusSpy).not.toHaveBeenCalled();
+      }
+      expect(discardSpy).toHaveBeenCalledOnce();
+      expect(await repos.sessions.findById(child.id)).toBeNull();
+    });
+
+    it('reconcileChildrenForParentRemoval rejects close-all-preserve-mismatched when an ordinary sibling is dirty', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Parent session',
+      });
+      const child1 = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Mismatched child',
+        workspace: 'new-worktree',
+      });
+      const child2 = await sessionManager.createChildSession({
+        parentSessionId: parent.id,
+        task: 'Dirty sibling child',
+        workspace: 'new-worktree',
+      });
+
+      const inspectSpy = vi.spyOn((sessionManager as any).gitService, 'inspectManagedWorktree').mockImplementation(async (_host, identity: any) => {
+        if (identity.worktreePath === child1.worktreePath) {
+          return {
+            state: 'mismatch',
+            currentBranch: 'divergent-feature',
+            isClean: true,
+            message: 'Branch mismatch',
+          };
+        }
+        return {
+          state: 'active',
+          currentBranch: identity.branch,
+          isClean: false, // ordinary child is dirty
+          message: 'Worktree has uncommitted changes',
+        };
+      });
+
+      await expect(sessionManager.deleteSession(parent.id, 'close-all-preserve-mismatched')).rejects.toThrow(
+        /Ordinary dirty siblings require explicit finalization/
+      );
+
+      // Sibling and parent are NOT deleted
+      expect(await repos.sessions.findById(child2.id)).not.toBeNull();
+      expect(await repos.sessions.findById(parent.id)).not.toBeNull();
+
+      inspectSpy.mockRestore();
     });
   });
 
