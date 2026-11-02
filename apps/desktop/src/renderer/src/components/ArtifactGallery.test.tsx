@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { ArtifactGallery } from './ArtifactGallery';
 import type { Artifact } from '@spawnea/domain';
 
@@ -58,6 +58,134 @@ describe('ArtifactGallery Component', () => {
     if (typeof localStorage !== 'undefined') {
       localStorage.clear();
     }
+  });
+
+  it('ignores a late clear result after changing sessions', async () => {
+    let resolveClear!: (count: number) => void;
+    window.spawneaApi.clearArtifacts = vi.fn().mockReturnValue(new Promise<number>((resolve) => { resolveClear = resolve; }));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onRefresh = vi.fn();
+    const view = render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={onRefresh} />);
+    fireEvent.click(screen.getByTestId('clear-artifacts-button'));
+    view.rerender(<ArtifactGallery sessionId="sess-2" artifacts={[]} onRefresh={onRefresh} />);
+    await act(async () => { resolveClear(2); await Promise.resolve(); });
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('artifact-gallery-toast')).toBeNull();
+    view.unmount();
+    vi.restoreAllMocks();
+  });
+
+  it('handles a failed deletion started from the preview', async () => {
+    window.spawneaApi.deleteArtifact = vi.fn().mockRejectedValue(new Error('delete failed'));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const view = render(<ArtifactGallery sessionId="sess-1" artifacts={mockArtifacts} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('artifact-card-art-2'));
+    const modal = await screen.findByTestId('artifact-preview-modal');
+    fireEvent.click(within(modal).getByTitle('Delete artifact'));
+    await screen.findByText('Unable to delete artifact: delete failed');
+    view.unmount();
+    vi.restoreAllMocks();
+  });
+
+  it('finishes API uploads for the original session after navigation during the first file read', async () => {
+    let finishRead!: (value: ArrayBuffer) => void;
+    const first = Object.assign(new File(['a'], 'a.txt'), { arrayBuffer: () => new Promise<ArrayBuffer>((resolve) => { finishRead = resolve; }) });
+    const second = Object.assign(new File(['b'], 'b.txt'), { arrayBuffer: async () => new Uint8Array([2]).buffer });
+    const upload = vi.fn().mockResolvedValue(undefined);
+    const newUpload = vi.fn().mockResolvedValue(undefined);
+    window.spawneaApi.uploadArtifactData = upload;
+    const oldRefresh = vi.fn();
+    const newRefresh = vi.fn();
+    const view = render(<ArtifactGallery sessionId="sess-1" artifacts={[]} onRefresh={oldRefresh} />);
+    fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [first, second] } });
+    view.rerender(<ArtifactGallery sessionId="sess-2" artifacts={[]} onRefresh={newRefresh} />);
+    window.spawneaApi.uploadArtifactData = newUpload;
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    await act(async () => { finishRead(new Uint8Array([1]).buffer); await Promise.resolve(); });
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(upload.mock.calls.map((call) => [call[0], call[2]])).toEqual([['sess-1', 'a.txt'], ['sess-1', 'b.txt']]);
+    expect(newUpload).not.toHaveBeenCalled();
+    expect(oldRefresh).not.toHaveBeenCalled();
+    expect(newRefresh).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('artifact-gallery-toast')).toBeNull();
+    expect(timer.mock.calls.some(([, delay]) => delay === 2000 || delay === 3000)).toBe(false);
+    view.unmount();
+    timer.mockRestore();
+  });
+
+  it('resets the input on acceptance and permits the same files in the next session', async () => {
+    let finishFirst!: () => void;
+    const upload = vi.fn().mockReturnValueOnce(new Promise<void>((resolve) => { finishFirst = resolve; })).mockResolvedValue(undefined);
+    window.spawneaApi.uploadArtifactData = upload;
+    const file = Object.assign(new File(['a'], 'same.txt'), { arrayBuffer: async () => new Uint8Array([1]).buffer });
+    const view = render(<ArtifactGallery sessionId="sess-1" artifacts={[]} onRefresh={vi.fn()} />);
+    const input = view.container.querySelector('input[type="file"]') as HTMLInputElement;
+    const setValue = vi.spyOn(input, 'value', 'set');
+    await act(async () => { fireEvent.change(input, { target: { files: [file] } }); });
+    expect(setValue).toHaveBeenCalledTimes(1);
+    expect(setValue).toHaveBeenLastCalledWith('');
+    expect(upload).toHaveBeenCalledTimes(1);
+    view.rerender(<ArtifactGallery sessionId="sess-2" artifacts={[]} onRefresh={vi.fn()} />);
+    expect(view.container.querySelector('input[type="file"]')).toBe(input);
+    await act(async () => { fireEvent.change(input, { target: { files: [file] } }); });
+    expect(setValue).toHaveBeenCalledTimes(2);
+    expect(upload.mock.calls.map((call) => [call[0], call[2]])).toEqual([['sess-1', 'same.txt'], ['sess-2', 'same.txt']]);
+    await act(async () => { finishFirst(); await Promise.resolve(); });
+    expect(setValue).toHaveBeenCalledTimes(2);
+    view.unmount();
+    setValue.mockRestore();
+  });
+
+  it('continues the original upload callback after unmount between files', async () => {
+    let finishFirst!: () => void;
+    const upload = vi.fn().mockReturnValueOnce(new Promise<void>((resolve) => { finishFirst = resolve; })).mockResolvedValue(undefined);
+    const nextUpload = vi.fn().mockResolvedValue(undefined);
+    const refresh = vi.fn();
+    const view = render(<ArtifactGallery sessionId="sess-1" artifacts={[]} onRefresh={refresh} onUploadFile={upload} />);
+    const files = [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')];
+    fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files } });
+    expect(upload).toHaveBeenCalledTimes(1);
+    view.rerender(<ArtifactGallery sessionId="sess-2" artifacts={[]} onRefresh={vi.fn()} onUploadFile={nextUpload} />);
+    view.unmount();
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    await act(async () => { finishFirst(); await Promise.resolve(); });
+    expect(upload.mock.calls.map(([file]) => file.name)).toEqual(['a.txt', 'b.txt']);
+    expect(nextUpload).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(timer.mock.calls.some(([, delay]) => delay === 2000 || delay === 3000)).toBe(false);
+    timer.mockRestore();
+  });
+
+  it('continues an API upload batch after unmount between files', async () => {
+    let finishFirst!: () => void;
+    const upload = vi.fn().mockReturnValueOnce(new Promise<void>((resolve) => { finishFirst = resolve; })).mockResolvedValue(undefined);
+    window.spawneaApi.uploadArtifactData = upload;
+    const refresh = vi.fn();
+    const view = render(<ArtifactGallery sessionId="sess-1" artifacts={[]} onRefresh={refresh} />);
+    const file = (name: string) => Object.assign(new File(['x'], name), { arrayBuffer: async () => new Uint8Array([1]).buffer });
+    await act(async () => { fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [file('a.txt'), file('b.txt')] } }); });
+    expect(upload).toHaveBeenCalledTimes(1);
+    view.unmount();
+    await act(async () => { finishFirst(); await Promise.resolve(); });
+    expect(upload.mock.calls.map((call) => [call[0], call[2]])).toEqual([['sess-1', 'a.txt'], ['sess-1', 'b.txt']]);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('handles an upload rejection after unmount without stale refresh or feedback', async () => {
+    let rejectUpload!: (error: Error) => void;
+    const upload = vi.fn().mockReturnValue(new Promise<void>((_resolve, reject) => { rejectUpload = reject; }));
+    const refresh = vi.fn();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const view = render(<ArtifactGallery sessionId="sess-1" artifacts={[]} onRefresh={refresh} onUploadFile={upload} />);
+    fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [new File(['a'], 'a.txt')] } });
+    view.unmount();
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    await act(async () => { rejectUpload(new Error('upload failed')); await Promise.resolve(); });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    expect(timer.mock.calls.some(([, delay]) => delay === 2000 || delay === 3000)).toBe(false);
+    timer.mockRestore();
+    error.mockRestore();
   });
 
   it('renders artifact cards and counts in filter chips', () => {

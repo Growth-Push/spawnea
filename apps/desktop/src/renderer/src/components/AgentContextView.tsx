@@ -15,22 +15,32 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
   const [outputMode, setOutputMode] = useState<'compact' | 'raw'>('compact');
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const copyTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyActiveRef = React.useRef<() => boolean>(() => false);
+  const copyRequestRef = React.useRef(0);
   const response = selected?.response as { turnId?: string; sessionId?: string } | undefined;
   const turnId = response?.turnId;
 
   useEffect(() => {
+    let active = true;
+    copyActiveRef.current = () => active;
+    setCopyStatus('idle');
     return () => {
+      active = false;
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
     };
-  }, []);
+  }, [sessionId]);
 
   const handleCopyPrompt = async () => {
+    const isActive = copyActiveRef.current;
+    const request = ++copyRequestRef.current;
     try {
       await navigator.clipboard.writeText(getAgentSkillPrompt());
+      if (!isActive() || request !== copyRequestRef.current) return;
       setCopyStatus('copied');
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = setTimeout(() => setCopyStatus('idle'), 2000);
     } catch {
+      if (!isActive() || request !== copyRequestRef.current) return;
       setCopyStatus('failed');
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = setTimeout(() => setCopyStatus('idle'), 2000);
@@ -62,12 +72,12 @@ export function AgentContextView({ sessionId }: AgentContextViewProps): React.JS
         if (active) setLoadError(error instanceof Error ? error.message : String(error));
       }
     };
-    let timer: number | undefined;
-    const schedule = () => { timer = window.setTimeout(async () => { await load(); if (active) schedule(); }, 1_500); };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => { timer = setTimeout(async () => { await load(); if (active) schedule(); }, 1_500); };
     void load().finally(() => { if (active) schedule(); });
     return () => {
       active = false;
-      if (timer !== undefined) window.clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [sessionId]);
 

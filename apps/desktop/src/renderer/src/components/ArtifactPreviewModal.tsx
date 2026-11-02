@@ -1,5 +1,5 @@
 import { MarkdownPreview } from './MarkdownPreview';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { Artifact, FileContentResult } from '@spawnea/domain';
 import {
   FileText,
@@ -50,6 +50,21 @@ export function ArtifactPreviewModal({
   const [copiedLocalPath, setCopiedLocalPath] = useState(false);
   const [copiedContent, setCopiedContent] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const timers = useRef<{ remote?: ReturnType<typeof setTimeout>; local?: ReturnType<typeof setTimeout>; content?: ReturnType<typeof setTimeout> }>({});
+  const currentRef = useRef<() => boolean>(() => false);
+  useEffect(() => {
+    let current = Boolean(artifact);
+    currentRef.current = () => current;
+    setCopiedRemotePath(false);
+    setCopiedLocalPath(false);
+    setCopiedContent(false);
+    setIsSaving(false);
+    const pending = timers.current;
+    return () => {
+      current = false;
+      Object.values(pending).forEach(clearTimeout);
+    };
+  }, [sessionId, artifact?.id, referencePath]);
 
   useEffect(() => {
     if (!artifact) {
@@ -94,69 +109,6 @@ export function ArtifactPreviewModal({
     return () => { current = false; };
   }, [artifact, sessionId, referencePath]);
 
-  if (!artifact) return null;
-
-  const mime = artifact.mimeType || contentResult?.mimeType || 'application/octet-stream';
-  const isImage = mime.startsWith('image/');
-  const isPdf = mime === 'application/pdf';
-  const isMarkdown = artifact.filename.endsWith('.md') || mime === 'text/markdown';
-  const isJson = artifact.filename.endsWith('.json') || mime === 'application/json';
-
-  const handleCopyRemotePath = () => {
-    navigator.clipboard.writeText(artifact.remotePath);
-    setCopiedRemotePath(true);
-    setTimeout(() => setCopiedRemotePath(false), 2000);
-  };
-
-  const handleCopyLocalPath = () => {
-    if (artifact.cachedLocalPath) {
-      navigator.clipboard.writeText(artifact.cachedLocalPath);
-      setCopiedLocalPath(true);
-      setTimeout(() => setCopiedLocalPath(false), 2000);
-    }
-  };
-
-  const handleCopyContent = () => {
-    if (contentResult?.content && !contentResult.isBinary) {
-      navigator.clipboard.writeText(contentResult.content);
-      setCopiedContent(true);
-      setTimeout(() => setCopiedContent(false), 2000);
-    }
-  };
-
-  const handleSaveAs = async () => {
-    if (!window.spawneaApi?.saveArtifactAs) return;
-    setIsSaving(true);
-    try {
-      await window.spawneaApi.saveArtifactAs(sessionId, artifact.id);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Unable to save the complete artifact.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleOpenInOs = async () => {
-    if (referencePath) {
-      try { await window.spawneaApi.openLocalReference(sessionId, referencePath, false); }
-      catch (err) { setActionError(err instanceof Error ? err.message : 'Unable to open file'); }
-      return;
-    }
-    if (window.spawneaApi?.openArtifactInOs) {
-      try {
-        const result = await window.spawneaApi.openArtifactInOs(sessionId, artifact.id);
-        setActionError(
-          result.temporaryCopy
-            ? 'Opened a temporary copy; changes will not be saved to the remote file.'
-            : null
-        );
-      } catch (err) {
-        setActionError(err instanceof Error ? err.message : 'Unable to open the complete artifact.');
-      }
-    }
-  };
-
-  // Escape key handler
   useEffect(() => {
     if (!artifact) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -170,10 +122,78 @@ export function ArtifactPreviewModal({
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [artifact, onClose]);
 
+  if (!artifact) return null;
+
+  const mime = artifact.mimeType || contentResult?.mimeType || 'application/octet-stream';
+  const isImage = mime.startsWith('image/');
+  const isPdf = mime === 'application/pdf';
+  const isMarkdown = artifact.filename.endsWith('.md') || mime === 'text/markdown';
+  const isJson = artifact.filename.endsWith('.json') || mime === 'application/json';
+
+  const handleCopyRemotePath = () => {
+    void navigator.clipboard.writeText(artifact.remotePath).catch(() => {});
+    setCopiedRemotePath(true);
+    clearTimeout(timers.current.remote);
+    timers.current.remote = setTimeout(() => setCopiedRemotePath(false), 2000);
+  };
+
+  const handleCopyLocalPath = () => {
+    if (artifact.cachedLocalPath) {
+      void navigator.clipboard.writeText(artifact.cachedLocalPath).catch(() => {});
+      setCopiedLocalPath(true);
+      clearTimeout(timers.current.local);
+      timers.current.local = setTimeout(() => setCopiedLocalPath(false), 2000);
+    }
+  };
+
+  const handleCopyContent = () => {
+    if (contentResult?.content && !contentResult.isBinary) {
+      void navigator.clipboard.writeText(contentResult.content).catch(() => {});
+      setCopiedContent(true);
+      clearTimeout(timers.current.content);
+      timers.current.content = setTimeout(() => setCopiedContent(false), 2000);
+    }
+  };
+
+  const handleSaveAs = async () => {
+    if (!window.spawneaApi?.saveArtifactAs) return;
+    const current = currentRef.current;
+    setIsSaving(true);
+    try {
+      await window.spawneaApi.saveArtifactAs(sessionId, artifact.id);
+    } catch (err) {
+      if (current()) setActionError(err instanceof Error ? err.message : 'Unable to save the complete artifact.');
+    } finally {
+      if (current()) setIsSaving(false);
+    }
+  };
+
+  const handleOpenInOs = async () => {
+    const current = currentRef.current;
+    if (referencePath) {
+      try { await window.spawneaApi.openLocalReference(sessionId, referencePath, false); }
+      catch (err) { if (current()) setActionError(err instanceof Error ? err.message : 'Unable to open file'); }
+      return;
+    }
+    if (window.spawneaApi?.openArtifactInOs) {
+      try {
+        const result = await window.spawneaApi.openArtifactInOs(sessionId, artifact.id);
+        if (!current()) return;
+        setActionError(
+          result.temporaryCopy
+            ? 'Opened a temporary copy; changes will not be saved to the remote file.'
+            : null
+        );
+      } catch (err) {
+        if (current()) setActionError(err instanceof Error ? err.message : 'Unable to open the complete artifact.');
+      }
+    }
+  };
+
   const handleDelete = () => {
     if (confirm(`Delete artifact "${artifact.filename}"?`)) {
       if (onDelete) {
-        onDelete(artifact.id);
+        void Promise.resolve(onDelete(artifact.id)).catch(() => {});
       }
       onClose();
     }
