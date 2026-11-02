@@ -195,7 +195,7 @@ export function CreateChildSessionModal({
       data-testid="create-child-session-modal"
       className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center z-50 p-4"
     >
-      <div className="bg-[#161b22] border border-[#30363d] rounded-xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      <div className="bg-[#161b22] border border-[#30363d] rounded-xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-full animate-in fade-in zoom-in-95 duration-150">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#30363d] bg-[#0d1117]">
           <div className="flex items-center gap-2.5">
             <div className="p-1.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
@@ -220,7 +220,7 @@ export function CreateChildSessionModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto">
           {error && (
             <div
               role="alert"

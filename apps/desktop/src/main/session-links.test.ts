@@ -6,8 +6,36 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDatabase, createRepositories } from '@spawnea/db';
 import { SessionContextStore } from './session-context-store.js';
+import { MAX_GITHUB_LINK_SCAN_LENGTH } from '@spawnea/domain';
 
 describe('session link capture', () => {
+  it('retains recent output beyond the prefix without admitting a token cut on the left', async () => {
+    const admitLinks = vi.fn(async (_id: string, links: unknown[]) => links);
+    const repos = { github: { admitLinks } } as never;
+    const url = 'https://github.com/example/repo/pull/71';
+    const text = `${Array.from({ length: 250 }, () => 'x'.repeat(160)).join('\n')}\n${url}`;
+    expect(text.length).toBeGreaterThan(MAX_GITHUB_LINK_SCAN_LENGTH);
+    expect(text.indexOf(url)).toBeGreaterThan(MAX_GITHUB_LINK_SCAN_LENGTH);
+    await retainSessionLinks(repos, 's', 'output', text);
+    expect(admitLinks).toHaveBeenCalledWith('s', [expect.objectContaining({ url, source: 'output' })]);
+    admitLinks.mockClear();
+    await retainSessionLinks(repos, 's', 'output', `${'🙂 '.repeat(MAX_GITHUB_LINK_SCAN_LENGTH)}\n\u001b[32m**${url}**\u001b[0m`);
+    expect(admitLinks).toHaveBeenCalledWith('s', [expect.objectContaining({ url, source: 'output' })]);
+    admitLinks.mockClear();
+    const partial = `x${'y'.repeat(30)}${url} ${'z'.repeat(MAX_GITHUB_LINK_SCAN_LENGTH - url.length - 2)}`;
+    await retainSessionLinks(repos, 's', 'output', partial);
+    expect(admitLinks).not.toHaveBeenCalled();
+    for (const source of ['task', 'prompt'] as const) {
+      await retainSessionLinks(repos, 's', source, text);
+      expect(admitLinks).not.toHaveBeenCalled();
+      await retainSessionLinks(repos, 's', source, `${url} ${'x'.repeat(MAX_GITHUB_LINK_SCAN_LENGTH)}`);
+      expect(admitLinks).toHaveBeenLastCalledWith('s', [expect.objectContaining({ url, source })]);
+      admitLinks.mockClear();
+    }
+    await retainSessionLinks(repos, 's', 'output', `ordinary output ${url}`);
+    expect(admitLinks).toHaveBeenCalledWith('s', [expect.objectContaining({ url, source: 'output' })]);
+  });
+
   it('retains only canonical identity and source, without the surrounding text', async () => {
     const admitLinks = vi.fn(async (_id: string, links: unknown[]) => links);
     const retainLinks = vi.fn();
@@ -60,13 +88,16 @@ describe('session link capture', () => {
     const dir = mkdtempSync(join(tmpdir(), 'spawnea-dead-links-'));
     const tmux = (...args: string[]) => execFileSync('tmux', ['-S', join(dir, 'tmux.sock'), ...args], { encoding: 'utf8' });
     try {
-      tmux('new-session', '-d', '-x', '80', '-y', '12', '-s', 'fixture', 'sh');
+      tmux('new-session', '-d', '-x', '200', '-y', '12', '-s', 'fixture', 'sh');
       tmux('set-option', '-t', 'fixture', 'remain-on-exit', 'on');
-      tmux('send-keys', '-t', 'fixture', '-l', "printf '%s\\n' 'https://github.com/example/repo/pull/71'; exit");
+      tmux('set-option', '-t', 'fixture', 'history-limit', '2000');
+      tmux('send-keys', '-t', 'fixture', '-l', "i=0; while [ $i -lt 250 ]; do printf '%0160d\\n' 0; i=$((i+1)); done; printf '%s\\n' 'https://github.com/'example'/repo/pull/71'; exit");
       tmux('send-keys', '-t', 'fixture', 'Enter');
       await expect.poll(() => tmux('display-message', '-p', '-t', 'fixture', '#{pane_dead}').trim()).toBe('1');
       const text = tmux('capture-pane', '-p', '-J', '-t', 'fixture', '-S', '-250');
       expect(text).toContain('\nhttps://github.com/example/repo/pull/71\n');
+      expect(text.length).toBeGreaterThan(MAX_GITHUB_LINK_SCAN_LENGTH);
+      expect(text.indexOf('https://github.com/example/repo/pull/71')).toBeGreaterThan(MAX_GITHUB_LINK_SCAN_LENGTH);
       const admitLinks = vi.fn(async (_id: string, links: unknown[]) => links);
       const retainLinks = vi.fn();
       await retainSessionLinks({ github: { admitLinks } } as never, 'session', 'output', text, { syncRetainedLinks: async (id: string, callback: () => Promise<unknown>) => retainLinks(id, await callback()) } as never);
