@@ -562,6 +562,85 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
     expect(mockRetryHostConnection).toHaveBeenCalledWith('srv-remote-1');
   });
 
+  it('owns retries by view lifetime across A to B to A changes', async () => {
+    const pending: Array<(value: HostConnectionState) => void> = [];
+    mockRetryHostConnection.mockImplementation(() => new Promise<HostConnectionState>((resolve) => pending.push(resolve)));
+    const offline = (serverId: string): HostConnectionState => ({ serverId, status: 'disconnected', attempt: 0, maxAttempts: 5 });
+    mockGetHostConnectionState.mockImplementation(async (serverId: string) => offline(serverId));
+    const second = { ...mockSession, id: 'sess-b', serverId: 'srv-b' };
+    const view = render(<TerminalView session={mockSession} />);
+    await screen.findByTestId('reconnect-retry-button');
+    fireEvent.click(screen.getByTestId('reconnect-retry-button'));
+    expect(pending).toHaveLength(1);
+    view.rerender(<TerminalView session={second} />);
+    await waitFor(() => expect((screen.getByTestId('reconnect-retry-button') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('reconnect-retry-button'));
+    expect(pending).toHaveLength(2);
+    await act(async () => { pending[0]({ ...offline(mockSession.serverId), status: 'connected' }); });
+    expect((screen.getByTestId('reconnect-retry-button') as HTMLButtonElement).disabled).toBe(true);
+    view.rerender(<TerminalView session={mockSession} />);
+    await waitFor(() => expect((screen.getByTestId('reconnect-retry-button') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('reconnect-retry-button'));
+    expect(pending).toHaveLength(3);
+    await act(async () => { pending[1]({ ...offline(second.serverId), status: 'connected' }); });
+    expect((screen.getByTestId('reconnect-retry-button') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { pending[2]({ ...offline(mockSession.serverId), status: 'connected' }); });
+    await waitFor(() => expect(screen.queryByTestId('reconnect-retry-button')).toBeNull());
+  });
+
+  it('continues only the current session manual retry after a session switch', async () => {
+    const pending: Array<(value: HostConnectionState) => void> = [];
+    mockRetryHostConnection.mockImplementation(() => new Promise<HostConnectionState>((resolve) => pending.push(resolve)));
+    const attach = vi.fn().mockRejectedValue(new Error('SSH authentication failed. Reconnect manually to retry.'));
+    window.spawneaApi.attachSession = attach;
+    const second = { ...mockSession, id: 'sess-b', serverId: 'srv-b' };
+    const onAttach = vi.fn();
+    const view = render(<TerminalView session={mockSession} onAttach={onAttach} />);
+    await screen.findByTestId('terminal-error-overlay');
+    fireEvent.click(screen.getByText('Retry Attach'));
+    view.rerender(<TerminalView session={second} onAttach={onAttach} />);
+    await waitFor(() => expect(attach).toHaveBeenCalledWith(second.id, expect.any(Number), expect.any(Number)));
+    await screen.findByTestId('terminal-error-overlay');
+    fireEvent.click(screen.getByText('Retry Attach'));
+    expect(pending).toHaveLength(2);
+    await act(async () => { pending[0]({ serverId: mockSession.serverId, status: 'connected', attempt: 0, maxAttempts: 5 }); });
+    expect(onAttach).not.toHaveBeenCalled();
+    expect((screen.getByText('Retry Attach').closest('button') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { pending[1]({ serverId: second.serverId, status: 'connected', attempt: 0, maxAttempts: 5 }); });
+    expect(onAttach).toHaveBeenCalledTimes(1);
+    expect(onAttach).toHaveBeenCalledWith(second.id);
+  });
+
+  it('coalesces manual retries while a host reconnect is pending', async () => {
+    let finish!: (value: HostConnectionState) => void;
+    mockRetryHostConnection.mockReturnValue(new Promise<HostConnectionState>((resolve) => { finish = resolve; }));
+    const attach = vi.fn().mockRejectedValueOnce(new Error('SSH authentication failed. Reconnect manually to retry.')).mockResolvedValueOnce({ ptyChannelId: 'pty-new' });
+    window.spawneaApi.attachSession = attach;
+    render(<TerminalView session={mockSession} />);
+    await screen.findByTestId('terminal-error-overlay');
+    fireEvent.click(screen.getByText('Retry Attach'));
+    fireEvent.click(screen.getByText('Retry'));
+    expect(mockRetryHostConnection).toHaveBeenCalledTimes(1);
+    await act(async () => { finish({ serverId: 'srv-remote-1', status: 'connected', attempt: 0, maxAttempts: 5 }); });
+    await waitFor(() => expect(attach).toHaveBeenCalledTimes(2));
+  });
+
+  it.each(['resolve', 'reject'])('shows artifact %s feedback after a PTY disconnect in the same view', async (outcome) => {
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    let exit!: (id: string, code: number) => void;
+    window.spawneaApi.onPtyExit = vi.fn((callback) => { exit = callback; return () => {}; });
+    window.spawneaApi.createArtifactFromText = vi.fn().mockReturnValue(new Promise((resolve, reject) => { finish = () => resolve({}); fail = reject; }));
+    render(<TerminalView session={mockSession} />);
+    await waitFor(() => expect(exit).toBeDefined());
+    await act(async () => { await xtermMockState.osc52Handler?.('c;dGVzdA=='); });
+    fireEvent.contextMenu(screen.getByTestId('xterm-container').parentElement!);
+    fireEvent.click(screen.getByTestId('context-menu-transform-artifact'));
+    act(() => exit('pty-recon-1', 1));
+    await act(async () => { if (outcome === 'resolve') finish(); else fail(new Error('synthetic failure')); });
+    expect(screen.getByText(outcome === 'resolve' ? /Artifact created:/ : /Failed to create artifact: synthetic failure/)).toBeDefined();
+  });
+
   it('waits for manual reconnect after a 1Password attach failure', async () => {
     const attach = vi.fn()
       .mockRejectedValueOnce(new Error("Could not resolve credential-backed field 'hosts.secure.ssh.target': sign in to the 1Password CLI and verify access, then retry."))
@@ -674,6 +753,19 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
     await waitFor(() => expect(window.spawneaApi.readyPty).toHaveBeenCalledWith('pty-recon-1'));
     view.unmount();
     expect(window.spawneaApi.detachSession).toHaveBeenCalledWith(mockSession.id);
+  });
+
+  it('does not schedule a retry when an attachment rejects after unmount', async () => {
+    let rejectAttach!: (error: Error) => void;
+    window.spawneaApi.attachSession = vi.fn().mockReturnValue(new Promise((_resolve, reject) => { rejectAttach = reject; }));
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    const view = render(<TerminalView session={mockSession} />);
+    await waitFor(() => expect(window.spawneaApi.attachSession).toHaveBeenCalled());
+    view.unmount();
+    timer.mockClear();
+    await act(async () => { rejectAttach(new Error('disconnected')); await Promise.resolve(); });
+    expect(timer.mock.calls.some(([, delay]) => delay === 2000)).toBe(false);
+    timer.mockRestore();
   });
 
   it('defers status-driven terminal attachments while hidden', async () => {

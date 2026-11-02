@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentContextView } from './AgentContextView';
 
@@ -84,5 +84,18 @@ describe('AgentContextView', () => {
     await waitFor(() => expect(copyBtn.textContent).toContain('Copy failed'));
 
     view.unmount();
+  });
+
+  it('ignores a clipboard result after unmount without scheduling feedback', async () => {
+    let resolveCopy!: () => void;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => new Promise<void>((resolve) => { resolveCopy = resolve; }) } });
+    window.spawneaApi = { getAgentContext: vi.fn().mockResolvedValue({ rootSessionId: 'root', calls: [], volatileNotice: 'Volatile' }) } as unknown as typeof window.spawneaApi;
+    const view = render(<AgentContextView sessionId="root" />);
+    fireEvent.click(await screen.findByTestId('copy-agent-prompt-button'));
+    view.unmount();
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    await act(async () => { resolveCopy(); await Promise.resolve(); });
+    expect(timer.mock.calls.some(([, delay]) => delay === 2000)).toBe(false);
+    timer.mockRestore();
   });
 });

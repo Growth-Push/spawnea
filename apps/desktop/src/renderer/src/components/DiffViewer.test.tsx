@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { DiffViewer } from './DiffViewer';
 import { GitStatusView } from './GitStatusView';
 import type { GitStatusResult, GitDiffResult } from '@spawnea/domain';
@@ -46,6 +46,20 @@ describe('DiffViewer Component', () => {
     totalDeletions: 1,
     totalFilesChanged: 1,
   };
+
+  it('keeps repeated copy feedback until the latest deadline and clears on switch', () => {
+    vi.useFakeTimers();
+    const view = render(<DiffViewer diffResult={sampleDiffResult} worktreePath="/one" />);
+    fireEvent.click(screen.getByTestId('copy-diff-button'));
+    act(() => vi.advanceTimersByTime(1500));
+    fireEvent.click(screen.getByTestId('copy-diff-button'));
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.getByText('Copied')).toBeDefined();
+    view.rerender(<DiffViewer diffResult={sampleDiffResult} worktreePath="/two" />);
+    expect(screen.queryByText('Copied')).toBeNull();
+    view.unmount();
+    vi.useRealTimers();
+  });
 
   it('renders diff files, addition/deletion counters, and line contents', () => {
     render(<DiffViewer diffResult={sampleDiffResult} />);

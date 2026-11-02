@@ -100,6 +100,7 @@ export function CreateChildSessionModal({
     if (!isOpen) return;
 
     const timer = setTimeout(() => {
+      if (typeof document === 'undefined') return;
       if (modalRef.current && !modalRef.current.contains(document.activeElement)) {
         const taskInput = modalRef.current.querySelector<HTMLElement>('#child-task');
         if (taskInput) {

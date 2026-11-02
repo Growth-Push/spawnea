@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type {
   Session,
   Server,
@@ -139,6 +139,23 @@ export function StateFeedbackModal({
   const [submitResult, setSubmitResult] = useState<StateFeedbackResult | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const submissions = useRef(new Map<string, { pending: boolean; result: StateFeedbackResult | null; error: string | null }>());
+  const visibleSession = useRef<string | null>(null);
+
+  useEffect(() => {
+    let active = isOpen && !!session;
+    visibleSession.current = active ? session!.id : null;
+    return () => {
+      if (active && session) {
+        const submission = submissions.current.get(session.id);
+        if (submission && !submission.pending) submissions.current.delete(session.id);
+      }
+      active = false;
+      visibleSession.current = null;
+      clearTimeout(copyTimer.current);
+    };
+  }, [isOpen, session?.id]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -166,6 +183,11 @@ export function StateFeedbackModal({
     }
 
     const openedStatus = session.status;
+    const submission = submissions.current.get(session.id);
+    setIsSubmitting(submission?.pending ?? false);
+    setSubmitResult(submission?.result ?? null);
+    setSubmitError(submission?.error ?? null);
+    setCopied(false);
     setObserved({ sessionId: session.id, status: openedStatus });
     // A response that arrives after the dialog closed or switched sessions is ignored.
     let cancelled = false;
@@ -215,6 +237,10 @@ export function StateFeedbackModal({
 
   const handleSubmit = async () => {
     if (!session) return;
+    if (submissions.current.get(session.id)?.pending) return;
+    const sessionId = session.id;
+    const submission = { pending: true, result: null as StateFeedbackResult | null, error: null as string | null };
+    submissions.current.set(sessionId, submission);
     setIsSubmitting(true);
     setSubmitError(null);
 
@@ -250,27 +276,36 @@ export function StateFeedbackModal({
     try {
       if (window.spawneaApi?.submitStateFeedback) {
         const res = await window.spawneaApi.submitStateFeedback(report);
-        setSubmitResult(res);
+        submission.result = res;
+        if (visibleSession.current === sessionId) setSubmitResult(res);
       } else {
         // Fallback for tests/mock
-        setSubmitResult({
+        submission.result = {
           success: true,
           filePath: `application user-data/feedback/state-feedback-${session.id}.json`,
           fixtureJson: JSON.stringify(report, null, 2),
-        });
+        };
+        if (visibleSession.current === sessionId) setSubmitResult(submission.result);
       }
     } catch (err: any) {
-      setSubmitError(err.message || 'Failed to save feedback fixture');
+      submission.error = err.message || 'Failed to save feedback fixture';
+      if (visibleSession.current === sessionId) setSubmitError(submission.error);
     } finally {
-      setIsSubmitting(false);
+      submission.pending = false;
+      // Keep at most one completed receipt for a request that finished away from its view.
+      for (const [id, entry] of submissions.current) {
+        if (id !== sessionId && !entry.pending) submissions.current.delete(id);
+      }
+      if (visibleSession.current === sessionId) setIsSubmitting(false);
     }
   };
 
   const handleCopyFixture = () => {
     if (!submitResult?.fixtureJson) return;
-    navigator.clipboard.writeText(submitResult.fixtureJson);
+    void navigator.clipboard.writeText(submitResult.fixtureJson).catch(() => {});
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (

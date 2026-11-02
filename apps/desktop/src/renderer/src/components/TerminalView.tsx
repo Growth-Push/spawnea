@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { Terminal, type ILinkProvider } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { isNonRetryableAuthenticationFailure, type Session, type Agent, type HostConnectionState } from '@spawnea/domain';
@@ -155,6 +155,17 @@ export function TerminalView({
   const retryCountRef = useRef<number>(0);
   const isConnectingRef = useRef<boolean>(false);
   const connectionGenerationRef = useRef(0);
+  const viewLifetimeRef = useRef(0);
+  const retryHostPendingRef = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    viewLifetimeRef.current += 1;
+    retryHostPendingRef.current = null;
+    setIsRetryingHost(false);
+    return () => {
+      viewLifetimeRef.current += 1;
+      retryHostPendingRef.current = null;
+    };
+  }, [session.id]);
   const leftMouseDownRef = useRef<boolean>(false);
   const mouseSelectionGestureRef = useRef<boolean>(false);
   const clipboardBeforeMouseDragReadRef = useRef<Promise<string | null> | null>(null);
@@ -203,6 +214,7 @@ export function TerminalView({
   const referenceDragRef = useRef<{ start: CellPosition; end: CellPosition; lines: Array<{ text: string; isWrapped: boolean }>; selectedText?: string; text?: string; buffer: Terminal['buffer']['active'] } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const toastActiveRef = useRef(false);
   const terminalZoom = uiZoom ?? 1;
 
   const compensateXtermMouseCoordinates = (event: MouseEvent) => {
@@ -250,6 +262,7 @@ export function TerminalView({
   }, [terminalZoom]);
 
   const showToast = useCallback((msg: string) => {
+    if (!toastActiveRef.current) return;
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToastMessage(msg);
     toastTimerRef.current = setTimeout(() => {
@@ -260,12 +273,13 @@ export function TerminalView({
   // Listen to remote host connection state transitions and transparent reattachment events
   useEffect(() => {
     if (!window.spawneaApi) return;
+    let active = true;
 
     if (typeof window.spawneaApi.getHostConnectionState === 'function') {
       window.spawneaApi
         .getHostConnectionState(session.serverId)
         .then((state) => {
-          setHostConnectionState(state);
+          if (active) setHostConnectionState(state);
         })
         .catch(() => {});
     }
@@ -291,7 +305,7 @@ export function TerminalView({
                 setPtyChannelId(data.ptyChannelId);
                 setConnectionStatus('connected');
                 term.options.disableStdin = false;
-                if (!document.activeElement?.closest('[role="tab"], input, textarea, select, [contenteditable="true"]')) {
+                if (typeof document !== 'undefined' && !document.activeElement?.closest('[role="tab"], input, textarea, select, [contenteditable="true"]')) {
                   term.focus();
                 }
                 showToast('Connection restored successfully');
@@ -301,10 +315,19 @@ export function TerminalView({
         : () => {};
 
     return () => {
+      active = false;
       unHost();
       unRecon();
     };
   }, [session.serverId]);
+
+  useEffect(() => {
+    toastActiveRef.current = true;
+    return () => {
+      toastActiveRef.current = false;
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   // CSS zoom changes do not reliably trigger ResizeObserver. Refit xterm
   // explicitly so its grid follows the complete workspace scale change.
@@ -384,8 +407,9 @@ export function TerminalView({
       setErrorMessage(null);
 
       if (window.spawneaApi) {
+        const api = window.spawneaApi;
         try {
-          const { ptyChannelId: channelId } = await window.spawneaApi.attachSession(
+          const { ptyChannelId: channelId } = await api.attachSession(
             currentSession.id,
             term.cols,
             term.rows
@@ -393,7 +417,7 @@ export function TerminalView({
 
           if (generation !== connectionGenerationRef.current) {
             if (activeChannelIdRef.current !== channelId) {
-              void window.spawneaApi.detachSession?.(currentSession.id);
+              void api.detachSession?.(currentSession.id).catch(() => {});
             }
             return;
           }
@@ -425,7 +449,7 @@ export function TerminalView({
             if (cid === activeChannelIdRef.current) {
               const byteLen = utf8ByteLength(data);
               term.write(data, () => {
-                if (window.spawneaApi?.ackPty) {
+                if (typeof window !== 'undefined' && window.spawneaApi?.ackPty) {
                   window.spawneaApi.ackPty(cid, byteLen);
                 }
               });
@@ -465,6 +489,7 @@ export function TerminalView({
           });
           cleanupFnsRef.current.push(() => termInputDisposable.dispose());
         } catch (err: any) {
+          if (generation !== connectionGenerationRef.current) return;
           const msg = err?.message || 'Failed to attach to remote session';
           setConnectionStatus('error');
           setErrorMessage(msg);
@@ -510,7 +535,7 @@ export function TerminalView({
             term.writeln(`\r\n\x1b[31m[Spawnea Connection Error: ${finalMsg}]\x1b[0m`);
           }
         } finally {
-          isConnectingRef.current = false;
+          if (generation === connectionGenerationRef.current) isConnectingRef.current = false;
         }
       } else {
         // Fallback demo mode for browser testing
@@ -847,27 +872,42 @@ export function TerminalView({
   }, [isSuspended, session.status, connectToSession]);
 
   const handleManualRetry = async () => {
-    cleanupActiveConnection();
-    if (isNonRetryableAuthenticationFailure(errorMessage)) {
-      try {
-        const state = await window.spawneaApi.retryHostConnection(session.serverId);
-        setHostConnectionState(state);
-        if (state.status !== 'connected') {
+    if (retryHostPendingRef.current) return;
+    const retry = {};
+    retryHostPendingRef.current = retry;
+    setIsRetryingHost(true);
+    try {
+      cleanupActiveConnection();
+      const generation = connectionGenerationRef.current;
+      if (isNonRetryableAuthenticationFailure(errorMessage)) {
+        try {
+          const state = await window.spawneaApi.retryHostConnection(session.serverId);
+          if (retryHostPendingRef.current !== retry || generation !== connectionGenerationRef.current) return;
+          setHostConnectionState(state);
+          if (state.status !== 'connected') {
+            setConnectionStatus('error');
+            setErrorMessage(state.error || '1Password connection failed. Reconnect manually to retry.');
+            return;
+          }
+        } catch (error) {
+          if (retryHostPendingRef.current !== retry || generation !== connectionGenerationRef.current) return;
           setConnectionStatus('error');
-          setErrorMessage(state.error || '1Password connection failed. Reconnect manually to retry.');
+          setErrorMessage(error instanceof Error ? error.message : String(error));
           return;
         }
-      } catch (error) {
-        setConnectionStatus('error');
-        setErrorMessage(error instanceof Error ? error.message : String(error));
-        return;
       }
-    }
-    if (onAttachRef.current) {
-      onAttachRef.current(session.id);
-    }
-    if (terminalInstanceRef.current) {
-      await connectToSession(terminalInstanceRef.current, false);
+      if (retryHostPendingRef.current !== retry) return;
+      if (onAttachRef.current) {
+        onAttachRef.current(session.id);
+      }
+      if (terminalInstanceRef.current) {
+        await connectToSession(terminalInstanceRef.current, false);
+      }
+    } finally {
+      if (retryHostPendingRef.current === retry) {
+        retryHostPendingRef.current = null;
+        if (toastActiveRef.current) setIsRetryingHost(false);
+      }
     }
   };
 
@@ -924,6 +964,7 @@ export function TerminalView({
   const handleContextMenu = async (e: React.MouseEvent) => {
     e.preventDefault();
     const term = terminalInstanceRef.current;
+    const generation = connectionGenerationRef.current;
     const nativeClick = e.nativeEvent as ZoomAdjustedMouseEvent;
     const clickX = nativeClick.spawneaOriginalClientX ?? e.clientX;
     const clickY = nativeClick.spawneaOriginalClientY ?? e.clientY;
@@ -950,7 +991,9 @@ export function TerminalView({
     // terminal selection.
     if (!sel && hasNewMouseSelection && clipboardBridgeAvailable) {
       const clipboardBefore = await (clipboardBeforeMouseDragReadRef.current ?? Promise.resolve(null));
+      if (generation !== connectionGenerationRef.current || term !== terminalInstanceRef.current) return;
       const clipboardAfter = await readLocalClipboardText();
+      if (generation !== connectionGenerationRef.current || term !== terminalInstanceRef.current) return;
       if (clipboardBefore !== null && clipboardAfter !== null && clipboardAfter !== clipboardBefore) {
         sel = clipboardAfter;
       }
@@ -991,17 +1034,18 @@ export function TerminalView({
   const handleCopy = () => {
     const sel = contextMenu?.selectionText || terminalInstanceRef.current?.getSelection();
     if (sel) {
-      navigator.clipboard.writeText(sel);
+      void navigator.clipboard.writeText(sel).catch(() => {});
       showToast('Copied to clipboard');
     }
   };
 
   const handlePaste = () => {
+    const generation = connectionGenerationRef.current;
     navigator.clipboard.readText().then((text) => {
-      if (text && terminalInstanceRef.current) {
+      if (generation === connectionGenerationRef.current && text && terminalInstanceRef.current) {
         terminalInstanceRef.current.paste(text);
       }
-    });
+    }).catch(() => {});
   };
 
   const handleOpenInEditor = () => {
@@ -1015,14 +1059,15 @@ export function TerminalView({
   const handleTransformToArtifact = () => {
     const textToSave = contextMenu?.selectionText || terminalInstanceRef.current?.getSelection();
     if (textToSave && window.spawneaApi?.createArtifactFromText) {
+      const lifetime = viewLifetimeRef.current;
       const filename = `snippet-${Date.now().toString(36)}.txt`;
       window.spawneaApi
         .createArtifactFromText(session.id, filename, textToSave)
         .then(() => {
-          showToast(`Artifact created: ${filename}`);
+          if (lifetime === viewLifetimeRef.current) showToast(`Artifact created: ${filename}`);
         })
         .catch((err) => {
-          showToast(`Failed to create artifact: ${err?.message || 'Error'}`);
+          if (lifetime === viewLifetimeRef.current) showToast(`Failed to create artifact: ${err?.message || 'Error'}`);
         });
     }
   };
@@ -1037,17 +1082,23 @@ export function TerminalView({
   };
 
   const handleRetryHost = useCallback(async () => {
-    if (isRetryingHost || !window.spawneaApi) return;
+    if (retryHostPendingRef.current || !window.spawneaApi) return;
+    const retry = {};
+    retryHostPendingRef.current = retry;
     setIsRetryingHost(true);
+    const generation = connectionGenerationRef.current;
     try {
       const res = await window.spawneaApi.retryHostConnection(session.serverId);
-      setHostConnectionState(res);
+      if (retryHostPendingRef.current === retry && generation === connectionGenerationRef.current) setHostConnectionState(res);
     } catch (err: any) {
-      showToast(`Retry failed: ${err?.message || String(err)}`);
+      if (retryHostPendingRef.current === retry && generation === connectionGenerationRef.current) showToast(`Retry failed: ${err?.message || String(err)}`);
     } finally {
-      setIsRetryingHost(false);
+      if (retryHostPendingRef.current === retry) {
+        retryHostPendingRef.current = null;
+        if (toastActiveRef.current) setIsRetryingHost(false);
+      }
     }
-  }, [session.serverId, isRetryingHost, showToast]);
+  }, [session.serverId, showToast]);
 
   return (
     <>
@@ -1097,6 +1148,7 @@ export function TerminalView({
             <button
               type="button"
               onClick={handleManualRetry}
+              disabled={isRetryingHost}
               className="flex items-center gap-1 px-2.5 py-0.5 rounded bg-rose-950/60 border border-rose-500/40 text-rose-300 text-[11px] hover:bg-rose-900/80 cursor-pointer transition-colors"
             >
               <RefreshCw className="w-3 h-3" />
@@ -1317,6 +1369,7 @@ export function TerminalView({
               <button
                 type="button"
                 onClick={handleManualRetry}
+                disabled={isRetryingHost}
                 className="flex items-center gap-2 px-4 py-2 bg-[#21262d] hover:bg-[#30363d] text-zinc-200 border border-[#30363d] rounded-lg text-xs font-semibold transition-all shadow-md cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
