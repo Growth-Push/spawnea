@@ -98,4 +98,38 @@ describe('SessionContextStore', () => {
     const loaded = await store.load('sess-abc-123');
     expect(loaded).toBeNull();
   });
+
+  it('serializes link, status, name and layout changes without losing fields', async () => {
+    await store.save(sampleContext);
+    const link = { url: 'https://github.com/example/repo/issues/1', kind: 'issue' as const, source: 'output' as const };
+    await Promise.all([
+      store.retainLinks(sampleContext.sessionId, [link]),
+      store.updateStatus(sampleContext.sessionId, 'idle'),
+      store.updateSessionName(sampleContext.sessionId, 'Renamed'),
+      store.update(sampleContext.sessionId, (current) => ({ ...current, agentSessionId: 'fixture-layout' })),
+    ]);
+    expect(await store.load(sampleContext.sessionId)).toMatchObject({ status: 'idle', sessionName: 'Renamed', agentSessionId: 'fixture-layout', retainedLinks: [link] });
+  });
+
+  it('rejects a stale snapshot after a link update or deletion and never recreates the file', async () => {
+    await store.save(sampleContext);
+    const stale = (await store.load(sampleContext.sessionId))!;
+    const link = { url: 'https://github.com/example/repo/issues/1', kind: 'issue' as const, source: 'output' as const };
+    await store.retainLinks(sampleContext.sessionId, [link]);
+    await expect(store.save({ ...stale, sessionName: 'Old snapshot' })).rejects.toThrow('changed since it was read');
+    const pending = store.retainLinks(sampleContext.sessionId, [link]);
+    const deleted = store.delete(sampleContext.sessionId);
+    await Promise.all([pending, deleted]);
+    await expect(store.save(stale)).rejects.toThrow('changed since it was read');
+    expect(await store.load(sampleContext.sessionId)).toBeNull();
+  });
+
+  it('restores the state at deletion, including updates queued after the rollback snapshot', async () => {
+    await store.save(sampleContext);
+    const previous = (await store.load(sampleContext.sessionId))!;
+    const link = { url: 'https://github.com/example/repo/pull/5', kind: 'pull' as const, source: 'prompt' as const };
+    await Promise.all([store.retainLinks(sampleContext.sessionId, [link]), store.delete(sampleContext.sessionId, { captureForRollback: true })]);
+    await store.restoreDeleted(previous);
+    expect((await store.load(sampleContext.sessionId))?.retainedLinks).toEqual([link]);
+  });
 });

@@ -12,12 +12,14 @@ import { SqliteProjectRepository } from './project-repository.js';
 import { SqliteAgentRepository } from './agent-repository.js';
 import { SqliteSessionRepository } from './session-repository.js';
 import { SqliteArtifactRepository } from './artifact-repository.js';
+import { SqliteGitHubRepository } from './github-repository.js';
 
 export * from './server-repository.js';
 export * from './project-repository.js';
 export * from './agent-repository.js';
 export * from './session-repository.js';
 export * from './artifact-repository.js';
+export * from './github-repository.js';
 
 export interface Repositories {
   servers: ServerRepository;
@@ -25,6 +27,7 @@ export interface Repositories {
   agents: AgentRepository;
   sessions: SessionRepository;
   artifacts: ArtifactRepository;
+  github?: SqliteGitHubRepository;
 }
 
 export interface RepositoryOptions {
@@ -38,5 +41,6 @@ export function createRepositories(db: DbClient, options: RepositoryOptions = {}
     agents: new SqliteAgentRepository(db, options.logger),
     sessions: new SqliteSessionRepository(db, options.logger),
     artifacts: new SqliteArtifactRepository(db, options.logger),
+    github: new SqliteGitHubRepository(db),
   };
 }

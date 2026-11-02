@@ -29,6 +29,8 @@ import { SessionManager } from './session-manager.js';
 import { SessionSupervisor } from './session-supervisor.js';
 import { NotificationBroker } from './notification-broker.js';
 import { ArtifactManager } from './artifact-manager.js';
+import { GitHubIntegration } from './github-integration.js';
+import { GitHubProvider } from './github-provider.js';
 import { openWorkspaceHtml } from './open-workspace-html.js';
 import { LocalDiscoveryService } from './local-discovery-service.js';
 import { AgentControlService } from './agent-control-service.js';
@@ -347,6 +349,28 @@ function registerIpcHandlers(
   discoveryService: LocalDiscoveryService,
   controlService: AgentControlService
 ): void {
+  const github = new GitHubIntegration(repos, sessManager);
+  const githubProvider: import('@spawnea/domain').TrackerProvider = new GitHubProvider();
+  const githubRefreshes = new Map<string, AbortController>();
+  ipcMain.handle('github:settings', async (_event, projectId: string) => (await repos.github?.settings(projectId)) ?? { trackerEnabled: false, ciEnabled: false });
+  ipcMain.handle('github:setSettings', async (_event, projectId: string, settings: { trackerEnabled: boolean; ciEnabled: boolean }) => {
+    if (typeof settings?.trackerEnabled !== 'boolean' || typeof settings?.ciEnabled !== 'boolean' || !(await repos.projects.findById(projectId))) throw new Error('Invalid project settings');
+    await repos.github?.setSettings(projectId, settings);
+  });
+  ipcMain.handle('github:links', async (_event, sessionId: string) => repos.github?.links(sessionId) ?? []);
+  ipcMain.handle('github:issue', async (_event, sessionId: string) => {
+    const session = await repos.sessions.findById(sessionId);
+    if (!session?.originIssueUrl || !(await repos.github?.settings(session.projectId))?.trackerEnabled) return null;
+    return githubProvider.issue(session.originIssueUrl);
+  });
+  ipcMain.handle('github:ci', async (_event, sessionId: string, pullUrl: string | undefined, requestId: string) => {
+    if (typeof requestId !== 'string' || requestId.length > 200 || githubRefreshes.has(requestId)) throw new Error('Invalid refresh request');
+    const controller = new AbortController();
+    githubRefreshes.set(requestId, controller);
+    try { return await github.ci(sessionId, pullUrl, controller.signal); }
+    finally { githubRefreshes.delete(requestId); }
+  });
+  ipcMain.handle('github:cancelCi', async (_event, requestId: string) => { githubRefreshes.get(requestId)?.abort(); });
   if (process.env.SPAWNEA_RELEASE_SMOKE === '1') {
     ipcMain.handle('app:quitForReleaseSmoke', (event) => {
       if (event.sender !== mainWindowRef?.webContents) {

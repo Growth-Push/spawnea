@@ -156,6 +156,21 @@ describe('WorkspaceTabs Component', () => {
     });
   }
 
+  it('opens the originating issue explicitly and removes its shortcut when the session changes', () => {
+    const openExternalUrl = vi.fn().mockResolvedValue(undefined);
+    (window as any).spawneaApi.openExternalUrl = openExternalUrl;
+    const issueUrl = 'https://github.com/example/project/issues/123';
+    const { rerender } = render(<WorkspaceTabs session={{ ...mockSession, originIssueUrl: issueUrl, tmuxSessionName: 'long-session-name-'.repeat(12) }} activeTab="details" onTabChange={vi.fn()} />);
+    const shortcut = screen.getByRole('button', { name: 'Originating issue' });
+    shortcut.focus();
+    expect(document.activeElement).toBe(shortcut);
+    expect(openExternalUrl).not.toHaveBeenCalled();
+    fireEvent.click(shortcut);
+    expect(openExternalUrl).toHaveBeenCalledWith(issueUrl);
+    rerender(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Originating issue' })).toBeNull();
+  });
+
   it('copies current session data and reports success only after the clipboard resolves', async () => {
     let resolveWrite!: () => void;
     const writeClipboardText = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { resolveWrite = resolve; })).mockResolvedValue(undefined);
@@ -371,6 +386,21 @@ describe('WorkspaceTabs Component', () => {
     );
 
     expect(screen.getByTestId('workspace-worktree-badge')).toBeDefined();
+  });
+
+  it('keeps the CI panel and Git workspace within a vertically scrollable container', async () => {
+    const checks = Array.from({ length: 40 }, (_, index) => ({ key: String(index), name: `Check ${index + 1}`, state: 'successful', observedAt: '2026-01-01T00:00:00Z' }));
+    Object.assign(window.spawneaApi, {
+      getGitHubSettings: vi.fn().mockResolvedValue({ trackerEnabled: false, ciEnabled: true }),
+      getSessionLinks: vi.fn().mockResolvedValue([]),
+      getGitHubCi: vi.fn().mockResolvedValue({ state: 'successful', checks, fetchedAt: 'now' }),
+      cancelGitHubCi: vi.fn().mockResolvedValue(undefined),
+    });
+    render(<WorkspaceTabs session={mockSession} activeTab="diff" onTabChange={vi.fn()} />);
+    expect(await screen.findByText('Check 40: successful')).toBeDefined();
+    const panel = screen.getByRole('region', { name: 'GitHub CI' });
+    expect(panel.parentElement?.classList.contains('overflow-y-auto')).toBe(true);
+    expect(panel.parentElement?.textContent).toContain('feat/jwt-auth');
   });
 
   it('marks a managed worktree when it has uncommitted Git changes', () => {

@@ -113,11 +113,35 @@ describe('Database Migrations', () => {
     insert.run('ui', 'tmux-ui', 'ui');
 
     const result = runMigrations(sqlite);
-    expect(result.appliedNames).toEqual(['0010_rename_mcp_creation_source']);
+    expect(result.appliedNames).toContain('0010_rename_mcp_creation_source');
     const rows = sqlite.prepare('SELECT id, creation_source FROM sessions ORDER BY id').all();
     expect(rows).toEqual([
       { id: 'legacy', creation_source: 'control' },
       { id: 'ui', creation_source: 'ui' },
     ]);
+  });
+
+  it('adds GitHub storage to an old database with opt-ins disabled and retains provenance', () => {
+    sqlite = new Database(':memory:');
+    sqlite.pragma('foreign_keys = ON');
+    runMigrations(sqlite, MIGRATIONS.filter((migration) => migration.name < '0012_github_integration'));
+    sqlite.exec(`
+      INSERT INTO servers (id,name,host,created_at) VALUES ('s','Server','localhost',0);
+      INSERT INTO projects (id,server_id,name,root_path,created_at) VALUES ('p','s','Project','/p',0);
+      INSERT INTO agents (id,name,harness,command,created_at) VALUES ('a','Agent','shell','sh',0);
+      INSERT INTO sessions (id,name,server_id,project_id,agent_id,task,worktree_path,branch,tmux_session_name,status,created_at,last_activity_at)
+        VALUES ('x','Session','s','p','a','Task','/p','main','tmux','idle',0,0);
+    `);
+    expect(runMigrations(sqlite).appliedNames).toEqual(['0012_github_integration']);
+    expect(sqlite.prepare('SELECT origin_issue_url FROM sessions WHERE id = ?').get('x')).toEqual({ origin_issue_url: null });
+    sqlite.prepare('INSERT INTO github_project_settings (project_id) VALUES (?)').run('p');
+    expect(sqlite.prepare('SELECT tracker_enabled, ci_enabled FROM github_project_settings').get()).toEqual({ tracker_enabled: 0, ci_enabled: 0 });
+    const add = sqlite.prepare('INSERT OR IGNORE INTO session_links VALUES (?, ?, ?, ?, ?)');
+    add.run('x', 'https://github.com/example/repo/issues/1', 'issue', 'task', 1);
+    add.run('x', 'https://github.com/example/repo/issues/1', 'issue', 'task', 2);
+    add.run('x', 'https://github.com/example/repo/issues/1', 'issue', 'output', 3);
+    expect(sqlite.prepare('SELECT source FROM session_links ORDER BY source').all()).toEqual([{ source: 'output' }, { source: 'task' }]);
+    sqlite.prepare('DELETE FROM sessions WHERE id = ?').run('x');
+    expect(sqlite.prepare('SELECT count(*) AS count FROM session_links').get()).toEqual({ count: 0 });
   });
 });

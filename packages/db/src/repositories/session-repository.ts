@@ -182,6 +182,7 @@ export class SqliteSessionRepository implements SessionRepository {
         projectId: session.projectId,
         agentId: session.agentId,
         task: session.task,
+        originIssueUrl: session.originIssueUrl ?? existing.originIssueUrl ?? null,
         worktreePath: session.worktreePath,
         branch: session.branch,
         baseBranch: session.baseBranch ?? null,
@@ -221,6 +222,7 @@ export class SqliteSessionRepository implements SessionRepository {
       projectId: session.projectId,
       agentId: session.agentId,
       task: session.task,
+      originIssueUrl: session.originIssueUrl ?? null,
       worktreePath: session.worktreePath,
       branch: session.branch,
       baseBranch: session.baseBranch ?? null,
@@ -273,6 +275,7 @@ export class SqliteSessionRepository implements SessionRepository {
     if (updates.projectId !== undefined) setValues.projectId = updates.projectId;
     if (updates.agentId !== undefined) setValues.agentId = updates.agentId;
     if (updates.task !== undefined) setValues.task = updates.task;
+    if (updates.originIssueUrl !== undefined) setValues.originIssueUrl = updates.originIssueUrl;
     if (updates.worktreePath !== undefined) setValues.worktreePath = updates.worktreePath;
     if (updates.branch !== undefined) setValues.branch = updates.branch;
     if (updates.baseBranch !== undefined) setValues.baseBranch = updates.baseBranch;

@@ -889,6 +889,21 @@ hosts:
     expect(mockHost.sessions.has(created.tmuxSessionName)).toBe(true);
   });
 
+  it('restores the independent originating issue and retained task links from context', async () => {
+    const created = await sessionManager.createSession({
+      serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude',
+      task: 'Inspect https://github.com/example/repo/pull/9', originIssueUrl: 'https://github.com/example/other/issues/4',
+    });
+    expect(created.originIssueUrl).toBe('https://github.com/example/other/issues/4');
+    expect((await contextStore.load(created.id))?.retainedLinks).toEqual([{ url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' }]);
+    const child = await sessionManager.createChildSession({ parentSessionId: created.id, task: 'Child', workspace: 'same-project' });
+    expect(child.originIssueUrl).toBeUndefined();
+    await repos.sessions.delete(created.id);
+    await sessionManager.restoreSessions();
+    expect((await repos.sessions.findById(created.id))?.originIssueUrl).toBe('https://github.com/example/other/issues/4');
+    expect(await repos.github?.links(created.id)).toEqual([expect.objectContaining({ url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' })]);
+  });
+
   it('rejects blank and oversized session titles without changing persistence', async () => {
     const session = await sessionManager.createSession({
       serverId: 'dev-workstation',
@@ -1852,7 +1867,7 @@ hosts:
       task: 'Double local failure',
     });
     vi.spyOn(repos.sessions, 'delete').mockRejectedValueOnce(new Error('SQLite unavailable'));
-    vi.spyOn(contextStore, 'save').mockRejectedValueOnce(new Error('Context storage unavailable'));
+    vi.spyOn(contextStore, 'restoreDeleted').mockRejectedValueOnce(new Error('Context storage unavailable'));
 
     await expect(sessionManager.forgetSessionLocally(session.id)).rejects.toThrow('SQLite unavailable');
     expect(await repos.sessions.findById(session.id)).not.toBeNull();
@@ -1867,7 +1882,7 @@ hosts:
     });
     vi.spyOn(repos.sessions, 'delete').mockResolvedValueOnce(false);
     const restoreError = new Error('Context restore error');
-    vi.spyOn(contextStore, 'save').mockRejectedValueOnce(restoreError);
+    vi.spyOn(contextStore, 'restoreDeleted').mockRejectedValueOnce(restoreError);
     const logError = vi.spyOn(logger, 'error');
 
     await expect(sessionManager.forgetSessionLocally(session.id)).resolves.toBe(false);
@@ -2549,10 +2564,10 @@ up 1 day, 5 hours
       const existingContext = await contextStore.load(session.id);
       expect(existingContext).toBeDefined();
       if (existingContext) {
-        await contextStore.save({
-          ...existingContext,
+        await contextStore.update(session.id, (current) => ({
+          ...current,
           finalization: { action: 'close', worktreeRemoved: true },
-        });
+        }));
       }
 
       expect(await sessionManager.isWorktreeRemovalRecorded(session.id, 'close')).toBe(true);
@@ -3683,7 +3698,7 @@ up 1 day, 5 hours
         { pattern: 'tmux capture-pane', response: { stdout: '', stderr: '', exitCode: 0 } }
       );
       vi.spyOn(contextStore, 'load').mockResolvedValue({ sessionId: session.id } as any);
-      vi.spyOn(contextStore, 'save').mockRejectedValue(new Error('disk full'));
+      vi.spyOn(contextStore, 'update').mockRejectedValue(new Error('disk full'));
 
       await expect(sessionManager.saveSessionLayout(session.id)).rejects.toThrow('context file could not be updated');
     });

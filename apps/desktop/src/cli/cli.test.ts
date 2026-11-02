@@ -162,6 +162,15 @@ describe('Spawnea Control CLI', () => {
   });
 
   describe('session create model request path', () => {
+    it('forwards an originating issue for root and child creation', async () => {
+      const callTool = vi.fn().mockResolvedValue({ sessionId: 'session-1' });
+      const client = { callTool } as unknown as ControlCliClient;
+      const originIssueUrl = 'https://github.com/example/other/issues/42';
+      await createSession(client, { project: 'proj', task: 'task', originIssueUrl });
+      expect(callTool).toHaveBeenLastCalledWith('spawnea_create_session', expect.objectContaining({ task: 'task', originIssueUrl }), undefined);
+      await createChild(client, { parent: 'parent', task: 'child', originIssueUrl });
+      expect(callTool).toHaveBeenLastCalledWith('spawnea_create_child_session', expect.objectContaining({ task: 'child', originIssueUrl }), undefined);
+    });
     it('forwards the exact model and preserves omitted model through the real command function', async () => {
       const callTool = vi.fn().mockResolvedValue({ sessionId: 'session-1' });
       const client = { callTool } as unknown as ControlCliClient;

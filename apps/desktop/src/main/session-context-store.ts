@@ -8,9 +8,15 @@ export interface SessionContextStoreOptions {
   logger?: Logger;
 }
 
+const contextRevision = Symbol('contextRevision');
+type RevisionedContext = SessionContextFile & { [contextRevision]?: number };
+
 export class SessionContextStore {
   private readonly storeDir: string;
   private readonly logger: Logger;
+  private readonly writes = new Map<string, Promise<unknown>>();
+  private readonly revisions = new Map<string, number>();
+  private readonly deletedSnapshots = new Map<string, SessionContextFile>();
 
   constructor(options: SessionContextStoreOptions) {
     this.storeDir = options.storeDir;
@@ -33,13 +39,70 @@ export class SessionContextStore {
    * Saves or updates a session context file on disk.
    */
   async save(context: SessionContextFile): Promise<string> {
+    return this.serialize(context.sessionId, () => {
+      const revision = this.revision(context.sessionId);
+      const expected = (context as RevisionedContext)[contextRevision];
+      if ((expected === undefined && (revision !== 0 || existsSync(this.getFilePath(context.sessionId)))) || (expected !== undefined && expected !== revision)) {
+        throw new Error('Session context changed since it was read');
+      }
+      return this.write(context);
+    });
+  }
+
+  private revision(sessionId: string): number {
+    return this.revisions.get(this.getFilePath(sessionId)) ?? 0;
+  }
+
+  private serialize<T>(sessionId: string, action: () => T | Promise<T>): Promise<T> {
+    const key = this.getFilePath(sessionId);
+    const previous = this.writes.get(key) ?? Promise.resolve();
+    const operation = previous.catch(() => {}).then(action);
+    this.writes.set(key, operation);
+    void operation.finally(() => { if (this.writes.get(key) === operation) this.writes.delete(key); }).catch(() => {});
+    return operation;
+  }
+
+  private write(context: SessionContextFile): string {
     this.ensureDirectory();
     const filePath = this.getFilePath(context.sessionId);
     this.logger.info('Persisting session context file', { sessionId: context.sessionId, filePath });
 
     const content = serializeSessionContextFile(context);
     writeFileSync(filePath, content, 'utf8');
+    this.revisions.set(filePath, this.revision(context.sessionId) + 1);
     return filePath;
+  }
+
+  /** Apply a change to the current context, never to an earlier snapshot. */
+  async update(sessionId: string, change: (context: SessionContextFile) => SessionContextFile): Promise<boolean> {
+    return this.serialize(sessionId, async () => {
+      const current = await this.load(sessionId);
+      if (!current) return false;
+      this.write(change(current));
+      return true;
+    });
+  }
+
+  /** Restore a deleted context only when database removal failed. */
+  async restoreDeleted(context: SessionContextFile): Promise<void> {
+    await this.serialize(context.sessionId, () => {
+      if (existsSync(this.getFilePath(context.sessionId))) throw new Error('Cannot restore over an existing session context');
+      const key = this.getFilePath(context.sessionId);
+      this.write(this.deletedSnapshots.get(key) ?? context);
+      this.deletedSnapshots.delete(key);
+    });
+  }
+
+  discardDeletedSnapshot(sessionId: string): void {
+    this.deletedSnapshots.delete(this.getFilePath(sessionId));
+  }
+
+  async retainLinks(sessionId: string, links: NonNullable<SessionContextFile['retainedLinks']>): Promise<void> {
+    await this.update(sessionId, (context) => {
+      const merged = new Map((context.retainedLinks ?? []).map((link) => [`${link.source}:${link.url}`, link]));
+      for (const link of links) merged.set(`${link.source}:${link.url}`, link);
+      return { ...context, retainedLinks: [...merged.values()] };
+    });
   }
 
   /**
@@ -56,6 +119,7 @@ export class SessionContextStore {
       const content = readFileSync(filePath, 'utf8');
       const result = parseSessionContextFile(content);
       if (result.success) {
+        Object.defineProperty(result.context, contextRevision, { value: this.revision(sessionId) });
         return result.context;
       }
       this.logger.error('Invalid session context file format', undefined, {
@@ -103,56 +167,44 @@ export class SessionContextStore {
    * Updates the status of an existing session context file on disk.
    */
   async updateStatus(sessionId: string, status: SessionStatus): Promise<boolean> {
-    const existing = await this.load(sessionId);
-    if (!existing) {
-      this.logger.warn('Cannot update status: context file not found', { sessionId, status });
-      return false;
-    }
-
-    const updated: SessionContextFile = {
-      ...existing,
+    return this.update(sessionId, (existing) => ({ ...existing,
       status,
       updatedAt: new Date().toISOString(),
-    };
-
-    await this.save(updated);
-    return true;
+    }));
   }
 
   /**
    * Updates only the operator-facing display name. Runtime identities stay unchanged.
    */
   async updateSessionName(sessionId: string, sessionName: string): Promise<boolean> {
-    const existing = await this.load(sessionId);
-    if (!existing) {
-      this.logger.warn('Cannot update session name: context file not found', { sessionId });
-      return false;
-    }
-
-    await this.save({
-      ...existing,
+    return this.update(sessionId, (existing) => ({ ...existing,
       sessionName,
       updatedAt: new Date().toISOString(),
-    });
-    return true;
+    }));
   }
 
   /**
    * Deletes a session context file from disk.
    */
-  async delete(sessionId: string): Promise<boolean> {
-    const filePath = this.getFilePath(sessionId);
-    if (existsSync(filePath)) {
-      try {
-        unlinkSync(filePath);
-        this.logger.info('Deleted session context file', { sessionId, filePath });
-        return true;
-      } catch (err) {
-        this.logger.error('Failed to delete session context file', err, { sessionId, filePath });
-        return false;
+  async delete(sessionId: string, options?: { captureForRollback?: boolean }): Promise<boolean> {
+    return this.serialize(sessionId, async () => {
+      const filePath = this.getFilePath(sessionId);
+      if (existsSync(filePath)) {
+        try {
+          const snapshot = options?.captureForRollback ? await this.load(sessionId) : null;
+          unlinkSync(filePath);
+          if (snapshot) this.deletedSnapshots.set(filePath, snapshot);
+          this.revisions.set(filePath, this.revision(sessionId) + 1);
+          this.logger.info('Deleted session context file', { sessionId, filePath });
+          return true;
+        } catch (err) {
+          this.logger.error('Failed to delete session context file', err, { sessionId, filePath });
+          return false;
+        }
       }
-    }
-    // Deletion is idempotent: an already-absent context is successfully clean.
-    return true;
+      // Deletion is idempotent: an already-absent context is successfully clean.
+      this.revisions.set(filePath, this.revision(sessionId) + 1);
+      return true;
+    });
   }
 }

@@ -48,6 +48,7 @@ export function toSession(row: SessionRow): Session {
     projectId: row.projectId,
     agentId: row.agentId,
     task: row.task,
+    originIssueUrl: row.originIssueUrl ?? undefined,
     worktreePath: row.worktreePath,
     branch: row.branch,
     baseBranch: row.baseBranch ?? undefined,
