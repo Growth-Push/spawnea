@@ -144,6 +144,10 @@ const mockSessions: Session[] = [
 function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Window['spawneaApi'] {
   return {
     quitForReleaseSmoke: vi.fn().mockResolvedValue(true),
+    beginDashboardHistory: vi.fn().mockResolvedValue(undefined),
+    recordDashboardObservation: vi.fn().mockResolvedValue(undefined),
+    getDashboardHistory: vi.fn().mockResolvedValue({ first: null, last: null, closedCount: 0, points: [] }),
+    getDashboardHistoryPage: vi.fn().mockResolvedValue({ observations: [], next: null }),
     writeClipboardText: vi.fn().mockResolvedValue(undefined),
     getCliPathStatus: vi.fn().mockResolvedValue({
       installed: false,

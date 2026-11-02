@@ -317,6 +317,23 @@ describe('Domain Repositories & Logging Integration', () => {
       expect(await repos.sessions.findById('sess-1')).toBeNull();
     });
 
+    it('counts only successful confirmed deletions once and rolls back when the counter fails', async () => {
+      const save = (id: string) => repos.sessions.save({ id, name: id, serverId: 'srv-1', projectId: 'proj-1', agentId: 'agent-1', task: '', worktreePath: '/example', branch: 'main', tmuxSessionName: id, status: 'idle' });
+      const count = () => (conn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get() as { count: number }).count;
+      await save('rollback');
+      await repos.sessions.delete('rollback');
+      expect(count()).toBe(0);
+      await save('confirmed');
+      expect(await repos.sessions.delete('confirmed', { countAsClosed: true })).toBe(true);
+      expect(await repos.sessions.delete('confirmed', { countAsClosed: true })).toBe(false);
+      expect(count()).toBe(1);
+      await save('failed');
+      conn.sqlite.exec("CREATE TRIGGER reject_dashboard_count BEFORE UPDATE ON dashboard_closed_sessions BEGIN SELECT RAISE(ABORT, 'counter failure'); END");
+      await expect(repos.sessions.delete('failed', { countAsClosed: true })).rejects.toThrow();
+      expect(await repos.sessions.findById('failed')).not.toBeNull();
+      expect(count()).toBe(1);
+    });
+
     it('persists an explicit requested model and preserves legacy omission on reopen', async () => {
       conn.close();
       const directory = await mkdtemp(join(tmpdir(), 'spawnea-db-model-'));

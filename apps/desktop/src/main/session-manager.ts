@@ -1730,7 +1730,7 @@ export class SessionManager {
 
         let deleteError: unknown;
         try {
-          await this.repos.sessions.delete(sessionId);
+          await this.repos.sessions.delete(sessionId, { countAsClosed: true });
         } catch (err) {
           deleteError = err;
           this.logger.warn('Failed to delete session from database during deletion', { error: err });
@@ -1952,7 +1952,7 @@ export class SessionManager {
         if (!(await this.contextStore.delete(sessionId))) {
           throw new Error(`Failed to delete context file for session '${sessionId}'`);
         }
-        await this.repos.sessions.delete(sessionId);
+        await this.repos.sessions.delete(sessionId, { countAsClosed: true });
 
         this.logger.info('Session successfully integrated and finalized', { sessionId, branch: identity.branch });
         return { action: 'integrate', removed: true };
@@ -2061,7 +2061,7 @@ export class SessionManager {
         }
 
         // 6. Clean up session DB
-        await this.repos.sessions.delete(sessionId);
+        await this.repos.sessions.delete(sessionId, { countAsClosed: true });
         if (await this.repos.sessions.findById(sessionId)) {
           throw new Error('Persistence failure: session remains in database');
         }
