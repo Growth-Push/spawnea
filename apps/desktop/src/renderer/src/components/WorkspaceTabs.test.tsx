@@ -156,6 +156,21 @@ describe('WorkspaceTabs Component', () => {
     });
   }
 
+  it('shows the originating issue in the terminal workspace', () => {
+    const openExternalUrl = vi.fn().mockResolvedValue(undefined);
+    (window as any).spawneaApi.openExternalUrl = openExternalUrl;
+    const issueUrl = 'https://github.com/example/project/issues/123';
+    const { rerender } = render(<WorkspaceTabs session={{ ...mockSession, originIssueUrl: issueUrl, tmuxSessionName: 'long-session-name-'.repeat(12) }} activeTab="terminal" onTabChange={vi.fn()} />);
+    const shortcut = screen.getByRole('button', { name: 'Origin · Issue #123 · example/project' });
+    shortcut.focus();
+    expect(document.activeElement).toBe(shortcut);
+    expect(openExternalUrl).not.toHaveBeenCalled();
+    fireEvent.click(shortcut);
+    expect(openExternalUrl).toHaveBeenCalledWith(issueUrl);
+    rerender(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Origin · Issue #123 · example/project' })).toBeNull();
+  });
+
   it('copies current session data and reports success only after the clipboard resolves', async () => {
     let resolveWrite!: () => void;
     const writeClipboardText = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { resolveWrite = resolve; })).mockResolvedValue(undefined);

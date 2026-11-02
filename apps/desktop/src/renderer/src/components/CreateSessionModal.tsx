@@ -97,6 +97,7 @@ export function CreateSessionModal({
   const submittingRef = useRef(false);
   const [choiceTooltip, setChoiceTooltip] = useState<{ group: 'host' | 'harness'; text: string } | null>(null);
   const [task, setTask] = useState<string>('');
+  const [originIssueUrl, setOriginIssueUrl] = useState('');
   const [isCustomTask, setIsCustomTask] = useState<boolean>(false);
   const [baseBranch, setBaseBranch] = useState<string>('');
   const [workspaceOption, setWorkspaceOption] = useState<'root' | 'new-worktree' | 'existing-worktree'>('root');
@@ -212,6 +213,7 @@ export function CreateSessionModal({
     setIsProjectOpen(false);
     setProjectSearchQuery('');
     setInitialPrompt('');
+    setOriginIssueUrl('');
     setCustomizeWorkspace(false);
 
     // Restore configured baseBranch from currently selected project
@@ -854,6 +856,7 @@ export function CreateSessionModal({
         projectId,
         agentId,
         task: task.trim(),
+        originIssueUrl: originIssueUrl.trim() || undefined,
         baseBranch: isEffectiveWorktree ? baseBranch.trim() || undefined : undefined,
         useWorktree: isEffectiveWorktree,
         worktreePath: effectiveWorktreePath,
@@ -1412,6 +1415,10 @@ export function CreateSessionModal({
             </div>
             <input id="session-task-name" type="text" data-testid="input-task-name" value={task} onChange={handleTaskChange} disabled={isSubmitting}
               className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200 focus:outline-none focus:border-emerald-500" />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="session-origin-issue" className="text-xs font-semibold text-zinc-300">Originating issue URL (optional)</label>
+            <input id="session-origin-issue" value={originIssueUrl} onChange={(e) => setOriginIssueUrl(e.target.value)} disabled={isSubmitting} placeholder="https://github.com/owner/repo/issues/1" className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200" />
           </div>
           <div className="space-y-1.5">
             <label htmlFor="session-initial-prompt" className="text-xs font-semibold text-zinc-300">Initial prompt (optional)</label>

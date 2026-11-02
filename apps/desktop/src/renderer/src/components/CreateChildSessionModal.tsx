@@ -30,6 +30,7 @@ export function CreateChildSessionModal({
 }: CreateChildSessionModalProps): React.JSX.Element | null {
   const [name, setName] = useState('');
   const [task, setTask] = useState('');
+  const [originIssueUrl, setOriginIssueUrl] = useState('');
   const [workspace, setWorkspace] = useState<ChildSessionWorkspaceMode>('same-project');
   const [selectedHostId, setSelectedHostId] = useState('');
   const [agentId, setAgentId] = useState('');
@@ -87,6 +88,7 @@ export function CreateChildSessionModal({
       initializedParentIdRef.current = parentSession.id;
       setName('');
       setTask('');
+      setOriginIssueUrl('');
       setWorkspace('same-project');
       setSelectedHostId(parentSession.serverId);
       setAgentId(parentSession.agentId);
@@ -172,6 +174,7 @@ export function CreateChildSessionModal({
         parentSessionId: parentSession.id,
         name: name.trim() || undefined,
         task: task.trim(),
+        originIssueUrl: originIssueUrl.trim() || undefined,
         workspace,
         agentId,
       });
@@ -243,6 +246,10 @@ export function CreateChildSessionModal({
               required
               autoFocus
             />
+          </div>
+          <div>
+            <label htmlFor="child-origin-issue" className="block text-xs font-medium text-zinc-300 mb-1">Originating issue URL (optional)</label>
+            <input id="child-origin-issue" value={originIssueUrl} onChange={(e) => setOriginIssueUrl(e.target.value)} disabled={submitting} placeholder="https://github.com/owner/repo/issues/1" className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200" />
           </div>
 
           {/* Display Name (Optional) */}

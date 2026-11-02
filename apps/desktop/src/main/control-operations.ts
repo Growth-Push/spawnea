@@ -263,6 +263,7 @@ export function createControlOperations(
       z.object({
         projectId: z.string().min(1).max(200),
         task: z.string().trim().min(1).max(10_000),
+        originIssueUrl: z.string().max(2048).optional(),
         agentId: z.string().min(1).max(200).optional(),
         serverId: z.string().min(1).max(200).optional(),
         baseBranch: z.string().trim().min(1).max(240).optional(),
@@ -312,6 +313,7 @@ export function createControlOperations(
           projectId: request.projectId,
           agentId: resolvedAgentId,
           task: request.task,
+          originIssueUrl: request.originIssueUrl,
           baseBranch: request.baseBranch,
           useWorktree: request.worktreePath ? false : (request.useWorktree ?? true),
           worktreePath: request.worktreePath,
@@ -325,6 +327,7 @@ export function createControlOperations(
       z.object({
         parentSession: z.string().min(1).max(200),
         task: z.string().trim().min(1).max(4_000),
+        originIssueUrl: z.string().max(2048).optional(),
         name: z.string().trim().min(1).max(120).optional(),
         workspace: z.enum(['same-project', 'new-worktree']).optional(),
         agentId: z.string().min(1).max(240).optional(),

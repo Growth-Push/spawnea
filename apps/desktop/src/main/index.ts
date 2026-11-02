@@ -367,6 +367,7 @@ function registerIpcHandlers(
     if (!range || !Number.isSafeInteger(range.from) || !Number.isSafeInteger(range.to) || range.from < 0 || range.to < range.from || (cursor && (!Number.isSafeInteger(cursor.time) || !Number.isSafeInteger(cursor.id) || cursor.id < 1 || cursor.time < range.from || cursor.time > range.to))) throw new Error('Invalid dashboard history page');
     return history.page(range.from, range.to, cursor, 100);
   });
+  ipcMain.handle('github:links', async (_event, sessionId: string) => repos.github?.links(sessionId) ?? []);
   if (process.env.SPAWNEA_RELEASE_SMOKE === '1') {
     ipcMain.handle('app:quitForReleaseSmoke', (event) => {
       if (event.sender !== mainWindowRef?.webContents) {

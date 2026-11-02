@@ -31,6 +31,7 @@ COMMANDS:
     --task "<description>"      Task description (required)
     [--agent <id>]              Agent harness (e.g. codex, local:codex)
     [--model <id>]              Exact model ID (omit for harness default)
+    [--origin-issue <url>]      Optional originating GitHub issue URL
     [--server <id>]             Target server (default: local)
     [--branch <branch>]         Base git branch
     [--no-worktree]             Do not use isolated worktree
@@ -45,6 +46,7 @@ COMMANDS:
     --parent <id>               Parent session ID (defaults to $SPAWNEA_SESSION_ID)
     --task "<description>"      Task description (required)
     [--agent <id>]              Harness (defaults to parent harness)
+    [--origin-issue <url>]      Optional originating GitHub issue URL
     [--workspace <type>]        Workspace: same-project | new-worktree (default: same-project)
     [--branch <branch>]         Base git branch on origin for new-worktree
     [--name <name>]             Display title for the child
@@ -223,6 +225,7 @@ export async function runCli(argv: string[]): Promise<void> {
           const server = typeof parsed.flags.server === 'string' ? parsed.flags.server : undefined;
           const model = typeof parsed.flags.model === 'string' ? parsed.flags.model : undefined;
           if (parsed.flags.model !== undefined && !model?.trim()) throw new Error('--model requires a non-empty exact model ID');
+          if (parsed.flags['origin-issue'] !== undefined && (typeof parsed.flags['origin-issue'] !== 'string' || !parsed.flags['origin-issue'].trim())) throw new Error('--origin-issue requires a URL');
           const branch = typeof parsed.flags.branch === 'string' ? parsed.flags.branch : undefined;
           const worktree = parsed.flags['no-worktree'] ? false : true;
           const worktreePath = typeof parsed.flags['worktree-path'] === 'string' ? parsed.flags['worktree-path'] : undefined;
@@ -235,6 +238,7 @@ export async function runCli(argv: string[]): Promise<void> {
           const timeoutMs = timeoutSec !== undefined ? Math.round(timeoutSec * 1000) : undefined;
 
           await createSession(client, {
+            originIssueUrl: typeof parsed.flags['origin-issue'] === 'string' ? parsed.flags['origin-issue'] : undefined,
             project,
             task,
             agent,
@@ -287,6 +291,7 @@ export async function runCli(argv: string[]): Promise<void> {
             throw new Error('--branch requires --workspace new-worktree');
           }
           const model = typeof parsed.flags.model === 'string' ? parsed.flags.model : undefined;
+          if (parsed.flags['origin-issue'] !== undefined && (typeof parsed.flags['origin-issue'] !== 'string' || !parsed.flags['origin-issue'].trim())) throw new Error('--origin-issue requires a URL');
           const clientRequestId = typeof parsed.flags['request-id'] === 'string'
             ? parsed.flags['request-id']
             : typeof parsed.flags['client-request-id'] === 'string'
@@ -296,6 +301,7 @@ export async function runCli(argv: string[]): Promise<void> {
           const timeoutMs = timeoutSec !== undefined ? Math.round(timeoutSec * 1000) : undefined;
 
           await createChild(client, {
+            originIssueUrl: typeof parsed.flags['origin-issue'] === 'string' ? parsed.flags['origin-issue'] : undefined,
             parent,
             task,
             agent,

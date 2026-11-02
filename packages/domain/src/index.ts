@@ -9,6 +9,7 @@ export * from './secret-reference.js';
 export * from './control.js';
 export * from './path-security.js';
 export * from './model-selection.js';
+export * from './github-links.js';
 export type SessionStatus =
   | 'starting'
   | 'working'
@@ -258,6 +259,7 @@ export interface Session {
   projectId: string;
   agentId: string;
   task: string;
+  originIssueUrl?: string;
   worktreePath: string;
   branch: string;
   baseBranch?: string;
