@@ -20,13 +20,15 @@ describe('GitHub links', () => {
   });
 
   it('rejects known GitHub site namespaces without rejecting similar owners or repository names', () => {
-    for (const url of ['https://github.com/settings/profile', 'https://github.com/ORGS/example', 'https://github.com/topics/typescript', 'https://github.com/users/example', 'https://github.com/organizations/example', 'https://github.com/marketplace/actions', 'https://github.com/search/advanced', 'https://github.com/notifications/participating']) {
+    for (const url of ['https://github.com/settings/profile', 'https://github.com/ORGS/example', 'https://github.com/topics/typescript', 'https://github.com/users/example', 'https://github.com/organizations/example', 'https://github.com/marketplace/actions', 'https://github.com/search/advanced', 'https://github.com/notifications/participating', 'https://github.com/pulls/assigned', 'https://github.com/PULLS/assigned']) {
       expect(parseGitHubLink(url)).toBeUndefined();
     }
     expect(findGitHubLinks('https://github.com/settings/profile https://github.com/Example/settings https://github.com/example/settings?view=1 https://github.com/settings-team/topics').map((link) => link.url)).toEqual([
       'https://github.com/example/settings', 'https://github.com/settings-team/topics',
     ]);
     expect(parseGitHubLink('https://github.com/example/topics')).toMatchObject({ kind: 'repository' });
+    expect(parseGitHubLink('https://github.com/example/pulls')).toMatchObject({ kind: 'repository' });
+    expect(parseGitHubLink('https://github.com/pulls-team/assigned')).toMatchObject({ kind: 'repository' });
     expect(parseGitHubLink('https://github.com/example/settings/issues/3')).toMatchObject({ kind: 'issue', number: '3' });
     expect(parseGitHubLink('https://github.com/example/topics/pull/4')).toMatchObject({ kind: 'pull', number: '4' });
   });

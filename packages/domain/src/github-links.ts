@@ -8,7 +8,7 @@ export type GitHubLink = {
 // These root namespaces identify GitHub site pages, not repository owners.
 const GITHUB_SITE_NAMESPACES = new Set([
   'account', 'apps', 'codespaces', 'collections', 'explore', 'features',
-  'login', 'marketplace', 'notifications', 'organizations', 'orgs', 'pricing',
+  'login', 'marketplace', 'notifications', 'organizations', 'orgs', 'pricing', 'pulls',
   'search', 'settings', 'signup', 'sponsors', 'topics', 'users',
 ]);
 
