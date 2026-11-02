@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { GitDiffResult } from '@spawnea/domain';
 import {
   FileCode2,
@@ -32,12 +32,23 @@ export function DiffViewer({
   const [copied, setCopied] = useState(false);
   const [copiedRef, setCopiedRef] = useState<string | null>(null);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const referenceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    setCopied(false);
+    setCopiedRef(null);
+    return () => {
+      clearTimeout(copyTimer.current);
+      clearTimeout(referenceTimer.current);
+    };
+  }, [worktreePath, selectedFilePath]);
 
   const handleCopyDiff = () => {
     if (!diffResult?.rawDiff) return;
-    navigator.clipboard.writeText(diffResult.rawDiff);
+    void navigator.clipboard.writeText(diffResult.rawDiff).catch(() => {});
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(false), 2000);
   };
 
   const handleCopyLineRef = (filePath: string, lineNum?: number) => {
@@ -48,9 +59,10 @@ export function DiffViewer({
         : `${worktreePath.replace(/\/+$/, '')}/${filePath}`
       : filePath;
     const ref = `${targetPath}:${lineNum}`;
-    navigator.clipboard.writeText(ref);
+    void navigator.clipboard.writeText(ref).catch(() => {});
     setCopiedRef(ref);
-    setTimeout(() => setCopiedRef(null), 2000);
+    clearTimeout(referenceTimer.current);
+    referenceTimer.current = setTimeout(() => setCopiedRef(null), 2000);
   };
 
   const toggleCollapse = (path: string) => {

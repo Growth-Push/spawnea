@@ -55,6 +55,7 @@ export function CloseParentModal({
     if (!isOpen || !parentSession || isLoading) return;
 
     const timer = setTimeout(() => {
+      if (typeof document === 'undefined') return;
       const active = document.activeElement;
       if (modalRef.current && (!modalRef.current.contains(active) || active === modalRef.current)) {
         const primaryButton = modalRef.current.querySelector<HTMLElement>(

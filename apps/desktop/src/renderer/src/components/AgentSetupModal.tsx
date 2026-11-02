@@ -112,11 +112,22 @@ export function AgentSetupModal({
   const onCloseRef = useRef(onClose);
   const promptResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyActiveRef = useRef<() => boolean>(() => false);
+  const promptRequestRef = useRef(0);
+  const completionRequestRef = useRef(0);
 
-  useEffect(() => () => {
-    if (promptResetTimer.current) clearTimeout(promptResetTimer.current);
-    if (completionResetTimer.current) clearTimeout(completionResetTimer.current);
-  }, []);
+  useEffect(() => {
+    let active = isOpen;
+    copyActiveRef.current = () => active;
+    setCopyPromptStatus('idle');
+    setCopyCompletionStatus('idle');
+    setIsInstallingCli(false);
+    return () => {
+      active = false;
+      if (promptResetTimer.current) clearTimeout(promptResetTimer.current);
+      if (completionResetTimer.current) clearTimeout(completionResetTimer.current);
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -196,16 +207,20 @@ export function AgentSetupModal({
   if (!isOpen) return null;
 
   const handleCopyPrompt = async () => {
+    const active = copyActiveRef.current;
+    const request = ++promptRequestRef.current;
     try {
       if (window.spawneaApi?.writeClipboardText) {
         await window.spawneaApi.writeClipboardText(skillPromptText);
       } else {
         await navigator.clipboard.writeText(skillPromptText);
       }
+      if (!active() || request !== promptRequestRef.current) return;
       setCopyPromptStatus('copied');
       if (promptResetTimer.current) clearTimeout(promptResetTimer.current);
       promptResetTimer.current = setTimeout(() => setCopyPromptStatus('idle'), 2000);
     } catch {
+      if (!active() || request !== promptRequestRef.current) return;
       setCopyPromptStatus('failed');
       if (promptResetTimer.current) clearTimeout(promptResetTimer.current);
       promptResetTimer.current = setTimeout(() => setCopyPromptStatus('idle'), 2000);
@@ -213,16 +228,20 @@ export function AgentSetupModal({
   };
 
   const handleCopyCompletion = async () => {
+    const active = copyActiveRef.current;
+    const request = ++completionRequestRef.current;
     try {
       if (window.spawneaApi?.writeClipboardText) {
         await window.spawneaApi.writeClipboardText(completionSnippet);
       } else {
         await navigator.clipboard.writeText(completionSnippet);
       }
+      if (!active() || request !== completionRequestRef.current) return;
       setCopyCompletionStatus('copied');
       if (completionResetTimer.current) clearTimeout(completionResetTimer.current);
       completionResetTimer.current = setTimeout(() => setCopyCompletionStatus('idle'), 2000);
     } catch {
+      if (!active() || request !== completionRequestRef.current) return;
       setCopyCompletionStatus('failed');
       if (completionResetTimer.current) clearTimeout(completionResetTimer.current);
       completionResetTimer.current = setTimeout(() => setCopyCompletionStatus('idle'), 2000);
@@ -231,15 +250,16 @@ export function AgentSetupModal({
 
   const handleInstallCli = async () => {
     if (!window.spawneaApi?.installCliInPath) return;
+    const active = copyActiveRef.current;
     setIsInstallingCli(true);
     setInstallError(null);
     try {
       const res = await window.spawneaApi.installCliInPath();
-      setCliPathStatus(res);
+      if (active()) setCliPathStatus(res);
     } catch (err: any) {
-      setInstallError(err?.message || 'Failed to install CLI in user PATH');
+      if (active()) setInstallError(err?.message || 'Failed to install CLI in user PATH');
     } finally {
-      setIsInstallingCli(false);
+      if (active()) setIsInstallingCli(false);
     }
   };
 

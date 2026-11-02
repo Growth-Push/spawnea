@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { QuickSwitcherModal } from './QuickSwitcherModal';
 import type { Session, Server, Project, Agent } from '@spawnea/domain';
@@ -67,6 +67,21 @@ const mockSessions: Session[] = [
 ];
 
 describe('QuickSwitcherModal component', () => {
+  it('cancels old focus on close and focuses only after reopening', () => {
+    vi.useFakeTimers();
+    const props = { onClose: vi.fn(), sessions: mockSessions, servers: mockServers, projects: mockProjects, agents: mockAgents, activeSessionId: 'sess-1', activeTab: 'terminal' as const, onSelectSession: vi.fn(), onSelectTab: vi.fn(), onOpenCreateModal: vi.fn(), onRefresh: vi.fn(), onToggleSidebar: vi.fn() };
+    const view = render(<QuickSwitcherModal {...props} isOpen />);
+    act(() => vi.advanceTimersByTime(30));
+    view.rerender(<QuickSwitcherModal {...props} isOpen={false} />);
+    view.rerender(<QuickSwitcherModal {...props} isOpen />);
+    const input = screen.getByTestId('quick-switcher-input');
+    act(() => vi.advanceTimersByTime(20));
+    expect(document.activeElement).not.toBe(input);
+    act(() => vi.advanceTimersByTime(30));
+    expect(document.activeElement).toBe(input);
+    view.unmount();
+    vi.useRealTimers();
+  });
   it('does not render when isOpen is false', () => {
     render(
       <QuickSwitcherModal

@@ -676,6 +676,19 @@ describe('TerminalView with ReconnectionBanner and Resilience', () => {
     expect(window.spawneaApi.detachSession).toHaveBeenCalledWith(mockSession.id);
   });
 
+  it('does not schedule a retry when an attachment rejects after unmount', async () => {
+    let rejectAttach!: (error: Error) => void;
+    window.spawneaApi.attachSession = vi.fn().mockReturnValue(new Promise((_resolve, reject) => { rejectAttach = reject; }));
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    const view = render(<TerminalView session={mockSession} />);
+    await waitFor(() => expect(window.spawneaApi.attachSession).toHaveBeenCalled());
+    view.unmount();
+    timer.mockClear();
+    await act(async () => { rejectAttach(new Error('disconnected')); await Promise.resolve(); });
+    expect(timer.mock.calls.some(([, delay]) => delay === 2000)).toBe(false);
+    timer.mockRestore();
+  });
+
   it('defers status-driven terminal attachments while hidden', async () => {
     const view = render(
       <div className="hidden">

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type {
   Session,
   Server,
@@ -139,6 +139,17 @@ export function StateFeedbackModal({
   const [submitResult, setSubmitResult] = useState<StateFeedbackResult | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const isCurrent = useRef<() => boolean>(() => false);
+
+  useEffect(() => {
+    let active = isOpen && !!session;
+    isCurrent.current = () => active;
+    return () => {
+      active = false;
+      clearTimeout(copyTimer.current);
+    };
+  }, [isOpen, session?.id]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -166,6 +177,10 @@ export function StateFeedbackModal({
     }
 
     const openedStatus = session.status;
+    setIsSubmitting(false);
+    setSubmitResult(null);
+    setSubmitError(null);
+    setCopied(false);
     setObserved({ sessionId: session.id, status: openedStatus });
     // A response that arrives after the dialog closed or switched sessions is ignored.
     let cancelled = false;
@@ -215,6 +230,7 @@ export function StateFeedbackModal({
 
   const handleSubmit = async () => {
     if (!session) return;
+    const active = isCurrent.current;
     setIsSubmitting(true);
     setSubmitError(null);
 
@@ -250,7 +266,7 @@ export function StateFeedbackModal({
     try {
       if (window.spawneaApi?.submitStateFeedback) {
         const res = await window.spawneaApi.submitStateFeedback(report);
-        setSubmitResult(res);
+        if (active()) setSubmitResult(res);
       } else {
         // Fallback for tests/mock
         setSubmitResult({
@@ -260,17 +276,18 @@ export function StateFeedbackModal({
         });
       }
     } catch (err: any) {
-      setSubmitError(err.message || 'Failed to save feedback fixture');
+      if (active()) setSubmitError(err.message || 'Failed to save feedback fixture');
     } finally {
-      setIsSubmitting(false);
+      if (active()) setIsSubmitting(false);
     }
   };
 
   const handleCopyFixture = () => {
     if (!submitResult?.fixtureJson) return;
-    navigator.clipboard.writeText(submitResult.fixtureJson);
+    void navigator.clipboard.writeText(submitResult.fixtureJson).catch(() => {});
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (

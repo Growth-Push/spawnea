@@ -94,6 +94,19 @@ describe('StateFeedbackModal (FG-4.2.5)', () => {
     };
   });
 
+  it('ignores a submitted result after closing and reopening for another session', async () => {
+    let resolveSubmit!: (result: StateFeedbackResult) => void;
+    window.spawneaApi.submitStateFeedback = vi.fn().mockReturnValue(new Promise<StateFeedbackResult>((resolve) => { resolveSubmit = resolve; }));
+    const view = render(<StateFeedbackModal isOpen session={mockSession} onClose={vi.fn()} />);
+    await waitFor(() => expect((screen.getByTestId('feedback-modal-submit-btn') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('feedback-modal-submit-btn'));
+    view.rerender(<StateFeedbackModal isOpen={false} session={mockSession} onClose={vi.fn()} />);
+    view.rerender(<StateFeedbackModal isOpen session={{ ...mockSession, id: 'other-session' }} onClose={vi.fn()} />);
+    await act(async () => { resolveSubmit(mockSubmitResult); await Promise.resolve(); });
+    expect(screen.queryByText(mockSubmitResult.filePath!)).toBeNull();
+    expect(screen.queryByTestId('feedback-modal-submit-btn')).not.toBeNull();
+  });
+
   it('renders nothing when isOpen is false', () => {
     const { container } = render(
       <StateFeedbackModal
