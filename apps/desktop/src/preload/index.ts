@@ -49,12 +49,7 @@ const releaseSmokeApi = process.env.SPAWNEA_RELEASE_SMOKE === '1'
 
 export const api = {
   ...releaseSmokeApi,
-  getGitHubSettings: (projectId: string): Promise<{ trackerEnabled: boolean; ciEnabled: boolean }> => ipcRenderer.invoke('github:settings', projectId),
-  setGitHubSettings: (projectId: string, settings: { trackerEnabled: boolean; ciEnabled: boolean }): Promise<void> => ipcRenderer.invoke('github:setSettings', projectId, settings),
-  getSessionLinks: (sessionId: string): Promise<Array<{ url: string; kind: 'issue' | 'pull'; source: 'task' | 'prompt' | 'output' }>> => ipcRenderer.invoke('github:links', sessionId),
-  getGitHubIssue: (sessionId: string): Promise<import('@spawnea/domain').GitHubIssueMetadata | null> => ipcRenderer.invoke('github:issue', sessionId),
-  getGitHubCi: (sessionId: string, pullUrl: string | undefined, requestId: string): Promise<import('@spawnea/domain').GitHubCiResult> => ipcRenderer.invoke('github:ci', sessionId, pullUrl, requestId),
-  cancelGitHubCi: (requestId: string): Promise<void> => ipcRenderer.invoke('github:cancelCi', requestId),
+  getSessionLinks: (sessionId: string): Promise<Array<{ url: string; kind: 'repository' | 'issue' | 'pull'; source: 'task' | 'prompt' | 'output' }>> => ipcRenderer.invoke('github:links', sessionId),
 
   // CLI PATH Management
   getCliPathStatus: (): Promise<{ installed: boolean; targetPath: string; symlinkPath: string; isValid: boolean; isInPath?: boolean; pathInstruction?: string; error?: string }> =>

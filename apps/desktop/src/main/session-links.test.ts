@@ -17,6 +17,14 @@ describe('session link capture', () => {
     expect(JSON.stringify(addLink.mock.calls)).not.toContain('secret');
   });
 
+  it.each(['task', 'prompt', 'output'] as const)('retains a complete repository URL from %s', async (source) => {
+    const addLink = vi.fn();
+    const retainLinks = vi.fn();
+    await retainSessionLinks({ github: { addLink } } as never, 'session', source, 'See **https://github.com/Example/my_repo?tab=readme**', { retainLinks } as never);
+    expect(addLink).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://github.com/example/my_repo', kind: 'repository', source }));
+    expect(retainLinks).toHaveBeenCalledWith('session', [{ url: 'https://github.com/example/my_repo', kind: 'repository', source }]);
+  });
+
   it('retains the final reference from an actual remain-on-exit tmux pane', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'spawnea-dead-links-'));
     const tmux = (...args: string[]) => execFileSync('tmux', ['-S', join(dir, 'tmux.sock'), ...args], { encoding: 'utf8' });

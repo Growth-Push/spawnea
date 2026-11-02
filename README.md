@@ -113,8 +113,6 @@ Spawnea is released under the [Apache License 2.0](LICENSE).
   <img src="docs/assets/spawnea-wizard.gif" alt="Spawnea wizard casting agent sessions" width="480">
 </p>
 
-### Optional GitHub links and CI
+### Contextual GitHub links
 
-The Artifacts view includes a separate Links section. Full GitHub issue and pull request URLs observed in tasks, submitted prompts and a bounded terminal tail are retained as links, with explicit copy and open actions. A session can also have a separate originating issue. References can be missed while Spawnea is closed or if output leaves the captured tail. Spawnea does not store a terminal transcript for this feature.
-
-Issue metadata and CI can be enabled independently per project in the Links or Git view. They use the local `gh` client and its existing github.com authentication. CI shows the exact published commit and the local HEAD separately, and supports an explicitly selected pull request. Missing, skipped, cancelled or unavailable checks do not count as success. GitHub integration is read-only and disabled by default.
+Complete GitHub repository, issue and pull request URLs observed in tasks, submitted prompts and a bounded terminal tail appear as contextual buttons in the session workspace. An optional originating issue is distinguished from other references. Opening a link is explicit and does not require provider authentication. References can be missed while Spawnea is closed or if output leaves the captured tail. Spawnea does not store a terminal transcript for this feature.

@@ -156,12 +156,7 @@ export interface FinishSessionResult {
 }
 
 export interface IpcChannels {
-  'github:settings': (projectId: string) => Promise<{ trackerEnabled: boolean; ciEnabled: boolean }>;
-  'github:setSettings': (projectId: string, settings: { trackerEnabled: boolean; ciEnabled: boolean }) => Promise<void>;
-  'github:links': (sessionId: string) => Promise<Array<{ sessionId: string; url: string; kind: 'issue' | 'pull'; source: 'task' | 'prompt' | 'output'; createdAt: Date }>>;
-  'github:issue': (sessionId: string) => Promise<import('./github-ci.js').GitHubIssueMetadata | null>;
-  'github:ci': (sessionId: string, pullUrl: string | undefined, requestId: string) => Promise<import('./github-ci.js').GitHubCiResult>;
-  'github:cancelCi': (requestId: string) => Promise<void>;
+  'github:links': (sessionId: string) => Promise<Array<{ sessionId: string; url: string; kind: 'repository' | 'issue' | 'pull'; source: 'task' | 'prompt' | 'output'; createdAt: Date }>>;
   // Operational Catalog
   'catalog:get': () => Promise<CatalogState>;
   'catalog:reload': () => Promise<CatalogReloadResult>;

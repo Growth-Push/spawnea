@@ -140,7 +140,8 @@ describe('Database Migrations', () => {
     add.run('x', 'https://github.com/example/repo/issues/1', 'issue', 'task', 1);
     add.run('x', 'https://github.com/example/repo/issues/1', 'issue', 'task', 2);
     add.run('x', 'https://github.com/example/repo/issues/1', 'issue', 'output', 3);
-    expect(sqlite.prepare('SELECT source FROM session_links ORDER BY source').all()).toEqual([{ source: 'output' }, { source: 'task' }]);
+    add.run('x', 'https://github.com/example/repo', 'repository', 'prompt', 4);
+    expect(sqlite.prepare('SELECT kind, source FROM session_links ORDER BY source').all()).toEqual([{ kind: 'issue', source: 'output' }, { kind: 'repository', source: 'prompt' }, { kind: 'issue', source: 'task' }]);
     sqlite.prepare('DELETE FROM sessions WHERE id = ?').run('x');
     expect(sqlite.prepare('SELECT count(*) AS count FROM session_links').get()).toEqual({ count: 0 });
   });

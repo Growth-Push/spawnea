@@ -1,11 +1,16 @@
-/** A complete, canonical GitHub issue or pull request reference. */
-export interface GitHubLink {
+/** A complete, canonical GitHub repository, issue or pull request reference. */
+export type GitHubLink = {
   url: string;
   owner: string;
   repository: string;
-  kind: 'issue' | 'pull';
-  number: string;
-}
+} & ({ kind: 'repository' } | { kind: 'issue' | 'pull'; number: string });
+
+// These root namespaces identify GitHub site pages, not repository owners.
+const GITHUB_SITE_NAMESPACES = new Set([
+  'account', 'apps', 'codespaces', 'collections', 'explore', 'features',
+  'login', 'marketplace', 'notifications', 'organizations', 'orgs', 'pricing',
+  'search', 'settings', 'signup', 'sponsors', 'topics', 'users',
+]);
 
 /** Accept only a complete github.com resource URL, never a shorthand reference. */
 export function parseGitHubLink(input: string): GitHubLink | undefined {
@@ -15,14 +20,22 @@ export function parseGitHubLink(input: string): GitHubLink | undefined {
   } catch {
     return undefined;
   }
-  if (url.protocol !== 'https:' || url.hostname !== 'github.com' || url.port || url.username || url.password) return undefined;
-  const match = /^\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9_.-]+)\/(issues|pull)\/([1-9][0-9]*)\/?$/.exec(url.pathname);
+  if (url.protocol !== 'https:' || url.hostname !== 'github.com' || url.port || url.username || url.password || !/^https:\/\/github\.com\//i.test(input)) return undefined;
+  const path = input.slice(input.indexOf('/', 8)).split(/[?#]/, 1)[0];
+  const match = /^\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9_.-]+)(?:\/(issues|pull)\/([1-9][0-9]*))?\/?$/.exec(path);
   if (!match || match[2] === '.' || match[2] === '..') return undefined;
   const [, owner, repository, resource, number] = match;
-  return {
-    url: `https://github.com/${owner.toLowerCase()}/${repository.toLowerCase()}/${resource}/${number}`,
+  const base = {
     owner: owner.toLowerCase(),
     repository: repository.toLowerCase(),
+  };
+  if (!resource) {
+    if (GITHUB_SITE_NAMESPACES.has(base.owner)) return undefined;
+    return { ...base, url: `https://github.com/${base.owner}/${base.repository}`, kind: 'repository' };
+  }
+  return {
+    url: `https://github.com/${owner.toLowerCase()}/${repository.toLowerCase()}/${resource}/${number}`,
+    ...base,
     kind: resource === 'issues' ? 'issue' : 'pull',
     number,
   };

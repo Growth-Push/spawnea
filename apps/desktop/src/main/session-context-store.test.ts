@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionContextStore } from './session-context-store.js';
 import type { SessionContextFile } from '@spawnea/domain';
+import { validateSessionContext } from '@spawnea/domain';
 
 describe('SessionContextStore', () => {
   let tempDir: string;
@@ -109,6 +110,15 @@ describe('SessionContextStore', () => {
       store.update(sampleContext.sessionId, (current) => ({ ...current, agentSessionId: 'fixture-layout' })),
     ]);
     expect(await store.load(sampleContext.sessionId)).toMatchObject({ status: 'idle', sessionName: 'Renamed', agentSessionId: 'fixture-layout', retainedLinks: [link] });
+  });
+
+  it('preserves repository references alongside older issue references and rejects repositories as origins', async () => {
+    const issue = { url: 'https://github.com/example/repo/issues/1', kind: 'issue' as const, source: 'task' as const };
+    const repo = { url: 'https://github.com/example/repo', kind: 'repository' as const, source: 'output' as const };
+    await store.save({ ...sampleContext, retainedLinks: [issue] });
+    await store.retainLinks(sampleContext.sessionId, [repo]);
+    expect((await store.load(sampleContext.sessionId))?.retainedLinks).toEqual([issue, repo]);
+    expect(validateSessionContext({ ...sampleContext, originIssueUrl: repo.url }).success).toBe(false);
   });
 
   it('rejects a stale snapshot after a link update or deletion and never recreates the file', async () => {

@@ -9,9 +9,26 @@ describe('GitHub links', () => {
   });
 
   it('rejects non-resource and unsafe URLs', () => {
-    for (const url of ['http://github.com/a/b/issues/1', 'https://github.com.evil/a/b/issues/1', ['https://user', 'github.com/a/b/issues/1'].join('@'), 'https://github.com/a/b/issues/0', 'https://github.com/a/b/pull/1/files', '#1']) {
+    for (const url of ['http://github.com/a/b/issues/1', 'https://github.com.evil/a/b/issues/1', 'https://github.com:443/a/b', ['https://user', 'github.com/a/b/issues/1'].join('@'), 'https://github.com/a/b/issues/0', 'https://github.com/a/b/pull/1/files', 'https://github.com/a/b/../c', 'https://github.com/a/b/tree/main', '#1']) {
       expect(parseGitHubLink(url)).toBeUndefined();
     }
+  });
+
+  it('canonicalizes complete repository references without guessing from shorthand', () => {
+    expect(parseGitHubLink('https://github.com/Example/my_repo/?x=1#readme')).toEqual({ url: 'https://github.com/example/my_repo', owner: 'example', repository: 'my_repo', kind: 'repository' });
+    expect(findGitHubLinks('**https://github.com/Example/my_repo** and example/my_repo #1').map((link) => link.url)).toEqual(['https://github.com/example/my_repo']);
+  });
+
+  it('rejects known GitHub site namespaces without rejecting similar owners or repository names', () => {
+    for (const url of ['https://github.com/settings/profile', 'https://github.com/ORGS/example', 'https://github.com/topics/typescript', 'https://github.com/users/example', 'https://github.com/organizations/example', 'https://github.com/marketplace/actions', 'https://github.com/search/advanced', 'https://github.com/notifications/participating']) {
+      expect(parseGitHubLink(url)).toBeUndefined();
+    }
+    expect(findGitHubLinks('https://github.com/settings/profile https://github.com/Example/settings https://github.com/example/settings?view=1 https://github.com/settings-team/topics').map((link) => link.url)).toEqual([
+      'https://github.com/example/settings', 'https://github.com/settings-team/topics',
+    ]);
+    expect(parseGitHubLink('https://github.com/example/topics')).toMatchObject({ kind: 'repository' });
+    expect(parseGitHubLink('https://github.com/example/settings/issues/3')).toMatchObject({ kind: 'issue', number: '3' });
+    expect(parseGitHubLink('https://github.com/example/topics/pull/4')).toMatchObject({ kind: 'pull', number: '4' });
   });
 
   it('deduplicates rendered references and strips surrounding punctuation', () => {

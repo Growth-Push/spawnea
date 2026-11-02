@@ -39,7 +39,7 @@ import {
   Bookmark,
 } from 'lucide-react';
 import { AgentContextView } from './AgentContextView';
-import { GitHubPanel } from './GitHubPanel';
+import { SessionLinkButtons } from './SessionLinkButtons';
 import { formatSessionAgentContext } from '../session-agent-context';
 
 export type WorkspaceTabType = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details' | 'agent-context';
@@ -699,11 +699,7 @@ export function WorkspaceTabs({
           <span>tmux: {session.tmuxSessionName}</span>
         </div>
       </div>
-      {session.originIssueUrl && (
-        <div className="shrink-0 px-4 py-1 border-b border-[#30363d] text-xs text-zinc-300">
-          <button type="button" className="hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400" onClick={() => void window.spawneaApi.openExternalUrl(session.originIssueUrl!)}>Originating issue</button>
-        </div>
-      )}
+      <SessionLinkButtons key={session.id} sessionId={session.id} originIssueUrl={session.originIssueUrl} active={!isSuspended} />
 
       {/* Tab Content Panels */}
       <div
@@ -756,7 +752,6 @@ export function WorkspaceTabs({
         {/* Git Diff Panel (GitStatusView + DiffViewer) */}
         {activeTab === 'diff' && (
           <div className="h-full flex flex-col gap-4 overflow-y-auto">
-            <GitHubPanel key={`${session.id}-ci`} session={session} mode="ci" active={!isSuspended} />
             <GitStatusView
               status={gitStatus}
               selectedFilePath={selectedDiffFilePath}
@@ -782,7 +777,6 @@ export function WorkspaceTabs({
         {/* Artifacts Panel (ArtifactGallery) */}
         {activeTab === 'artifacts' && (
           <>
-          <GitHubPanel key={`${session.id}-links`} session={session} mode="links" active={!isSuspended} />
           <ArtifactGallery
             sessionId={session.id}
             artifacts={artifacts}

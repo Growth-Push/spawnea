@@ -10,7 +10,6 @@ export * from './control.js';
 export * from './path-security.js';
 export * from './model-selection.js';
 export * from './github-links.js';
-export * from './github-ci.js';
 export type SessionStatus =
   | 'starting'
   | 'working'

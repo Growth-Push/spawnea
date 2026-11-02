@@ -892,16 +892,20 @@ hosts:
   it('restores the independent originating issue and retained task links from context', async () => {
     const created = await sessionManager.createSession({
       serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude',
-      task: 'Inspect https://github.com/example/repo/pull/9', originIssueUrl: 'https://github.com/example/other/issues/4',
+      task: 'Inspect https://github.com/example/repo/pull/9 and https://github.com/example/my_repo', originIssueUrl: 'https://github.com/example/other/issues/4',
     });
     expect(created.originIssueUrl).toBe('https://github.com/example/other/issues/4');
-    expect((await contextStore.load(created.id))?.retainedLinks).toEqual([{ url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' }]);
+    expect((await contextStore.load(created.id))?.retainedLinks).toEqual([{ url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' }, { url: 'https://github.com/example/my_repo', kind: 'repository', source: 'task' }]);
     const child = await sessionManager.createChildSession({ parentSessionId: created.id, task: 'Child', workspace: 'same-project' });
     expect(child.originIssueUrl).toBeUndefined();
     await repos.sessions.delete(created.id);
     await sessionManager.restoreSessions();
     expect((await repos.sessions.findById(created.id))?.originIssueUrl).toBe('https://github.com/example/other/issues/4');
-    expect(await repos.github?.links(created.id)).toEqual([expect.objectContaining({ url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' })]);
+    expect(await repos.github?.links(created.id)).toEqual(expect.arrayContaining([expect.objectContaining({ url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' }), expect.objectContaining({ url: 'https://github.com/example/my_repo', kind: 'repository', source: 'task' })]));
+  });
+
+  it('rejects a repository as an originating issue', async () => {
+    await expect(sessionManager.createSession({ serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude', task: 'Task', originIssueUrl: 'https://github.com/example/repo' })).rejects.toThrow('Origin must be a complete GitHub issue URL');
   });
 
   it('rejects blank and oversized session titles without changing persistence', async () => {
