@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { findGitHubLinks, MAX_GITHUB_LINK_LENGTH, MAX_GITHUB_LINK_SCAN_LENGTH, normalizeRetainedGitHubLinks, parseGitHubLink } from '../src/github-links.js';
 
 describe('GitHub links', () => {
@@ -20,7 +21,7 @@ describe('GitHub links', () => {
   });
 
   it('rejects known GitHub site namespaces without rejecting similar owners or repository names', () => {
-    for (const url of ['https://github.com/settings/profile', 'https://github.com/ORGS/example', 'https://github.com/topics/typescript', 'https://github.com/users/example', 'https://github.com/organizations/example', 'https://github.com/marketplace/actions', 'https://github.com/search/advanced', 'https://github.com/notifications/participating', 'https://github.com/pulls/assigned', 'https://github.com/PULLS/assigned']) {
+    for (const url of ['https://github.com/settings/profile', 'https://github.com/ORGS/example', 'https://github.com/topics/typescript', 'https://github.com/users/example', 'https://github.com/organizations/example', 'https://github.com/marketplace/actions', 'https://github.com/search/advanced', 'https://github.com/notifications/participating', 'https://github.com/pulls/assigned', 'https://github.com/PULLS/assigned', 'https://github.com/issues/assigned', 'https://github.com/ISSUES/assigned', 'https://github.com/stars/octocat', 'https://github.com/STARS/octocat']) {
       expect(parseGitHubLink(url)).toBeUndefined();
     }
     expect(findGitHubLinks('https://github.com/settings/profile https://github.com/Example/settings https://github.com/example/settings?view=1 https://github.com/settings-team/topics').map((link) => link.url)).toEqual([
@@ -29,9 +30,20 @@ describe('GitHub links', () => {
     expect(parseGitHubLink('https://github.com/example/topics')).toMatchObject({ kind: 'repository' });
     expect(parseGitHubLink('https://github.com/example/pulls')).toMatchObject({ kind: 'repository' });
     expect(parseGitHubLink('https://github.com/pulls-team/assigned')).toMatchObject({ kind: 'repository' });
+    expect(parseGitHubLink('https://github.com/example/issues')).toMatchObject({ kind: 'repository' });
+    expect(parseGitHubLink('https://github.com/example/stars')).toMatchObject({ kind: 'repository' });
+    expect(parseGitHubLink('https://github.com/issues-team/assigned')).toMatchObject({ kind: 'repository' });
     expect(parseGitHubLink('https://github.com/example/settings/issues/3')).toMatchObject({ kind: 'issue', number: '3' });
     expect(parseGitHubLink('https://github.com/example/topics/pull/4')).toMatchObject({ kind: 'pull', number: '4' });
   });
+
+  it('processes many URLs after a long marker run within a bounded subprocess', () => {
+    const moduleUrl = new URL('../src/github-links.ts', import.meta.url).href;
+    const program = `import { findGitHubLinks } from ${JSON.stringify(moduleUrl)}; const text = '*'.repeat(30000) + Array.from({length: 50}, (_, i) => ' https://github.com/a/b/issues/' + (i + 1)).join(''); console.log(JSON.stringify({ length: text.length, count: findGitHubLinks(text).length }));`;
+    const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', program], { encoding: 'utf8', timeout: 5000 }));
+    expect(result.length).toBeLessThanOrEqual(MAX_GITHUB_LINK_SCAN_LENGTH);
+    expect(result.count).toBe(50);
+  }, 7000);
 
   it('deduplicates rendered references and strips surrounding punctuation', () => {
     expect(findGitHubLinks('🙂 (\u001b[32mhttps://github.com/Example/Repo/pull/7\u001b[0m), https://github.com/example/repo/pull/7.')).toEqual([

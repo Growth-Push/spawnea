@@ -54,8 +54,8 @@ export function normalizeRetainedGitHubLinks(values: readonly RetainedGitHubLink
 // These root namespaces identify GitHub site pages, not repository owners.
 const GITHUB_SITE_NAMESPACES = new Set([
   'account', 'apps', 'codespaces', 'collections', 'explore', 'features',
-  'login', 'marketplace', 'notifications', 'organizations', 'orgs', 'pricing', 'pulls',
-  'search', 'settings', 'signup', 'sponsors', 'topics', 'users',
+  'issues', 'login', 'marketplace', 'notifications', 'organizations', 'orgs', 'pricing', 'pulls',
+  'search', 'settings', 'signup', 'sponsors', 'stars', 'topics', 'users',
 ]);
 
 /** Accept only a complete github.com resource URL, never a shorthand reference. */
@@ -103,7 +103,9 @@ export function findGitHubLinks(text: string): GitHubLink[] {
   for (const match of matches) {
     if (match[0].length > MAX_GITHUB_LINK_LENGTH) continue;
     let cleaned = match[0].replace(/[.,;:!?\])}]+$/, '');
-    const opening = /[`*]+$/.exec(plain.slice(0, match.index))?.[0];
+    let openingStart = match.index;
+    while (openingStart > 0 && (plain[openingStart - 1] === '`' || plain[openingStart - 1] === '*')) openingStart--;
+    const opening = plain.slice(openingStart, match.index);
     const closing = opening?.split('').reverse().join('');
     if (closing && cleaned.endsWith(closing)) {
       cleaned = cleaned.slice(0, -closing.length).replace(/[.,;:!?\])}]+$/, '');
