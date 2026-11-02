@@ -50,6 +50,11 @@ const releaseSmokeApi = process.env.SPAWNEA_RELEASE_SMOKE === '1'
 export const api = {
   ...releaseSmokeApi,
 
+  beginDashboardHistory: (time?: number): Promise<void> => ipcRenderer.invoke('dashboard:begin', time),
+  recordDashboardObservation: (sample: import('@spawnea/domain').DashboardObservation): Promise<void> => ipcRenderer.invoke('dashboard:recordObservation', sample),
+  getDashboardHistory: (range?: { from: number; to: number }): Promise<import('@spawnea/domain').DashboardHistoryView> => ipcRenderer.invoke('dashboard:history', range),
+  getDashboardHistoryPage: (range: { from: number; to: number }, cursor: import('@spawnea/domain').DashboardHistoryCursor | null): Promise<import('@spawnea/domain').DashboardHistoryPage> => ipcRenderer.invoke('dashboard:historyPage', range, cursor),
+
   // CLI PATH Management
   getCliPathStatus: (): Promise<{ installed: boolean; targetPath: string; symlinkPath: string; isValid: boolean; isInPath?: boolean; pathInstruction?: string; error?: string }> =>
     ipcRenderer.invoke('app:getCliPathStatus'),

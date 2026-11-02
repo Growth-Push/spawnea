@@ -1591,8 +1591,8 @@ export function App(): React.JSX.Element {
           agents={agents}
           activeSessionId={activeSessionId}
           isLoading={isLoading}
-          samples={activity.samples}
-          startedAt={activity.startedAt}
+          historyRevision={activity.revision}
+          historyError={activity.error}
           onReturn={handleCloseDashboard}
           onOpenCreateModal={() => setIsCreateModalOpen(true)}
           onSelectSession={(id) => {

@@ -46,10 +46,12 @@ export function countWorking(sessions: readonly Session[]) {
 export function appendActivity(previous: readonly ActivitySample[], sessions: readonly Session[], time: number, observed: boolean): ActivitySample[] {
   const { parents, children } = countWorking(sessions);
   const last = previous.at(-1);
-  return [...previous, {
+  const delayed = observed && last && !last.gap && time - last.time > SAMPLE_INTERVAL * 2;
+  const gap = delayed ? [{ time: last.time + 1, parents: 0, children: 0, gap: true }] : [];
+  return [...previous, ...gap, {
     time,
     parents,
     children,
-    gap: !observed || Boolean(last && time - last.time > SAMPLE_INTERVAL * 2),
+    gap: !observed,
   }].slice(-MAX_SAMPLES);
 }

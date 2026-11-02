@@ -1416,6 +1416,16 @@ hosts:
     expect(mockHost.executedCommands.some(({ command }) => /git branch .*-d/.test(command))).toBe(false);
     expect(await repos.sessions.findAll()).toEqual([]);
     expect(await contextStore.list()).toEqual([]);
+    expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 0 });
+  });
+
+  it('does not count a creation rollback after the session row was saved', async () => {
+    const save = vi.spyOn(repos.sessions, 'save');
+    mockHost.customRules.unshift({ pattern: 'tmux new-session', response: { stdout: '', stderr: 'fixture failure', exitCode: 1 } });
+    await expect(sessionManager.createSession({ serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude', task: 'Example' })).rejects.toThrow();
+    expect(save).toHaveBeenCalled();
+    expect(await repos.sessions.findAll()).toEqual([]);
+    expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 0 });
   });
 
   it('fails truthfully if project folder preparation fails (FG-2.2.5)', async () => {
@@ -1784,6 +1794,9 @@ hosts:
     // Verify DB record deleted
     const dbSession = await repos.sessions.findById(session.id);
     expect(dbSession).toBeNull();
+    expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 1 });
+    await sessionManager.deleteSession(session.id);
+    expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 1 });
 
     // Verify context file removed from disk
     const ctx = await contextStore.load(session.id);
@@ -1804,6 +1817,7 @@ hosts:
     expect(await contextStore.load(session.id)).toBeNull();
     expect(mockHost.sessions.has(session.tmuxSessionName)).toBe(true);
     expect(kill).not.toHaveBeenCalled();
+    expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 0 });
   });
 
   it('refuses to forget a child that shares a managed worktree with its parent', async () => {
@@ -2267,6 +2281,7 @@ up 1 day, 5 hours
         'agent-validated'
       );
       expect(result).toEqual({ action: 'close', removed: true });
+      expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 1 });
     });
 
     it('rejects agent-validated close with stashChanges: false on a dirty worktree', async () => {
@@ -2571,6 +2586,7 @@ up 1 day, 5 hours
 
       const result = await sessionManager.finishSession(session.id, 'integrate');
       expect(result).toEqual({ action: 'integrate', removed: true });
+      expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 1 });
 
       // Session record and context removed
       expect(await repos.sessions.findById(session.id)).toBeNull();

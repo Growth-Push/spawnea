@@ -46,7 +46,7 @@ export interface SessionRepository {
   ): Promise<Session>;
   update(id: string, updates: Partial<Omit<Session, 'id' | 'createdAt'>>): Promise<Session>;
   updateStatus(id: string, status: SessionStatus, lastActivityAt?: Date): Promise<Session>;
-  delete(id: string): Promise<boolean>;
+  delete(id: string, options?: { countAsClosed?: boolean }): Promise<boolean>;
 }
 
 export interface ArtifactRepository {

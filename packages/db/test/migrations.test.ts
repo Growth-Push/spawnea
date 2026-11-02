@@ -113,7 +113,7 @@ describe('Database Migrations', () => {
     insert.run('ui', 'tmux-ui', 'ui');
 
     const result = runMigrations(sqlite);
-    expect(result.appliedNames).toEqual(['0010_rename_mcp_creation_source']);
+    expect(result.appliedNames).toEqual(['0010_rename_mcp_creation_source', '0011_dashboard_history']);
     const rows = sqlite.prepare('SELECT id, creation_source FROM sessions ORDER BY id').all();
     expect(rows).toEqual([
       { id: 'legacy', creation_source: 'control' },

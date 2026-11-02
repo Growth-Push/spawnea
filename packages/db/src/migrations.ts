@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { dashboardHistorySchema } from './dashboard-history/schema.js';
 
 export interface Migration {
   name: string;
@@ -137,6 +138,10 @@ export const MIGRATIONS: Migration[] = [
     sql: `
       UPDATE sessions SET creation_source = 'control' WHERE creation_source = 'mcp';
     `,
+  },
+  {
+    name: '0011_dashboard_history',
+    sql: dashboardHistorySchema,
   },
 ];
 
