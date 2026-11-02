@@ -589,6 +589,34 @@ describe('WorkspaceTabs Component', () => {
     expect(screen.queryByTestId('detected-output-banner')).toBeNull();
   });
 
+  it('keeps the committed session artifact response when a concurrent render is discarded', async () => {
+    let finish!: (items: Artifact[]) => void;
+    let select!: (id: string) => void;
+    let renderedSuspended = false;
+    const never = new Promise<void>(() => {});
+    window.spawneaApi.getArtifacts = vi.fn(() => new Promise<Artifact[]>((resolve) => { finish = resolve; }));
+    function SuspendAfterTabs({ id }: { id: string }) {
+      if (id === 'sess-2') { renderedSuspended = true; throw never; }
+      return null;
+    }
+    function Fixture() {
+      const [id, setId] = React.useState('sess-1');
+      select = setId;
+      return <React.Suspense fallback={<div>Suspended</div>}>
+        <WorkspaceTabs session={{ ...mockSession, id }} activeTab="artifacts" onTabChange={vi.fn()} />
+        <SuspendAfterTabs id={id} />
+      </React.Suspense>;
+    }
+    render(<Fixture />);
+    await waitFor(() => expect(window.spawneaApi.getArtifacts).toHaveBeenCalled());
+    await act(async () => { React.startTransition(() => select('sess-2')); });
+    expect(renderedSuspended).toBe(true);
+    expect(screen.queryByText('Suspended')).toBeNull();
+    await act(async () => { finish([mockOutputArtifact]); });
+    expect(screen.getByText('summary.md')).toBeDefined();
+    expect(screen.queryByText('Loading artifacts...')).toBeNull();
+  });
+
   it.each(['resolve', 'reject'])('ignores an old session artifact %s while the new session is loading', async (outcome) => {
     const pending: Array<{ sessionId: string; resolve: (items: Artifact[]) => void; reject: (error: Error) => void }> = [];
     window.spawneaApi.getArtifacts = vi.fn((sessionId: string) => new Promise<Artifact[]>((resolve, reject) => { pending.push({ sessionId, resolve, reject }); }));

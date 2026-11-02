@@ -140,13 +140,19 @@ export function StateFeedbackModal({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const isCurrent = useRef<() => boolean>(() => false);
+  const submissions = useRef(new Map<string, { pending: boolean; result: StateFeedbackResult | null; error: string | null }>());
+  const visibleSession = useRef<string | null>(null);
 
   useEffect(() => {
     let active = isOpen && !!session;
-    isCurrent.current = () => active;
+    visibleSession.current = active ? session!.id : null;
     return () => {
+      if (active && session) {
+        const submission = submissions.current.get(session.id);
+        if (submission && !submission.pending) submissions.current.delete(session.id);
+      }
       active = false;
+      visibleSession.current = null;
       clearTimeout(copyTimer.current);
     };
   }, [isOpen, session?.id]);
@@ -177,9 +183,10 @@ export function StateFeedbackModal({
     }
 
     const openedStatus = session.status;
-    setIsSubmitting(false);
-    setSubmitResult(null);
-    setSubmitError(null);
+    const submission = submissions.current.get(session.id);
+    setIsSubmitting(submission?.pending ?? false);
+    setSubmitResult(submission?.result ?? null);
+    setSubmitError(submission?.error ?? null);
     setCopied(false);
     setObserved({ sessionId: session.id, status: openedStatus });
     // A response that arrives after the dialog closed or switched sessions is ignored.
@@ -230,7 +237,10 @@ export function StateFeedbackModal({
 
   const handleSubmit = async () => {
     if (!session) return;
-    const active = isCurrent.current;
+    if (submissions.current.get(session.id)?.pending) return;
+    const sessionId = session.id;
+    const submission = { pending: true, result: null as StateFeedbackResult | null, error: null as string | null };
+    submissions.current.set(sessionId, submission);
     setIsSubmitting(true);
     setSubmitError(null);
 
@@ -266,19 +276,27 @@ export function StateFeedbackModal({
     try {
       if (window.spawneaApi?.submitStateFeedback) {
         const res = await window.spawneaApi.submitStateFeedback(report);
-        if (active()) setSubmitResult(res);
+        submission.result = res;
+        if (visibleSession.current === sessionId) setSubmitResult(res);
       } else {
         // Fallback for tests/mock
-        setSubmitResult({
+        submission.result = {
           success: true,
           filePath: `application user-data/feedback/state-feedback-${session.id}.json`,
           fixtureJson: JSON.stringify(report, null, 2),
-        });
+        };
+        if (visibleSession.current === sessionId) setSubmitResult(submission.result);
       }
     } catch (err: any) {
-      if (active()) setSubmitError(err.message || 'Failed to save feedback fixture');
+      submission.error = err.message || 'Failed to save feedback fixture';
+      if (visibleSession.current === sessionId) setSubmitError(submission.error);
     } finally {
-      if (active()) setIsSubmitting(false);
+      submission.pending = false;
+      // Keep at most one completed receipt for a request that finished away from its view.
+      for (const [id, entry] of submissions.current) {
+        if (id !== sessionId && !entry.pending) submissions.current.delete(id);
+      }
+      if (visibleSession.current === sessionId) setIsSubmitting(false);
     }
   };
 

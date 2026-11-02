@@ -94,6 +94,55 @@ describe('StateFeedbackModal (FG-4.2.5)', () => {
     };
   });
 
+  it('permits a new report after a completed save is closed and reopened', async () => {
+    const modal = (open: boolean) => <StateFeedbackModal isOpen={open} session={mockSession} onClose={vi.fn()} />;
+    const view = render(modal(true));
+    await waitFor(() => expect((screen.getByTestId('feedback-modal-submit-btn') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('feedback-modal-submit-btn'));
+    await screen.findByTestId('feedback-success-card');
+    view.rerender(modal(false));
+    view.rerender(modal(true));
+    await waitFor(() => expect((screen.getByTestId('feedback-modal-submit-btn') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('feedback-modal-submit-btn'));
+    await waitFor(() => expect(window.spawneaApi.submitStateFeedback).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows a pending save that completes while closed, then clears it on the next close', async () => {
+    let finish!: (result: StateFeedbackResult) => void;
+    window.spawneaApi.submitStateFeedback = vi.fn().mockReturnValue(new Promise<StateFeedbackResult>((resolve) => { finish = resolve; }));
+    const modal = (open: boolean) => <StateFeedbackModal isOpen={open} session={mockSession} onClose={vi.fn()} />;
+    const view = render(modal(true));
+    await waitFor(() => expect((screen.getByTestId('feedback-modal-submit-btn') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('feedback-modal-submit-btn'));
+    view.rerender(modal(false));
+    await act(async () => { finish(mockSubmitResult); });
+    view.rerender(modal(true));
+    await screen.findByTestId('feedback-success-card');
+    view.rerender(modal(false));
+    view.rerender(modal(true));
+    await waitFor(() => expect((screen.getByTestId('feedback-modal-submit-btn') as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it.each(['feedback-modal-close-icon', 'feedback-modal-cancel-btn'])('retains a pending save after closing via %s', async (closeId) => {
+    let finish!: (result: StateFeedbackResult) => void;
+    const submit = vi.fn().mockReturnValue(new Promise<StateFeedbackResult>((resolve) => { finish = resolve; }));
+    window.spawneaApi.submitStateFeedback = submit;
+    const onClose = vi.fn();
+    const modal = (open: boolean) => <StateFeedbackModal isOpen={open} session={mockSession} onClose={onClose} />;
+    const view = render(modal(true));
+    await waitFor(() => expect((screen.getByTestId('feedback-modal-submit-btn') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('feedback-modal-submit-btn'));
+    fireEvent.click(screen.getByTestId(closeId));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    view.rerender(modal(false));
+    view.rerender(modal(true));
+    await waitFor(() => expect(window.spawneaApi.getStateSnapshot).toHaveBeenCalledTimes(2));
+    expect((screen.getByTestId('feedback-modal-submit-btn') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { finish(mockSubmitResult); });
+    expect(screen.getByText(mockSubmitResult.filePath!)).toBeDefined();
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores a submitted result after closing and reopening for another session', async () => {
     let resolveSubmit!: (result: StateFeedbackResult) => void;
     window.spawneaApi.submitStateFeedback = vi.fn().mockReturnValue(new Promise<StateFeedbackResult>((resolve) => { resolveSubmit = resolve; }));

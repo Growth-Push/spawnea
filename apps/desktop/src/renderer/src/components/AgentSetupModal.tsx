@@ -44,6 +44,13 @@ export function AgentSetupModal({
     error?: string;
   } | null>(null);
   const [isInstallingCli, setIsInstallingCli] = useState(false);
+  const installingCliRef = useRef(false);
+  const mountedRef = useRef(false);
+  const statusVersionRef = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const [installError, setInstallError] = useState<string | null>(null);
   const [activeProfile, setActiveProfile] = useState<string | null>(propProfile ?? null);
 
@@ -121,7 +128,6 @@ export function AgentSetupModal({
     copyActiveRef.current = () => active;
     setCopyPromptStatus('idle');
     setCopyCompletionStatus('idle');
-    setIsInstallingCli(false);
     return () => {
       active = false;
       if (promptResetTimer.current) clearTimeout(promptResetTimer.current);
@@ -182,10 +188,11 @@ export function AgentSetupModal({
     if (!isOpen) return;
 
     let active = true;
+    const statusVersion = statusVersionRef.current;
     if (window.spawneaApi?.getCliPathStatus) {
       window.spawneaApi.getCliPathStatus()
         .then((res) => {
-          if (active) setCliPathStatus(res);
+          if (active && statusVersion === statusVersionRef.current) setCliPathStatus(res);
         })
         .catch((err) => {
           if (active) setInstallError(err?.message || String(err));
@@ -249,17 +256,20 @@ export function AgentSetupModal({
   };
 
   const handleInstallCli = async () => {
-    if (!window.spawneaApi?.installCliInPath) return;
-    const active = copyActiveRef.current;
+    if (!window.spawneaApi?.installCliInPath || installingCliRef.current) return;
+    installingCliRef.current = true;
+    statusVersionRef.current += 1;
     setIsInstallingCli(true);
     setInstallError(null);
     try {
       const res = await window.spawneaApi.installCliInPath();
-      if (active()) setCliPathStatus(res);
+      statusVersionRef.current += 1;
+      if (mountedRef.current) setCliPathStatus(res);
     } catch (err: any) {
-      if (active()) setInstallError(err?.message || 'Failed to install CLI in user PATH');
+      if (mountedRef.current) setInstallError(err?.message || 'Failed to install CLI in user PATH');
     } finally {
-      if (active()) setIsInstallingCli(false);
+      installingCliRef.current = false;
+      if (mountedRef.current) setIsInstallingCli(false);
     }
   };
 

@@ -499,7 +499,7 @@ export function App(): React.JSX.Element {
     const sessionIds = sessionIdsKey.split('\0');
     let cancelled = false;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
-    const deadlines = new Set<ReturnType<typeof setTimeout>>();
+    const deadlines = new Map<ReturnType<typeof setTimeout>, () => void>();
     const gitStatusTimeoutMs = 6000;
     const getBoundedGitStatus = async (sessionId: string) => {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -520,7 +520,7 @@ export function App(): React.JSX.Element {
           request,
           new Promise<never>((_, reject) => {
             timeoutId = setTimeout(() => reject(new Error(`Git status timed out after ${gitStatusTimeoutMs}ms`)), gitStatusTimeoutMs);
-            deadlines.add(timeoutId);
+            deadlines.set(timeoutId, () => reject(new Error('Git status wait cancelled')));
           }),
         ]);
       } finally {
@@ -615,7 +615,7 @@ export function App(): React.JSX.Element {
     return () => {
       cancelled = true;
       if (pollTimer !== undefined) clearTimeout(pollTimer);
-      deadlines.forEach((deadline) => clearTimeout(deadline));
+      deadlines.forEach((cancel, deadline) => { clearTimeout(deadline); cancel(); });
       deadlines.clear();
     };
   }, [sessionIdsKey, activeSessionId, gitRefreshNonce]);

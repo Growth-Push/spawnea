@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AgentSetupModal } from './AgentSetupModal';
 import type { OperationalCatalog } from '@spawnea/domain';
 
@@ -57,6 +57,23 @@ describe('AgentSetupModal', () => {
       }),
       getActiveProfile: vi.fn().mockResolvedValue(null),
     };
+  });
+
+  it('keeps a pending installation across reopening and displays its result', async () => {
+    let finish!: (value: { installed: boolean; targetPath: string; symlinkPath: string; isValid: boolean }) => void;
+    const install = vi.fn().mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    window.spawneaApi.installCliInPath = install;
+    const modal = (open: boolean) => <AgentSetupModal isOpen={open} onClose={vi.fn()} />;
+    const view = render(modal(true));
+    await waitFor(() => expect(window.spawneaApi.getCliPathStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId('install-cli-path-button'));
+    view.rerender(modal(false));
+    view.rerender(modal(true));
+    expect((screen.getByTestId('install-cli-path-button') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('install-cli-path-button'));
+    expect(install).toHaveBeenCalledTimes(1);
+    await act(async () => { finish({ installed: true, isValid: true, targetPath: '/mock', symlinkPath: '/mock' }); });
+    expect(screen.getByTestId('install-cli-path-button').textContent).toContain('Installed');
   });
 
   it('opens, closes, and reopens without changing hook order', async () => {

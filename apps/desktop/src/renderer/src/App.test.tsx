@@ -1162,16 +1162,22 @@ describe('App Desktop Shell', () => {
     const pending = new Promise<GitStatusResult>((resolve) => { resolveStatus = resolve; });
     const getGitStatus = vi.fn(() => pending);
     window.spawneaApi = createMockSpawneaApi({ getGitStatus });
+    const allSettled = vi.spyOn(Promise, 'allSettled');
     const setTimer = vi.spyOn(globalThis, 'setTimeout');
     const clearTimer = vi.spyOn(globalThis, 'clearTimeout');
     const view = render(<App />);
     try {
       await act(async () => { await vi.advanceTimersByTimeAsync(0); });
       const deadlines = () => setTimer.mock.calls.flatMap((args, index) => args[1] === 6000 ? [setTimer.mock.results[index].value] : []);
+      const oldWait = allSettled.mock.results.at(-1)!.value as Promise<unknown>;
+      let oldSettled = false;
+      void oldWait.then(() => { oldSettled = true; });
       const oldDeadlines = deadlines();
       expect(oldDeadlines.length).toBeGreaterThan(0);
       fireEvent.click(screen.getByTestId('session-item-sess-2'));
       for (const deadline of oldDeadlines) expect(clearTimer).toHaveBeenCalledWith(deadline);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(oldSettled).toBe(true);
       const newDeadlines = deadlines().filter((deadline) => !oldDeadlines.includes(deadline));
       expect(newDeadlines.length).toBeGreaterThan(0);
       expect(getGitStatus).toHaveBeenCalledTimes(2);
@@ -1190,6 +1196,7 @@ describe('App Desktop Shell', () => {
       view.unmount();
       setTimer.mockRestore();
       clearTimer.mockRestore();
+      allSettled.mockRestore();
       vi.useRealTimers();
     }
   });

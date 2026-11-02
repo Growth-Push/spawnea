@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { Terminal, type ILinkProvider } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { isNonRetryableAuthenticationFailure, type Session, type Agent, type HostConnectionState } from '@spawnea/domain';
@@ -155,6 +155,17 @@ export function TerminalView({
   const retryCountRef = useRef<number>(0);
   const isConnectingRef = useRef<boolean>(false);
   const connectionGenerationRef = useRef(0);
+  const viewLifetimeRef = useRef(0);
+  const retryHostPendingRef = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    viewLifetimeRef.current += 1;
+    retryHostPendingRef.current = null;
+    setIsRetryingHost(false);
+    return () => {
+      viewLifetimeRef.current += 1;
+      retryHostPendingRef.current = null;
+    };
+  }, [session.id]);
   const leftMouseDownRef = useRef<boolean>(false);
   const mouseSelectionGestureRef = useRef<boolean>(false);
   const clipboardBeforeMouseDragReadRef = useRef<Promise<string | null> | null>(null);
@@ -351,7 +362,6 @@ export function TerminalView({
     }
     retryCountRef.current = 0;
     setRetryAttempt(0);
-    setIsRetryingHost(false);
 
     for (const fn of cleanupFnsRef.current) {
       try {
@@ -862,30 +872,42 @@ export function TerminalView({
   }, [isSuspended, session.status, connectToSession]);
 
   const handleManualRetry = async () => {
-    cleanupActiveConnection();
-    const generation = connectionGenerationRef.current;
-    if (isNonRetryableAuthenticationFailure(errorMessage)) {
-      try {
-        const state = await window.spawneaApi.retryHostConnection(session.serverId);
-        if (generation !== connectionGenerationRef.current) return;
-        setHostConnectionState(state);
-        if (state.status !== 'connected') {
+    if (retryHostPendingRef.current) return;
+    const retry = {};
+    retryHostPendingRef.current = retry;
+    setIsRetryingHost(true);
+    try {
+      cleanupActiveConnection();
+      const generation = connectionGenerationRef.current;
+      if (isNonRetryableAuthenticationFailure(errorMessage)) {
+        try {
+          const state = await window.spawneaApi.retryHostConnection(session.serverId);
+          if (retryHostPendingRef.current !== retry || generation !== connectionGenerationRef.current) return;
+          setHostConnectionState(state);
+          if (state.status !== 'connected') {
+            setConnectionStatus('error');
+            setErrorMessage(state.error || '1Password connection failed. Reconnect manually to retry.');
+            return;
+          }
+        } catch (error) {
+          if (retryHostPendingRef.current !== retry || generation !== connectionGenerationRef.current) return;
           setConnectionStatus('error');
-          setErrorMessage(state.error || '1Password connection failed. Reconnect manually to retry.');
+          setErrorMessage(error instanceof Error ? error.message : String(error));
           return;
         }
-      } catch (error) {
-        if (generation !== connectionGenerationRef.current) return;
-        setConnectionStatus('error');
-        setErrorMessage(error instanceof Error ? error.message : String(error));
-        return;
       }
-    }
-    if (onAttachRef.current) {
-      onAttachRef.current(session.id);
-    }
-    if (terminalInstanceRef.current) {
-      await connectToSession(terminalInstanceRef.current, false);
+      if (retryHostPendingRef.current !== retry) return;
+      if (onAttachRef.current) {
+        onAttachRef.current(session.id);
+      }
+      if (terminalInstanceRef.current) {
+        await connectToSession(terminalInstanceRef.current, false);
+      }
+    } finally {
+      if (retryHostPendingRef.current === retry) {
+        retryHostPendingRef.current = null;
+        if (toastActiveRef.current) setIsRetryingHost(false);
+      }
     }
   };
 
@@ -1037,15 +1059,15 @@ export function TerminalView({
   const handleTransformToArtifact = () => {
     const textToSave = contextMenu?.selectionText || terminalInstanceRef.current?.getSelection();
     if (textToSave && window.spawneaApi?.createArtifactFromText) {
-      const generation = connectionGenerationRef.current;
+      const lifetime = viewLifetimeRef.current;
       const filename = `snippet-${Date.now().toString(36)}.txt`;
       window.spawneaApi
         .createArtifactFromText(session.id, filename, textToSave)
         .then(() => {
-          if (generation === connectionGenerationRef.current) showToast(`Artifact created: ${filename}`);
+          if (lifetime === viewLifetimeRef.current) showToast(`Artifact created: ${filename}`);
         })
         .catch((err) => {
-          if (generation === connectionGenerationRef.current) showToast(`Failed to create artifact: ${err?.message || 'Error'}`);
+          if (lifetime === viewLifetimeRef.current) showToast(`Failed to create artifact: ${err?.message || 'Error'}`);
         });
     }
   };
@@ -1060,18 +1082,23 @@ export function TerminalView({
   };
 
   const handleRetryHost = useCallback(async () => {
-    if (isRetryingHost || !window.spawneaApi) return;
+    if (retryHostPendingRef.current || !window.spawneaApi) return;
+    const retry = {};
+    retryHostPendingRef.current = retry;
     setIsRetryingHost(true);
     const generation = connectionGenerationRef.current;
     try {
       const res = await window.spawneaApi.retryHostConnection(session.serverId);
-      if (generation === connectionGenerationRef.current) setHostConnectionState(res);
+      if (retryHostPendingRef.current === retry && generation === connectionGenerationRef.current) setHostConnectionState(res);
     } catch (err: any) {
-      if (generation === connectionGenerationRef.current) showToast(`Retry failed: ${err?.message || String(err)}`);
+      if (retryHostPendingRef.current === retry && generation === connectionGenerationRef.current) showToast(`Retry failed: ${err?.message || String(err)}`);
     } finally {
-      if (generation === connectionGenerationRef.current) setIsRetryingHost(false);
+      if (retryHostPendingRef.current === retry) {
+        retryHostPendingRef.current = null;
+        if (toastActiveRef.current) setIsRetryingHost(false);
+      }
     }
-  }, [session.serverId, isRetryingHost, showToast]);
+  }, [session.serverId, showToast]);
 
   return (
     <>
@@ -1121,6 +1148,7 @@ export function TerminalView({
             <button
               type="button"
               onClick={handleManualRetry}
+              disabled={isRetryingHost}
               className="flex items-center gap-1 px-2.5 py-0.5 rounded bg-rose-950/60 border border-rose-500/40 text-rose-300 text-[11px] hover:bg-rose-900/80 cursor-pointer transition-colors"
             >
               <RefreshCw className="w-3 h-3" />
@@ -1341,6 +1369,7 @@ export function TerminalView({
               <button
                 type="button"
                 onClick={handleManualRetry}
+                disabled={isRetryingHost}
                 className="flex items-center gap-2 px-4 py-2 bg-[#21262d] hover:bg-[#30363d] text-zinc-200 border border-[#30363d] rounded-lg text-xs font-semibold transition-all shadow-md cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />

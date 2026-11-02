@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useId } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useId } from 'react';
 import type {
   Session,
   Server,
@@ -198,7 +198,9 @@ export function WorkspaceTabs({
   const artifactRequestGeneration = useRef(0);
   const artifactLifetime = useRef(0);
   const artifactSession = useRef<string | null>(null);
-  artifactSession.current = session?.id ?? null;
+  useLayoutEffect(() => {
+    artifactSession.current = session?.id ?? null;
+  }, [session?.id]);
   const artifactActive = useRef(false);
 
   const fetchArtifacts = useCallback(async (sessionId: string) => {
