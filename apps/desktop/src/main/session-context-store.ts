@@ -1,7 +1,28 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, statSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionContextFile, SessionStatus, Logger } from '@spawnea/domain';
-import { createLogger, parseSessionContextFile, serializeSessionContextFile } from '@spawnea/domain';
+import { createLogger, normalizeRetainedGitHubLinks, parseSessionContextFile, serializeSessionContextFile } from '@spawnea/domain';
+
+const MAX_CONTEXT_BYTES = 8 * 1024 * 1024;
+const CONTEXT_TOO_LARGE = 'Session context exceeds the 8 MiB safety limit';
+
+function readBoundedContext(path: string): string {
+  const fd = openSync(path, 'r');
+  try {
+    if (fstatSync(fd).size > MAX_CONTEXT_BYTES) throw new Error(CONTEXT_TOO_LARGE);
+    const chunks: Buffer[] = [];
+    let used = 0;
+    while (used <= MAX_CONTEXT_BYTES) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, MAX_CONTEXT_BYTES + 1 - used));
+      const read = readSync(fd, chunk, 0, chunk.length, null);
+      if (!read) break;
+      chunks.push(chunk.subarray(0, read));
+      used += read;
+    }
+    if (used > MAX_CONTEXT_BYTES) throw new Error(CONTEXT_TOO_LARGE);
+    return Buffer.concat(chunks, used).toString('utf8');
+  } finally { closeSync(fd); }
+}
 
 export interface SessionContextStoreOptions {
   storeDir: string;
@@ -40,9 +61,11 @@ export class SessionContextStore {
    */
   async save(context: SessionContextFile): Promise<string> {
     return this.serialize(context.sessionId, () => {
+      const filePath = this.getFilePath(context.sessionId);
+      if (existsSync(filePath) && statSync(filePath).size > MAX_CONTEXT_BYTES) throw new Error(CONTEXT_TOO_LARGE);
       const revision = this.revision(context.sessionId);
       const expected = (context as RevisionedContext)[contextRevision];
-      if ((expected === undefined && (revision !== 0 || existsSync(this.getFilePath(context.sessionId)))) || (expected !== undefined && expected !== revision)) {
+      if ((expected === undefined && (revision !== 0 || existsSync(filePath))) || (expected !== undefined && expected !== revision)) {
         throw new Error('Session context changed since it was read');
       }
       return this.write(context);
@@ -67,7 +90,9 @@ export class SessionContextStore {
     const filePath = this.getFilePath(context.sessionId);
     this.logger.info('Persisting session context file', { sessionId: context.sessionId, filePath });
 
-    const content = serializeSessionContextFile(context);
+    if (existsSync(filePath) && statSync(filePath).size > MAX_CONTEXT_BYTES) throw new Error(CONTEXT_TOO_LARGE);
+    const content = serializeSessionContextFile({ ...context, retainedLinks: context.retainedLinks ? normalizeRetainedGitHubLinks(context.retainedLinks) : undefined });
+    if (Buffer.byteLength(content, 'utf8') > MAX_CONTEXT_BYTES) throw new Error(CONTEXT_TOO_LARGE);
     writeFileSync(filePath, content, 'utf8');
     this.revisions.set(filePath, this.revision(context.sessionId) + 1);
     return filePath;
@@ -86,7 +111,10 @@ export class SessionContextStore {
   /** Restore a deleted context only when database removal failed. */
   async restoreDeleted(context: SessionContextFile): Promise<void> {
     await this.serialize(context.sessionId, () => {
-      if (existsSync(this.getFilePath(context.sessionId))) throw new Error('Cannot restore over an existing session context');
+      if (existsSync(this.getFilePath(context.sessionId))) {
+        if (statSync(this.getFilePath(context.sessionId)).size > MAX_CONTEXT_BYTES) throw new Error(CONTEXT_TOO_LARGE);
+        throw new Error('Cannot restore over an existing session context');
+      }
       const key = this.getFilePath(context.sessionId);
       this.write(this.deletedSnapshots.get(key) ?? context);
       this.deletedSnapshots.delete(key);
@@ -98,10 +126,20 @@ export class SessionContextStore {
   }
 
   async retainLinks(sessionId: string, links: NonNullable<SessionContextFile['retainedLinks']>): Promise<void> {
-    await this.update(sessionId, (context) => {
-      const merged = new Map((context.retainedLinks ?? []).map((link) => [`${link.source}:${link.url}`, link]));
-      for (const link of links) merged.set(`${link.source}:${link.url}`, link);
-      return { ...context, retainedLinks: [...merged.values()] };
+    await this.serialize(sessionId, async () => {
+      const context = await this.load(sessionId);
+      if (!context) return;
+      const retainedLinks = normalizeRetainedGitHubLinks([...(context.retainedLinks ?? []), ...links]);
+      if (JSON.stringify(context.retainedLinks ?? []) !== JSON.stringify(retainedLinks)) this.write({ ...context, retainedLinks });
+    });
+  }
+
+  /** Run admission and read its accepted snapshot while holding the context queue. */
+  async syncRetainedLinks(sessionId: string, admit: () => Promise<NonNullable<SessionContextFile['retainedLinks']>>): Promise<void> {
+    await this.serialize(sessionId, async () => {
+      const retainedLinks = normalizeRetainedGitHubLinks(await admit());
+      const context = await this.load(sessionId);
+      if (context && JSON.stringify(context.retainedLinks ?? []) !== JSON.stringify(retainedLinks)) this.write({ ...context, retainedLinks });
     });
   }
 
@@ -116,7 +154,7 @@ export class SessionContextStore {
     }
 
     try {
-      const content = readFileSync(filePath, 'utf8');
+      const content = readBoundedContext(filePath);
       const result = parseSessionContextFile(content);
       if (result.success) {
         Object.defineProperty(result.context, contextRevision, { value: this.revision(sessionId) });
@@ -146,13 +184,13 @@ export class SessionContextStore {
         if (file.endsWith('.json')) {
           const fullPath = join(this.storeDir, file);
           try {
-            const content = readFileSync(fullPath, 'utf8');
+            const content = readBoundedContext(fullPath);
             const parsed = parseSessionContextFile(content);
             if (parsed.success) {
               results.push(parsed.context);
             }
-          } catch {
-            // Ignore unreadable or corrupt single files
+          } catch (err) {
+            this.logger.error('Failed to read session context file', err, { filePath: fullPath });
           }
         }
       }
@@ -191,6 +229,7 @@ export class SessionContextStore {
       const filePath = this.getFilePath(sessionId);
       if (existsSync(filePath)) {
         try {
+          if (statSync(filePath).size > MAX_CONTEXT_BYTES) throw new Error(CONTEXT_TOO_LARGE);
           const snapshot = options?.captureForRollback ? await this.load(sessionId) : null;
           unlinkSync(filePath);
           if (snapshot) this.deletedSnapshots.set(filePath, snapshot);

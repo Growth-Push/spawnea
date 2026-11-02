@@ -2423,9 +2423,10 @@ export class SessionManager {
         });
         dbSessionMap.set(restoredSession.id, restoredSession);
       }
-      for (const link of ctx.retainedLinks ?? []) {
-        const canonical = parseGitHubLink(link.url);
-        if (canonical && canonical.kind === link.kind) await this.repos.github?.addLink({ sessionId: ctx.sessionId, url: canonical.url, kind: canonical.kind, source: link.source, createdAt: new Date() }).catch(() => {});
+      if (this.repos.github && ctx.retainedLinks?.length) {
+        const github = this.repos.github;
+        await this.contextStore.syncRetainedLinks(ctx.sessionId, async () => (await github.admitLinks(ctx.sessionId, ctx.retainedLinks!.map((link) => ({ sessionId: ctx.sessionId, ...link, createdAt: new Date() }))))
+          .map(({ url, kind, source }) => ({ url, kind, source }))).catch(() => {});
       }
     }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findGitHubLinks, parseGitHubLink } from '../src/github-links.js';
+import { findGitHubLinks, MAX_GITHUB_LINK_LENGTH, MAX_GITHUB_LINK_SCAN_LENGTH, normalizeRetainedGitHubLinks, parseGitHubLink } from '../src/github-links.js';
 
 describe('GitHub links', () => {
   it('canonicalizes resource identity without retaining query or fragment', () => {
@@ -56,5 +56,27 @@ describe('GitHub links', () => {
       'https://github.com/example/my_repo/pull/9',
       'https://github.com/example/my_repo/issues/10',
     ]);
+  });
+
+  it('bounds raw URLs and scanning without accepting a truncated URL', () => {
+    const prefix = 'https://github.com/example/';
+    const longest = prefix + 'a'.repeat(MAX_GITHUB_LINK_LENGTH - prefix.length);
+    expect(parseGitHubLink(longest)?.url).toBe(longest);
+    expect(parseGitHubLink(`${longest}a`)).toBeUndefined();
+    expect(findGitHubLinks(`${longest}a`)).toEqual([]);
+    const partial = 'https://github.com/example/repo';
+    expect(findGitHubLinks(`${'x'.repeat(MAX_GITHUB_LINK_SCAN_LENGTH - partial.length)}${partial}/issues/1`)).toEqual([]);
+    expect(findGitHubLinks(`🙂 \u001b[32mhttps://github.com/example/repo/pull/2\u001b[0m`)[0]?.url).toBe('https://github.com/example/repo/pull/2');
+  });
+
+  it('retains priority, stable identities and all sources for admitted links', () => {
+    const outputs = Array.from({ length: 130 }, (_, i) => ({ url: `https://github.com/example/repo/issues/${i + 1}`, kind: 'issue' as const, source: 'output' as const }));
+    const selected = normalizeRetainedGitHubLinks([...outputs, { url: 'https://github.com/example/repo', kind: 'repository', source: 'task' }, { ...outputs[0], source: 'prompt' }]);
+    expect(new Set(selected.map((link) => link.url)).size).toBe(128);
+    expect(selected).toContainEqual({ url: 'https://github.com/example/repo', kind: 'repository', source: 'task' });
+    expect(selected).toContainEqual({ ...outputs[0], source: 'prompt' });
+    expect(selected).toContainEqual(outputs[0]);
+    expect(selected).not.toContainEqual(outputs[127]);
+    expect(normalizeRetainedGitHubLinks([...selected, outputs[129]])).toEqual(selected);
   });
 });

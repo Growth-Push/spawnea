@@ -908,6 +908,16 @@ hosts:
     await expect(sessionManager.createSession({ serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude', task: 'Task', originIssueUrl: 'https://github.com/example/repo' })).rejects.toThrow('Origin must be a complete GitHub issue URL');
   });
 
+  it('restores a bounded snapshot after more references than the retention budget', async () => {
+    const created = await sessionManager.createSession({ serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude', task: 'Restore references' });
+    await contextStore.retainLinks(created.id, Array.from({ length: 3000 }, (_, index) => ({ url: `https://github.com/example/repo/issues/${index + 1}`, kind: 'issue' as const, source: 'output' as const })));
+    expect((await contextStore.load(created.id))?.retainedLinks).toHaveLength(128);
+    await repos.sessions.delete(created.id);
+    await sessionManager.restoreSessions();
+    expect(await repos.github?.links(created.id)).toHaveLength(128);
+    expect((await contextStore.load(created.id))?.retainedLinks).toHaveLength(128);
+  });
+
   it('rejects blank and oversized session titles without changing persistence', async () => {
     const session = await sessionManager.createSession({
       serverId: 'dev-workstation',

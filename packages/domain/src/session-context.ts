@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { maskSensitiveString } from './logger.js';
 import { SessionCreationSourceSchema, SessionStatusSchema, SessionTopologySnapshotSchema } from './schemas.js';
-import { parseGitHubLink } from './github-links.js';
+import { normalizeRetainedGitHubLinks, parseGitHubLink, type RetainedGitHubLink } from './github-links.js';
 
 export const SessionContextHostSchema = z
   .object({
@@ -58,7 +58,7 @@ export const SessionContextFileSchema = z
     sessionName: z.string().min(1),
     task: z.string().min(1),
     originIssueUrl: z.string().refine((value) => parseGitHubLink(value)?.kind === 'issue', 'Expected a GitHub issue URL').optional(),
-    retainedLinks: z.array(z.object({ url: z.string(), kind: z.enum(['repository', 'issue', 'pull']), source: z.enum(['task', 'prompt', 'output']) }).strict().refine((value) => parseGitHubLink(value.url)?.kind === value.kind, 'Invalid GitHub link')).optional(),
+    retainedLinks: z.preprocess((value) => Array.isArray(value) ? normalizeRetainedGitHubLinks(value as RetainedGitHubLink[]) : value, z.array(z.object({ url: z.string(), kind: z.enum(['repository', 'issue', 'pull']), source: z.enum(['task', 'prompt', 'output']) }).strict())).optional(),
     host: SessionContextHostSchema,
     project: SessionContextProjectSchema,
     worktree: z
