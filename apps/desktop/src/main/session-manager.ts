@@ -2338,6 +2338,7 @@ export class SessionManager {
       isExternal: true,
     });
 
+    await retainSessionLinks(this.repos, sessionId, 'task', taskDescription, this.contextStore).catch(() => {});
     this.logger.info('External tmux session adopted successfully', { sessionId, tmuxSessionName: input.tmuxSessionName });
     return savedSession;
   }
@@ -2428,6 +2429,7 @@ export class SessionManager {
         await this.contextStore.syncRetainedLinks(ctx.sessionId, async () => (await github.admitLinks(ctx.sessionId, ctx.retainedLinks!.map((link) => ({ sessionId: ctx.sessionId, ...link, createdAt: new Date() }))))
           .map(({ url, kind, source }) => ({ url, kind, source }))).catch(() => {});
       }
+      await retainSessionLinks(this.repos, ctx.sessionId, 'task', ctx.task, this.contextStore).catch(() => {});
     }
 
     // 3. Reconcile live session statuses with target host reality

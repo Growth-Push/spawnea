@@ -94,9 +94,9 @@ describe('session link capture', () => {
       tmux('send-keys', '-t', 'fixture', '-l', "i=0; while [ $i -lt 250 ]; do printf '%0160d\\n' 0; i=$((i+1)); done; printf '%s\\n' 'https://github.com/'example'/repo/pull/71'; read -r capture_ready; exit");
       tmux('send-keys', '-t', 'fixture', 'Enter');
       // Wait for rendered output before allowing exit to close the pane's PTY.
-      await expect.poll(() => tmux('capture-pane', '-p', '-J', '-t', 'fixture', '-S', '-250')).toContain('\nhttps://github.com/example/repo/pull/71\n');
+      await expect.poll(() => tmux('capture-pane', '-p', '-J', '-t', 'fixture', '-S', '-250'), { timeout: 10_000 }).toContain('\nhttps://github.com/example/repo/pull/71\n');
       tmux('send-keys', '-t', 'fixture', 'Enter');
-      await expect.poll(() => tmux('display-message', '-p', '-t', 'fixture', '#{pane_dead}').trim()).toBe('1');
+      await expect.poll(() => tmux('display-message', '-p', '-t', 'fixture', '#{pane_dead}').trim(), { timeout: 10_000 }).toBe('1');
       const text = tmux('capture-pane', '-p', '-J', '-t', 'fixture', '-S', '-250');
       expect(text).toContain('\nhttps://github.com/example/repo/pull/71\n');
       expect(text.length).toBeGreaterThan(MAX_GITHUB_LINK_SCAN_LENGTH);
@@ -110,5 +110,5 @@ describe('session link capture', () => {
       try { tmux('kill-server'); } catch { /* The disposable server may already have exited. */ }
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });

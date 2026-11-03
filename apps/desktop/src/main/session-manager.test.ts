@@ -908,6 +908,56 @@ hosts:
     await expect(sessionManager.createSession({ serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude', task: 'Task', originIssueUrl: 'https://github.com/example/repo' })).rejects.toThrow('Origin must be a complete GitHub issue URL');
   });
 
+  it.each([
+    { missingRow: false, emptyLinks: false },
+    { missingRow: false, emptyLinks: true },
+    { missingRow: true, emptyLinks: false },
+    { missingRow: true, emptyLinks: true },
+  ])('extracts task references from legacy contexts ($missingRow missing row, $emptyLinks empty links)', async ({ missingRow, emptyLinks }) => {
+    const created = await sessionManager.createSession({
+      serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude',
+      task: 'Inspect https://github.com/Example/Repo/pull/9 and https://github.com/example/my_repo',
+      originIssueUrl: 'https://github.com/example/other/issues/4',
+    });
+    dbConn.sqlite.prepare('DELETE FROM session_links WHERE session_id = ?').run(created.id);
+    await contextStore.update(created.id, (context) => ({ ...context, retainedLinks: emptyLinks ? [] : undefined }));
+    if (missingRow) await repos.sessions.delete(created.id);
+
+    const expected = [
+      { url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' },
+      { url: 'https://github.com/example/my_repo', kind: 'repository', source: 'task' },
+    ];
+    await sessionManager.restoreSessions();
+    expect((await repos.github!.links(created.id)).map(({ url, kind, source }) => ({ url, kind, source }))).toEqual(expected);
+    expect((await contextStore.load(created.id))?.retainedLinks).toEqual(expected);
+    expect((await repos.sessions.findById(created.id))?.originIssueUrl).toBe(created.originIssueUrl);
+    expect((await contextStore.load(created.id))?.originIssueUrl).toBe(created.originIssueUrl);
+    await sessionManager.restoreSessions();
+    expect((await repos.github!.links(created.id)).map(({ url, kind, source }) => ({ url, kind, source }))).toEqual(expected);
+    expect((await contextStore.load(created.id))?.retainedLinks).toEqual(expected);
+  });
+
+  it('restores task references alongside retained prompt and output provenance', async () => {
+    const created = await sessionManager.createSession({
+      serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude',
+      task: 'Inspect https://github.com/example/repo/pull/9',
+    });
+    const retained = [
+      { url: 'https://github.com/example/repo/pull/9', kind: 'pull' as const, source: 'output' as const },
+      { url: 'https://github.com/example/other/issues/2', kind: 'issue' as const, source: 'prompt' as const },
+    ];
+    dbConn.sqlite.prepare('DELETE FROM session_links WHERE session_id = ?').run(created.id);
+    await contextStore.update(created.id, (context) => ({ ...context, retainedLinks: retained }));
+
+    await sessionManager.restoreSessions();
+    const actual = (await repos.github!.links(created.id)).map(({ url, kind, source }) => ({ url, kind, source }));
+    expect(actual).toHaveLength(3);
+    expect(actual).toEqual(expect.arrayContaining([...retained, { url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' }]));
+    const saved = (await contextStore.load(created.id))?.retainedLinks;
+    expect(saved).toHaveLength(actual.length);
+    expect(saved).toEqual(expect.arrayContaining(actual));
+  });
+
   it('restores a bounded snapshot after more references than the retention budget', async () => {
     const created = await sessionManager.createSession({ serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude', task: 'Restore references' });
     await contextStore.retainLinks(created.id, Array.from({ length: 3000 }, (_, index) => ({ url: `https://github.com/example/repo/issues/${index + 1}`, kind: 'issue' as const, source: 'output' as const })));
@@ -2106,6 +2156,22 @@ up 1 day, 5 hours
     expect(ctx).toBeDefined();
     expect(ctx?.isExternal).toBe(true);
     expect(ctx?.persistentSession.name).toBe('external-work-session');
+  });
+
+  it('retains task references when adopting an external tmux session', async () => {
+    mockHost.customRules.push({
+      pattern: "tmux has-session -t 'external-link-session'",
+      response: { stdout: '', stderr: '', exitCode: 0 },
+    });
+    const adopted = await sessionManager.adoptSession({
+      serverId: 'dev-workstation', tmuxSessionName: 'external-link-session',
+      projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude',
+      task: 'Inspect https://github.com/Example/Repo/issues/7',
+    });
+    const expected = [{ url: 'https://github.com/example/repo/issues/7', kind: 'issue', source: 'task' }];
+    expect((await repos.github!.links(adopted.id)).map(({ url, kind, source }) => ({ url, kind, source }))).toEqual(expected);
+    expect((await contextStore.load(adopted.id))?.retainedLinks).toEqual(expected);
+    expect(adopted.originIssueUrl).toBeUndefined();
   });
 
   it('releases an adopted session non-destructively without killing tmux (FG-7.2.3)', async () => {
