@@ -32,6 +32,8 @@ import type {
   SessionStatus,
   SessionTopologySnapshot,
 } from '@spawnea/domain';
+import { parseGitHubLink } from '@spawnea/domain';
+import { retainSessionLinks } from './session-links.js';
 import {
   createCatalogProjectPathLocator,
   createCatalogWorktreePathLocator,
@@ -658,6 +660,7 @@ export class SessionManager {
     projectId: string;
     agentId: string;
     task: string;
+    originIssueUrl?: string;
     name?: string;
     baseBranch?: string;
     useWorktree?: boolean;
@@ -671,6 +674,8 @@ export class SessionManager {
     if (!options.task || options.task.trim() === '') {
       throw new Error('Task description is required to create a session');
     }
+    const origin = options.originIssueUrl ? parseGitHubLink(options.originIssueUrl) : undefined;
+    if (options.originIssueUrl && origin?.kind !== 'issue') throw new Error('Origin must be a complete GitHub issue URL');
 
     const slug = options.task
       .toLowerCase()
@@ -940,6 +945,7 @@ export class SessionManager {
           sessionId,
           sessionName: effectiveName,
           task: options.task,
+          originIssueUrl: origin?.url,
           parentSessionId: options.parentSessionId,
           childAlias,
           host: {
@@ -1001,6 +1007,7 @@ export class SessionManager {
           projectId: options.projectId,
           agentId: options.agentId,
           task: options.task,
+          originIssueUrl: origin?.url,
           parentSessionId: options.parentSessionId,
           childAlias,
           worktreePath: persistedRuntimePath,
@@ -1014,6 +1021,7 @@ export class SessionManager {
           requestedModel: options.model,
         });
         sessionPersisted = true;
+        await retainSessionLinks(this.repos, sessionId, 'task', options.task, this.contextStore).catch(() => {});
 
         // 6. Establish the persistent tmux session in the effective runtime directory.
         const tmuxResult = await this.tmuxManager.createPersistentSession({
@@ -1109,6 +1117,7 @@ export class SessionManager {
       projectId: input.projectId,
       agentId: input.agentId,
       task: input.task,
+      originIssueUrl: input.originIssueUrl,
       baseBranch: input.baseBranch,
       useWorktree: input.useWorktree,
       worktreePath: input.worktreePath,
@@ -1218,6 +1227,7 @@ export class SessionManager {
         projectId: childProjectId,
         agentId: input.agentId || parent.agentId,
         task: input.task,
+        originIssueUrl: input.originIssueUrl,
         name: displayName,
         useWorktree: input.workspace === 'new-worktree',
         parentSessionId: parent.id,
@@ -1261,6 +1271,7 @@ export class SessionManager {
         // Never retry the text through tmux after a successful text write.
         await new Promise((resolve) => setTimeout(resolve, 500));
         if (!this.ptyBroker.write(ptyChannelId, '\r')) throw new PromptSubmissionError('pty');
+        await retainSessionLinks(this.repos, sessionId, 'prompt', prompt, this.contextStore).catch(() => {});
         return { delivered: true, deliveryMethod: 'pty' };
       }
     }
@@ -1270,6 +1281,7 @@ export class SessionManager {
     if (!sent) {
       throw new Error(`Failed to deliver prompt to tmux session '${session.tmuxSessionName}'`);
     }
+    await retainSessionLinks(this.repos, sessionId, 'prompt', prompt, this.contextStore).catch(() => {});
     return { delivered: true, deliveryMethod: 'tmux' };
   }
 
@@ -1524,7 +1536,7 @@ export class SessionManager {
       const rollbackContexts = async (): Promise<void> => {
         for (const update of savedContexts.reverse()) {
           try {
-            await this.contextStore.save(update.previous);
+            await this.contextStore.update(update.sessionId, (current) => ({ ...current, parentSessionId: update.previous.parentSessionId, childAlias: update.previous.childAlias }));
           } catch (rollbackErr) {
             this.logger.error('Failed to roll back promoted child context', rollbackErr, {
               childId: update.sessionId,
@@ -1535,7 +1547,7 @@ export class SessionManager {
 
       try {
         for (const update of contextUpdates) {
-          await this.contextStore.save(update.updated);
+          await this.contextStore.update(update.sessionId, (current) => ({ ...current, parentSessionId: undefined, childAlias: undefined }));
           savedContexts.push(update);
         }
         await this.repos.sessions.promoteChildrenToRoot(parentId);
@@ -1659,9 +1671,7 @@ export class SessionManager {
                     baseCommit: session.baseCommit,
                   });
                   try {
-                    const successorCtx = await this.contextStore.load(successor.id);
-                    if (successorCtx) {
-                      await this.contextStore.save({
+                    await this.contextStore.update(successor.id, (successorCtx) => ({
                         ...successorCtx,
                         worktree: {
                           managed: true,
@@ -1670,8 +1680,7 @@ export class SessionManager {
                           baseBranch: session.baseBranch || 'main',
                           baseCommit: session.baseCommit,
                         },
-                      });
-                    }
+                      }));
                   } catch (ctxErr) {
                     this.logger.warn('Failed to update context file for worktree successor', {
                       successorId: successor.id,
@@ -1723,7 +1732,7 @@ export class SessionManager {
         }
 
         const previousContext = await this.contextStore.load(sessionId).catch(() => null);
-        const contextDeleted = await this.contextStore.delete(sessionId);
+        const contextDeleted = await this.contextStore.delete(sessionId, { captureForRollback: true });
         if (!contextDeleted) {
           throw new Error(`Failed to delete context file for session '${sessionId}'`);
         }
@@ -1742,7 +1751,7 @@ export class SessionManager {
         } catch (error) {
           if (previousContext) {
             try {
-              await this.contextStore.save(previousContext);
+              await this.contextStore.restoreDeleted(previousContext);
             } catch (restoreError) {
               this.logger.error('Failed to restore session context after database deletion failed', restoreError, { sessionId });
             }
@@ -1754,6 +1763,7 @@ export class SessionManager {
             { cause }
           );
         }
+        this.contextStore.discardDeletedSnapshot(sessionId);
       } catch (error) {
         const wc = this.getWebContents();
         if (wc && (typeof wc.isDestroyed !== 'function' || !wc.isDestroyed())) {
@@ -1787,7 +1797,7 @@ export class SessionManager {
       }
 
       const previousContext = await this.contextStore.load(sessionId);
-      if (!await this.contextStore.delete(sessionId)) {
+      if (!await this.contextStore.delete(sessionId, { captureForRollback: true })) {
         throw new Error(`Failed to delete context file for session '${sessionId}'`);
       }
       let deleted: boolean;
@@ -1796,7 +1806,7 @@ export class SessionManager {
       } catch (error) {
         if (previousContext) {
           try {
-            await this.contextStore.save(previousContext);
+            await this.contextStore.restoreDeleted(previousContext);
           } catch (restoreError) {
             this.logger.error('Failed to restore session context after local deletion failed', restoreError, { sessionId });
           }
@@ -1806,13 +1816,14 @@ export class SessionManager {
       if (!deleted) {
         if (previousContext) {
           try {
-            await this.contextStore.save(previousContext);
+            await this.contextStore.restoreDeleted(previousContext);
           } catch (restoreError) {
             this.logger.error('Failed to restore session context after local deletion failed', restoreError, { sessionId });
           }
         }
         return false;
       }
+      this.contextStore.discardDeletedSnapshot(sessionId);
       this.attachedSessions.delete(sessionId);
       this.ptyBroker.close(`pty-${sessionId}`);
       const wc = this.getWebContents();
@@ -1917,10 +1928,10 @@ export class SessionManager {
         // 4. Record cleanup progress before removing the worktree. This makes a
         // later retry safe if branch or database cleanup fails.
         if (!worktreeAlreadyRemoved && existingContext) {
-          await this.contextStore.save({
-            ...existingContext,
+          await this.contextStore.update(sessionId, (current) => ({
+            ...current,
             finalization: { action, worktreeRemoved: false, branchRemoved: false },
-          });
+          }));
         }
 
         // 5. Remove worktree
@@ -1930,10 +1941,10 @@ export class SessionManager {
             throw new Error(`Failed to remove managed worktree for session '${sessionId}'`);
           }
           if (existingContext) {
-            await this.contextStore.save({
-              ...existingContext,
+            await this.contextStore.update(sessionId, (current) => ({
+              ...current,
               finalization: { action, worktreeRemoved: true, branchRemoved: false },
-            });
+            }));
           }
         }
 
@@ -1941,10 +1952,10 @@ export class SessionManager {
         if (!branchAlreadyRemoved) {
           await this.gitService.deleteIntegratedBranch(host, identity);
           if (existingContext) {
-            await this.contextStore.save({
-              ...existingContext,
+            await this.contextStore.update(sessionId, (current) => ({
+              ...current,
               finalization: { action, worktreeRemoved: true, branchRemoved: true },
-            });
+            }));
           }
         }
 
@@ -2039,10 +2050,10 @@ export class SessionManager {
         // 4. Record cleanup progress before removing the worktree. This makes a
         // later retry safe if database cleanup fails.
         if (!worktreeAlreadyRemoved && !options.preserveWorktree && existingContext) {
-          await this.contextStore.save({
-            ...existingContext,
+          await this.contextStore.update(sessionId, (current) => ({
+            ...current,
             finalization: { action, worktreeRemoved: false },
-          });
+          }));
         }
 
         // 5. Remove worktree (preserves task branch)
@@ -2052,7 +2063,7 @@ export class SessionManager {
             throw new Error(`Failed to remove managed worktree for session '${sessionId}'`);
           }
           if (existingContext) {
-            await this.contextStore.save({ ...existingContext, finalization: { action, worktreeRemoved: true } });
+            await this.contextStore.update(sessionId, (current) => ({ ...current, finalization: { action, worktreeRemoved: true } }));
           }
         }
 
@@ -2327,6 +2338,7 @@ export class SessionManager {
       isExternal: true,
     });
 
+    await retainSessionLinks(this.repos, sessionId, 'task', taskDescription, this.contextStore).catch(() => {});
     this.logger.info('External tmux session adopted successfully', { sessionId, tmuxSessionName: input.tmuxSessionName });
     return savedSession;
   }
@@ -2394,6 +2406,7 @@ export class SessionManager {
           projectId: ctx.project.id,
           agentId: ctx.harness.id,
           task: ctx.task,
+          originIssueUrl: ctx.originIssueUrl,
           worktreePath: ctx.project.path,
           branch: ctx.worktree?.branch ?? `spawnea/session-${ctx.sessionId.replace(/^sess-/, '')}`,
           baseBranch: ctx.worktree?.baseBranch,
@@ -2411,6 +2424,12 @@ export class SessionManager {
         });
         dbSessionMap.set(restoredSession.id, restoredSession);
       }
+      if (this.repos.github && ctx.retainedLinks?.length) {
+        const github = this.repos.github;
+        await this.contextStore.syncRetainedLinks(ctx.sessionId, async () => (await github.admitLinks(ctx.sessionId, ctx.retainedLinks!.map((link) => ({ sessionId: ctx.sessionId, ...link, createdAt: new Date() }))))
+          .map(({ url, kind, source }) => ({ url, kind, source }))).catch(() => {});
+      }
+      await retainSessionLinks(this.repos, ctx.sessionId, 'task', ctx.task, this.contextStore).catch(() => {});
     }
 
     // 3. Reconcile live session statuses with target host reality
@@ -2705,15 +2724,12 @@ export class SessionManager {
 
     // 4. Update session context file if present
     try {
-      const existingContext = await this.contextStore.load(sessionId);
-      if (existingContext) {
-        await this.contextStore.save({
-          ...existingContext,
+      await this.contextStore.update(sessionId, (current) => ({
+          ...current,
           savedTopology: validatedTopology,
           agentSessionId,
           updatedAt: new Date().toISOString(),
-        });
-      }
+        }));
     } catch (err) {
       this.logger.error('Failed to update context file with topology snapshot', { sessionId, err });
       throw new Error(
@@ -2850,14 +2866,11 @@ export class SessionManager {
             }),
           };
           await this.repos.sessions.update(sessionId, { savedTopology: newSavedTopology });
-          const existingCtx = await this.contextStore.load(sessionId);
-          if (existingCtx) {
-            await this.contextStore.save({
-              ...existingCtx,
+          await this.contextStore.update(sessionId, (current) => ({
+              ...current,
               savedTopology: newSavedTopology,
               updatedAt: new Date().toISOString(),
-            });
-          }
+            }));
         }
       } finally {
         sessionPathLease.release();

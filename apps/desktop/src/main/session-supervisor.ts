@@ -10,6 +10,7 @@ import type {
   StateFeedbackReport,
   StateFeedbackResult,
   Logger,
+  HostAdapter,
 } from '@spawnea/domain';
 import { createLogger } from '@spawnea/domain';
 import type { Repositories } from '@spawnea/db';
@@ -19,6 +20,7 @@ import type { SessionManager } from './session-manager.js';
 import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
 import type { ArtifactManager } from './artifact-manager.js';
+import { retainSessionLinks } from './session-links.js';
 import {
   buildFeedbackPayload,
   FEEDBACK_CAPTURE_FAILED_REASON,
@@ -171,6 +173,7 @@ export class SessionSupervisor {
     let panePid: number | undefined = undefined;
     let tailLines: string[] = [];
     let artifactTailLines: string[] = [];
+    let linkHost: HostAdapter | undefined;
 
     let harnessName: string | undefined = undefined;
     let harnessCommand: string | undefined = undefined;
@@ -213,6 +216,9 @@ export class SessionSupervisor {
                 return [];
               });
           }
+        }
+        if (this.repos.github) {
+          linkHost = host;
         }
       }
     } catch (err) {
@@ -305,6 +311,10 @@ export class SessionSupervisor {
       }
     }
 
+    if (linkHost && generation === this.pollingGeneration) {
+      const lines = await this.tmuxManager.capturePaneTail(linkHost, session.tmuxSessionName, ARTIFACT_DETECTION_TAIL_LINES, undefined, true).catch(() => []);
+      if (generation === this.pollingGeneration && lines.length) await retainSessionLinks(this.repos, sessionId, 'output', lines.join('\n'), this.contextStore).catch(() => {});
+    }
     return result;
   }
 

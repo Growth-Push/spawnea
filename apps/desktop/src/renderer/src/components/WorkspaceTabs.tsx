@@ -39,6 +39,7 @@ import {
   Bookmark,
 } from 'lucide-react';
 import { AgentContextView } from './AgentContextView';
+import { SessionLinkButtons } from './SessionLinkButtons';
 import { formatSessionAgentContext } from '../session-agent-context';
 
 export type WorkspaceTabType = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details' | 'agent-context';
@@ -728,6 +729,7 @@ export function WorkspaceTabs({
           <span>tmux: {session.tmuxSessionName}</span>
         </div>
       </div>
+      <SessionLinkButtons key={session.id} sessionId={session.id} originIssueUrl={session.originIssueUrl} active={!isSuspended} />
 
       {/* Tab Content Panels */}
       <div
@@ -779,7 +781,7 @@ export function WorkspaceTabs({
 
         {/* Git Diff Panel (GitStatusView + DiffViewer) */}
         {activeTab === 'diff' && (
-          <div className="h-full flex flex-col gap-4 overflow-hidden">
+          <div className="h-full flex flex-col gap-4 overflow-y-auto">
             <GitStatusView
               status={gitStatus}
               selectedFilePath={selectedDiffFilePath}
@@ -804,6 +806,7 @@ export function WorkspaceTabs({
 
         {/* Artifacts Panel (ArtifactGallery) */}
         {activeTab === 'artifacts' && (
+          <>
           <ArtifactGallery
             sessionId={session.id}
             artifacts={artifacts}
@@ -811,6 +814,7 @@ export function WorkspaceTabs({
             isLoading={isLoadingArtifacts}
             onRefresh={() => fetchArtifacts(session.id)}
           />
+          </>
         )}
 
         {/* Details Panel */}

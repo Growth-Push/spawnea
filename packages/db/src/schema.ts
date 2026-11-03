@@ -50,6 +50,7 @@ export const sessions = sqliteTable(
       .notNull()
       .references(() => agents.id, { onDelete: 'restrict' }),
     task: text('task').notNull(),
+    originIssueUrl: text('origin_issue_url'),
     worktreePath: text('worktree_path').notNull(),
     branch: text('branch').notNull(),
     baseBranch: text('base_branch'),
@@ -75,6 +76,20 @@ export const sessions = sqliteTable(
     uniqueIndex('idx_sessions_parent_child_alias').on(table.parentSessionId, table.childAlias),
   ],
 );
+
+export const githubProjectSettings = sqliteTable('github_project_settings', {
+  projectId: text('project_id').primaryKey().references(() => projects.id, { onDelete: 'cascade' }),
+  trackerEnabled: integer('tracker_enabled', { mode: 'boolean' }).notNull().default(false),
+  ciEnabled: integer('ci_enabled', { mode: 'boolean' }).notNull().default(false),
+});
+
+export const sessionLinks = sqliteTable('session_links', {
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  url: text('url').notNull(),
+  kind: text('kind').notNull(),
+  source: text('source').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [uniqueIndex('idx_session_links_identity').on(table.sessionId, table.url, table.source)]);
 
 export const sessionChildAliasCounters = sqliteTable(
   'session_child_alias_counters',

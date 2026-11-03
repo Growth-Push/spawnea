@@ -112,3 +112,11 @@ Spawnea is released under the [Apache License 2.0](LICENSE).
 <p align="center">
   <img src="docs/assets/spawnea-wizard.gif" alt="Spawnea wizard casting agent sessions" width="480">
 </p>
+
+### Contextual GitHub links
+
+Complete GitHub repository, issue and pull request URLs observed in tasks, submitted prompts and a bounded terminal tail appear as contextual buttons in the session workspace. An optional originating issue is distinguished from other references. Opening a link is explicit and does not require provider authentication. References can be missed while Spawnea is closed or if output leaves the captured tail. Spawnea does not store a terminal transcript for this feature.
+
+Retained links are best effort: each session keeps at most 128 distinct canonical references and up to three sources per reference. Task references take priority over prompt references, then terminal output; older references win within a priority. A higher-priority reference can replace a lower-priority one. The originating issue is stored separately. URLs longer than 2,048 characters and text beyond the first 32,768 characters of an extraction are ignored; a cut-off URL is not interpreted as a shorter reference. Session context files above 8 MiB are left intact and reported as unavailable until recovered or reduced externally.
+
+Legacy session link metadata with more than 4,096 records is left intact and cannot be automatically recovered; it requires explicit recovery before link metadata can be read or updated.

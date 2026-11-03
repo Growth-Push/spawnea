@@ -49,6 +49,7 @@ const releaseSmokeApi = process.env.SPAWNEA_RELEASE_SMOKE === '1'
 
 export const api = {
   ...releaseSmokeApi,
+  getSessionLinks: (sessionId: string): Promise<Array<{ url: string; kind: 'repository' | 'issue' | 'pull'; source: 'task' | 'prompt' | 'output' }>> => ipcRenderer.invoke('github:links', sessionId),
 
   beginDashboardHistory: (time?: number): Promise<void> => ipcRenderer.invoke('dashboard:begin', time),
   recordDashboardObservation: (sample: import('@spawnea/domain').DashboardObservation): Promise<void> => ipcRenderer.invoke('dashboard:recordObservation', sample),

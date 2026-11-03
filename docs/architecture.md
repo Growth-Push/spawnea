@@ -899,7 +899,7 @@ To keep the initial MVP tight and reliable, the following areas are intentionall
 1. **Custom Remote Server Daemon:** Remote execution uses vanilla SSH/tmux; no custom Spawnea daemon is built for MVP.
 2. **Multi-User / Cloud Collaboration:** Spawnea is 100% local-first desktop. No cloud syncing or multi-user access is designed.
 3. **Full In-App Code Editor / LSP:** Spawnea provides Dired-style file navigation and visual Git diffs, delegating in-depth code editing to external editors or the agents themselves.
-4. **Issue Tracker Synchronization:** Integrations with Linear, Jira, or GitHub Issues are out of scope for the MVP.
+4. **Issue Tracker Synchronization:** Mandatory or bidirectional synchronization with issue trackers is out of scope for the MVP.
 
 ### Dashboard activity history
 
@@ -923,3 +923,11 @@ counter starts at feature activation and is separate from the current session
 count. Storage and clipboard errors are reported on the Dashboard without
 blocking terminal use. Copied session details contain only name, ID, host,
 project, harness, state, branch, worktree and tmux identifiers.
+
+### Contextual GitHub references
+
+Session context files and SQLite retain canonical repository, issue and PR identities and their task, prompt, or output provenance, not terminal transcripts. Task references are also admitted when saved contexts are restored and external sessions are adopted, using the same bounded metadata policy. The workspace displays deduplicated contextual buttons only when references exist; opening uses the validated external URL boundary. The optional originating issue is distinguished from incidental references and is never sent as issue content to the harness. Capture examines the most recent bounded window of tmux output while Spawnea is running and can miss output that scrolls away or appears while the application is closed.
+
+Each session retains at most 128 canonical identities and three provenance records per identity; task takes priority over prompt and output, with stable older-first admission within a priority. A higher-priority identity may displace a lower-priority one; the separate originating issue is never evicted by this policy. Extraction examines at most 32,768 characters and accepts raw and canonical URLs of at most 2,048 characters, without accepting a truncated token. SQLite admission, direct insertion, bounded reads and recovery normalize the same policy, and context mutations serialize accepted snapshots without recreating deleted files. Legacy link metadata is normalized on read. Context files larger than 8 MiB are reported and left intact rather than loaded or partially rewritten; this limit does not bound SSH transport or guarantee recovery of arbitrarily large contexts.
+
+Before normalization, an indexed probe checks at most 4,097 link rows for the session. Legacy metadata exceeding 4,096 rows is preserved and reported as requiring explicit recovery; no new metadata is admitted until it is recovered. Normal bounded sessions remain below this technical recovery limit.

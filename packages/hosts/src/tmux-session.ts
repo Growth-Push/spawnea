@@ -467,7 +467,8 @@ export class TmuxManager {
     host: HostAdapter,
     sessionName: string,
     lines: number = 25,
-    windowIndex?: number
+    windowIndex?: number,
+    joinWrapped = false
   ): Promise<string[]> {
     // A session target without a window selects whichever tab the user last
     // viewed. Hermes can leave its metrics footer in the first tab while a
@@ -486,7 +487,7 @@ export class TmuxManager {
     const targetWindow = windowIndex !== undefined && Number.isSafeInteger(windowIndex) && windowIndex >= 0 ? windowIndex : firstWindow;
     const target = targetWindow === undefined ? sessionName : `${sessionName}:${targetWindow}`;
     const safeLines = Number.isFinite(lines) ? Math.min(Math.max(0, Math.trunc(lines)), 2_147_483_647) : 25;
-    const cmd = `tmux capture-pane -p -t ${escapeShellArg(target)} -S -${safeLines}`;
+    const cmd = `tmux capture-pane -p${joinWrapped ? ' -J' : ''} -t ${escapeShellArg(target)} -S -${safeLines}`;
     const result = await host.execute(cmd, { timeoutMs: 5000 });
     if (result.exitCode !== 0) {
       return [];

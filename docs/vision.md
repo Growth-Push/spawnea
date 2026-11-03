@@ -108,7 +108,7 @@ The MVP is useful when a user can:
 - debugger;
 - multi-user collaboration;
 - SaaS backend;
-- GitHub/issue tracker integration;
+- mandatory or bidirectional issue tracker integration;
 - cloud sync;
 - agent-to-agent orchestration;
 - cost accounting;

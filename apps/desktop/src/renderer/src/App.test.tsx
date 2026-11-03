@@ -294,6 +294,7 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       message: 'Worktree is on its recorded task branch.',
     }),
     openExternalUrl: vi.fn().mockResolvedValue(true),
+    getSessionLinks: vi.fn().mockResolvedValue([]),
     openConfig: vi.fn().mockResolvedValue({ success: true }),
     deleteSession: vi.fn().mockResolvedValue(true),
     forgetSessionLocally: vi.fn().mockResolvedValue(true),

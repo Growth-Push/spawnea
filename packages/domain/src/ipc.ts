@@ -25,6 +25,7 @@ export interface CreateSessionInput {
   projectId: string;
   agentId: string;
   task: string;
+  originIssueUrl?: string;
   baseBranch?: string;
   useWorktree?: boolean;
   worktreePath?: string;
@@ -43,6 +44,7 @@ export interface CreateChildSessionInput {
   parentSessionId: string;
   name?: string;
   task: string;
+  originIssueUrl?: string;
   workspace: ChildSessionWorkspaceMode;
   agentId?: string;
   serverId?: string;
@@ -154,6 +156,7 @@ export interface FinishSessionResult {
 }
 
 export interface IpcChannels {
+  'github:links': (sessionId: string) => Promise<Array<{ sessionId: string; url: string; kind: 'repository' | 'issue' | 'pull'; source: 'task' | 'prompt' | 'output'; createdAt: Date }>>;
   // Operational Catalog
   'catalog:get': () => Promise<CatalogState>;
   'catalog:reload': () => Promise<CatalogReloadResult>;

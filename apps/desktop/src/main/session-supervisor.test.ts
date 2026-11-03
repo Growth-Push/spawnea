@@ -177,6 +177,27 @@ describe('SessionSupervisor', () => {
     expect(processOutputChunk).toHaveBeenCalledWith(session.id, ['Saved /tmp/demo/shot.png'], 'claude');
   });
 
+  it('retains final links from a dead pane without feeding its output to status or artifact detection', async () => {
+    const processOutputChunk = vi.fn().mockResolvedValue([]);
+    supervisor = new SessionSupervisor({ repositories: repos, sessionManager, contextStore, ptyBroker, artifactManager: { processOutputChunk } as unknown as ArtifactManager });
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude', task: 'Capture final reference',
+    });
+    mockHost.customRules.push({ pattern: 'tmux list-panes -t', response: { stdout: '9999:::claude:::1\n', stderr: '', exitCode: 0 } });
+    mockHost.customRules.push({ pattern: 'tmux capture-pane', response: { stdout: 'Working... https://github.com/example/repo/pull/71', stderr: '', exitCode: 0 } });
+
+    const result = await supervisor.checkSession(session.id);
+    expect(result.status).toBe('error');
+    expect((await repos.sessions.findById(session.id))?.status).toBe('error');
+    expect(await repos.github!.links(session.id)).toEqual([expect.objectContaining({ url: 'https://github.com/example/repo/pull/71', kind: 'pull', source: 'output' })]);
+    expect((await contextStore.load(session.id))?.retainedLinks).toContainEqual({ url: 'https://github.com/example/repo/pull/71', kind: 'pull', source: 'output' });
+    expect(processOutputChunk).not.toHaveBeenCalled();
+    const captures = mockHost.executedCommands.map((c) => c.command).filter((c) => c.includes('capture-pane'));
+    expect(captures).toHaveLength(1);
+    expect(captures[0]).toContain('-S -250');
+    expect(captures[0]).toContain('-J');
+  });
+
   it('detects working when active PTY stream activity is received', async () => {
     const session = await sessionManager.createSession({
       serverId: 'dev-workstation',
