@@ -86,12 +86,15 @@ describe('session link capture', () => {
 
   it('retains the final reference from an actual remain-on-exit tmux pane', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'spawnea-dead-links-'));
-    const tmux = (...args: string[]) => execFileSync('tmux', ['-S', join(dir, 'tmux.sock'), ...args], { encoding: 'utf8' });
+    const tmux = (...args: string[]) => execFileSync('tmux', ['-f', '/dev/null', '-S', join(dir, 'tmux.sock'), ...args], { encoding: 'utf8' });
     try {
       tmux('new-session', '-d', '-x', '200', '-y', '12', '-s', 'fixture', 'sh');
       tmux('set-option', '-t', 'fixture', 'remain-on-exit', 'on');
       tmux('set-option', '-t', 'fixture', 'history-limit', '2000');
-      tmux('send-keys', '-t', 'fixture', '-l', "i=0; while [ $i -lt 250 ]; do printf '%0160d\\n' 0; i=$((i+1)); done; printf '%s\\n' 'https://github.com/'example'/repo/pull/71'; exit");
+      tmux('send-keys', '-t', 'fixture', '-l', "i=0; while [ $i -lt 250 ]; do printf '%0160d\\n' 0; i=$((i+1)); done; printf '%s\\n' 'https://github.com/'example'/repo/pull/71'; read -r capture_ready; exit");
+      tmux('send-keys', '-t', 'fixture', 'Enter');
+      // Wait for rendered output before allowing exit to close the pane's PTY.
+      await expect.poll(() => tmux('capture-pane', '-p', '-J', '-t', 'fixture', '-S', '-250')).toContain('\nhttps://github.com/example/repo/pull/71\n');
       tmux('send-keys', '-t', 'fixture', 'Enter');
       await expect.poll(() => tmux('display-message', '-p', '-t', 'fixture', '#{pane_dead}').trim()).toBe('1');
       const text = tmux('capture-pane', '-p', '-J', '-t', 'fixture', '-S', '-250');
