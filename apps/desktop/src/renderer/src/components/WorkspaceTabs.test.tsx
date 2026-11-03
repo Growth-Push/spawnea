@@ -156,6 +156,21 @@ describe('WorkspaceTabs Component', () => {
     });
   }
 
+  it('shows the originating issue in the terminal workspace', () => {
+    const openExternalUrl = vi.fn().mockResolvedValue(undefined);
+    (window as any).spawneaApi.openExternalUrl = openExternalUrl;
+    const issueUrl = 'https://github.com/example/project/issues/123';
+    const { rerender } = render(<WorkspaceTabs session={{ ...mockSession, originIssueUrl: issueUrl, tmuxSessionName: 'long-session-name-'.repeat(12) }} activeTab="terminal" onTabChange={vi.fn()} />);
+    const shortcut = screen.getByRole('button', { name: 'Origin · Issue #123 · example/project' });
+    shortcut.focus();
+    expect(document.activeElement).toBe(shortcut);
+    expect(openExternalUrl).not.toHaveBeenCalled();
+    fireEvent.click(shortcut);
+    expect(openExternalUrl).toHaveBeenCalledWith(issueUrl);
+    rerender(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Origin · Issue #123 · example/project' })).toBeNull();
+  });
+
   it('copies current session data and reports success only after the clipboard resolves', async () => {
     let resolveWrite!: () => void;
     const writeClipboardText = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { resolveWrite = resolve; })).mockResolvedValue(undefined);
@@ -185,6 +200,23 @@ describe('WorkspaceTabs Component', () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     fireEvent.click(screen.getByTestId('copy-session-id-button'));
     expect(writeText).toHaveBeenCalledWith(next.id);
+  });
+
+  it('extends detail copy feedback and resets it when switching sessions', () => {
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
+    const onTabChange = vi.fn();
+    const view = render(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={onTabChange} />);
+    const button = screen.getByTestId('copy-session-id-button');
+    fireEvent.click(button);
+    act(() => vi.advanceTimersByTime(1500));
+    fireEvent.click(button);
+    act(() => vi.advanceTimersByTime(500));
+    expect(button.querySelector('.lucide-check')).not.toBeNull();
+    view.rerender(<WorkspaceTabs session={{ ...mockSession, id: 'another' }} activeTab="details" onTabChange={onTabChange} />);
+    expect(screen.getByTestId('copy-session-id-button').querySelector('.lucide-check')).toBeNull();
+    view.unmount();
+    vi.useRealTimers();
   });
 
   it.each(['success', 'failure'])('isolates an old %s from a newer pending copy after switching sessions', async (outcome) => {
@@ -570,6 +602,111 @@ describe('WorkspaceTabs Component', () => {
 
     expect(onTabChange).toHaveBeenCalledWith('artifacts');
     expect(screen.queryByTestId('detected-output-banner')).toBeNull();
+  });
+
+  it('keeps the committed session artifact response when a concurrent render is discarded', async () => {
+    let finish!: (items: Artifact[]) => void;
+    let select!: (id: string) => void;
+    let renderedSuspended = false;
+    const never = new Promise<void>(() => {});
+    window.spawneaApi.getArtifacts = vi.fn(() => new Promise<Artifact[]>((resolve) => { finish = resolve; }));
+    function SuspendAfterTabs({ id }: { id: string }) {
+      if (id === 'sess-2') { renderedSuspended = true; throw never; }
+      return null;
+    }
+    function Fixture() {
+      const [id, setId] = React.useState('sess-1');
+      select = setId;
+      return <React.Suspense fallback={<div>Suspended</div>}>
+        <WorkspaceTabs session={{ ...mockSession, id }} activeTab="artifacts" onTabChange={vi.fn()} />
+        <SuspendAfterTabs id={id} />
+      </React.Suspense>;
+    }
+    render(<Fixture />);
+    await waitFor(() => expect(window.spawneaApi.getArtifacts).toHaveBeenCalled());
+    await act(async () => { React.startTransition(() => select('sess-2')); });
+    expect(renderedSuspended).toBe(true);
+    expect(screen.queryByText('Suspended')).toBeNull();
+    await act(async () => { finish([mockOutputArtifact]); });
+    expect(screen.getByText('summary.md')).toBeDefined();
+    expect(screen.queryByText('Loading artifacts...')).toBeNull();
+  });
+
+  it.each(['resolve', 'reject'])('ignores an old session artifact %s while the new session is loading', async (outcome) => {
+    const pending: Array<{ sessionId: string; resolve: (items: Artifact[]) => void; reject: (error: Error) => void }> = [];
+    window.spawneaApi.getArtifacts = vi.fn((sessionId: string) => new Promise<Artifact[]>((resolve, reject) => { pending.push({ sessionId, resolve, reject }); }));
+    const nextSession = { ...mockSession, id: 'sess-2' };
+    const view = render(<WorkspaceTabs session={mockSession} activeTab="artifacts" onTabChange={vi.fn()} />);
+    view.rerender(<WorkspaceTabs session={nextSession} activeTab="artifacts" onTabChange={vi.fn()} />);
+    const old = pending.filter((item) => item.sessionId === 'sess-1');
+    const next = pending.filter((item) => item.sessionId === 'sess-2');
+    expect(old.length).toBeGreaterThan(0);
+    expect(next.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const item of old) {
+        if (outcome === 'resolve') item.resolve([mockOutputArtifact]);
+        else item.reject(new Error('old failure'));
+      }
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Loading artifacts...')).toBeDefined();
+    const newArtifact = { ...mockOutputArtifact, id: 'new-artifact', sessionId: 'sess-2', filename: 'new-session.txt' };
+    await act(async () => { next.at(-1)!.resolve([newArtifact]); await Promise.resolve(); });
+    expect(screen.getByText('new-session.txt')).toBeDefined();
+    expect(screen.queryByText(mockOutputArtifact.filename)).toBeNull();
+    view.unmount();
+  });
+
+  it.each(['resolve', 'reject'])('does not refresh an old session after a pending preview delete %s', async (outcome) => {
+    let resolveDelete!: (result: boolean) => void;
+    let rejectDelete!: (error: Error) => void;
+    window.spawneaApi.deleteArtifact = vi.fn().mockReturnValue(new Promise<boolean>((resolve, reject) => { resolveDelete = resolve; rejectDelete = reject; }));
+    window.spawneaApi.getArtifactContent = vi.fn().mockResolvedValue({ path: '/fixture.txt', content: 'fixture', isBinary: false, isTruncated: false, sizeBytes: 7 });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const view = render(<WorkspaceTabs session={mockSession} activeTab="terminal" onTabChange={vi.fn()} />);
+    await act(async () => { artifactCreatedCb('sess-1', mockOutputArtifact); });
+    fireEvent.click(screen.getByTestId('preview-detected-artifact-button'));
+    fireEvent.click(screen.getByTestId('delete-artifact-button'));
+    view.rerender(<WorkspaceTabs session={{ ...mockSession, id: 'sess-2' }} activeTab="terminal" onTabChange={vi.fn()} />);
+    const oldCalls = vi.mocked(window.spawneaApi.getArtifacts).mock.calls.filter(([id]) => id === 'sess-1').length;
+    await act(async () => {
+      if (outcome === 'resolve') resolveDelete(true);
+      else rejectDelete(new Error('old delete failed'));
+      await Promise.resolve();
+    });
+    expect(vi.mocked(window.spawneaApi.getArtifacts).mock.calls.filter(([id]) => id === 'sess-1')).toHaveLength(oldCalls);
+    expect(screen.queryByTestId('artifact-preview-modal')).toBeNull();
+    view.unmount();
+    confirm.mockRestore();
+  });
+
+  it('keeps the newest same-session artifact refresh when earlier requests finish later', async () => {
+    const pending: Array<(items: Artifact[]) => void> = [];
+    window.spawneaApi.getArtifacts = vi.fn(() => new Promise<Artifact[]>((resolve) => { pending.push(resolve); }));
+    const view = render(<WorkspaceTabs session={mockSession} activeTab="artifacts" onTabChange={vi.fn()} />);
+    expect(pending.length).toBeGreaterThan(1);
+    const latest = { ...mockOutputArtifact, id: 'latest', filename: 'latest.txt' };
+    await act(async () => { pending.at(-1)!([latest]); await Promise.resolve(); });
+    expect(screen.getByText('latest.txt')).toBeDefined();
+    await act(async () => { for (const resolve of pending.slice(0, -1)) resolve([mockOutputArtifact]); await Promise.resolve(); });
+    expect(screen.getByText('latest.txt')).toBeDefined();
+    expect(screen.queryByText(mockOutputArtifact.filename)).toBeNull();
+    view.unmount();
+  });
+
+  it('finishes loading on a current-session failure and accepts a later refresh', async () => {
+    const pending: Array<{ resolve: (items: Artifact[]) => void; reject: (error: Error) => void }> = [];
+    window.spawneaApi.getArtifacts = vi.fn(() => new Promise<Artifact[]>((resolve, reject) => { pending.push({ resolve, reject }); }));
+    const view = render(<WorkspaceTabs session={mockSession} activeTab="artifacts" onTabChange={vi.fn()} />);
+    await act(async () => { pending.at(-1)!.reject(new Error('current failure')); await Promise.resolve(); });
+    expect(screen.queryByText('Loading artifacts...')).toBeNull();
+    const previousCount = pending.length;
+    act(() => { artifactCreatedCb('sess-1', mockOutputArtifact); });
+    expect(pending).toHaveLength(previousCount + 1);
+    expect(screen.getByText('Loading artifacts...')).toBeDefined();
+    await act(async () => { pending.at(-1)!.resolve([mockOutputArtifact]); await Promise.resolve(); });
+    expect(screen.getByText(mockOutputArtifact.filename)).toBeDefined();
+    view.unmount();
   });
 
   it('dismisses banner when close (X) button is clicked', async () => {

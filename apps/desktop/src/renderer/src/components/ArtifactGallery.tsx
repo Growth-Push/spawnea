@@ -80,6 +80,23 @@ export function ArtifactGallery({
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const currentRef = useRef<() => boolean>(() => false);
+  React.useEffect(() => {
+    let current = true;
+    currentRef.current = () => current;
+    setToastMessage(null);
+    setCopiedId(null);
+    setIsUploading(false);
+    setIsClearing(false);
+    setSelectedArtifact(null);
+    setContextMenu(null);
+    return () => {
+      current = false;
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      clearTimeout(copyTimerRef.current);
+    };
+  }, [sessionId]);
 
   const showToast = useCallback((msg: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -109,13 +126,15 @@ export function ArtifactGallery({
   };
 
   const handleBlacklist = async (pattern: string) => {
+    const current = currentRef.current;
     if (window.spawneaApi?.addArtifactToBlacklist) {
       try {
         await window.spawneaApi.addArtifactToBlacklist(pattern);
+        if (!current()) return;
         showToast(`Blacklisted '${pattern}'. Removed matching artifacts.`);
         onRefresh?.();
       } catch (err: any) {
-        showToast(`Failed to blacklist: ${err?.message || 'Error'}`);
+        if (current()) showToast(`Failed to blacklist: ${err?.message || 'Error'}`);
       }
     }
   };
@@ -154,17 +173,20 @@ export function ArtifactGallery({
   }, [artifacts, filterDir, searchQuery, sortField, showHidden, hiddenArtifactIds]);
 
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    e.target.value = '';
+    const current = currentRef.current;
+    const uploadFile = onUploadFile;
+    const uploadData = window.spawneaApi?.uploadArtifactData;
     setIsUploading(true);
     try {
-      for (let i = 0; i < files.length; i++) {
-        const f = files[i];
-        if (onUploadFile) {
-          await onUploadFile(f);
-        } else if (window.spawneaApi?.uploadArtifactData) {
+      for (const f of files) {
+        if (uploadFile) {
+          await uploadFile(f);
+        } else if (uploadData) {
           const buf = new Uint8Array(await f.arrayBuffer());
-          await window.spawneaApi.uploadArtifactData(
+          await uploadData(
             sessionId,
             buf,
             f.name,
@@ -173,29 +195,32 @@ export function ArtifactGallery({
           );
         }
       }
-      onRefresh?.();
+      if (current()) onRefresh?.();
     } catch (err) {
-      console.error('Failed to upload file in ArtifactGallery:', err);
+      if (current()) console.error('Failed to upload file in ArtifactGallery:', err);
     } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (current()) {
+        setIsUploading(false);
+      }
     }
   };
 
   const handleCopyPath = (e: React.MouseEvent, art: Artifact) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(art.remotePath);
+    void navigator.clipboard.writeText(art.remotePath).catch(() => {});
     setCopiedId(art.id);
     showToast('Copied remote path');
-    setTimeout(() => setCopiedId(null), 2000);
+    clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopiedId(null), 2000);
   };
 
   const runSaveAs = async (art: Artifact) => {
+    const current = currentRef.current;
     if (window.spawneaApi?.saveArtifactAs) {
       try {
         await window.spawneaApi.saveArtifactAs(sessionId, art.id);
       } catch (err) {
-        showToast(`Unable to save ${art.filename}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        if (current()) showToast(`Unable to save ${art.filename}: ${err instanceof Error ? err.message : 'Unknown error'}`);
       }
     }
   };
@@ -206,14 +231,16 @@ export function ArtifactGallery({
   };
 
   const runOpenInOs = async (art: Artifact) => {
+    const current = currentRef.current;
     if (window.spawneaApi?.openArtifactInOs) {
       try {
         const result = await window.spawneaApi.openArtifactInOs(sessionId, art.id);
+        if (!current()) return;
         if (!result.opened) showToast(`Unable to open ${art.filename}`);
         else if (result.temporaryCopy) showToast('Opened a temporary copy; changes will not be saved to the remote file');
         else showToast('Opened in default app');
       } catch (err) {
-        showToast(`Unable to open ${art.filename}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        if (current()) showToast(`Unable to open ${art.filename}: ${err instanceof Error ? err.message : 'Unknown error'}`);
       }
     }
   };
@@ -225,18 +252,24 @@ export function ArtifactGallery({
 
   const handleDelete = async (e: React.MouseEvent, art: Artifact) => {
     e.stopPropagation();
+    const current = currentRef.current;
     if (confirm(`Delete artifact "${art.filename}"?`)) {
-      if (onDeleteArtifact) {
-        await onDeleteArtifact(art.id);
-      } else if (window.spawneaApi?.deleteArtifact) {
-        await window.spawneaApi.deleteArtifact(sessionId, art.id);
-        onRefresh?.();
+      try {
+        if (onDeleteArtifact) {
+          await onDeleteArtifact(art.id);
+        } else if (window.spawneaApi?.deleteArtifact) {
+          await window.spawneaApi.deleteArtifact(sessionId, art.id);
+          if (current()) onRefresh?.();
+        }
+        if (current()) showToast(`Deleted ${art.filename}`);
+      } catch (err) {
+        if (current()) showToast(`Unable to delete ${art.filename}: ${err instanceof Error ? err.message : 'Unknown error'}`);
       }
-      showToast(`Deleted ${art.filename}`);
     }
   };
 
   const handleClear = async () => {
+    const current = currentRef.current;
     if (artifacts.length === 0 || isClearing) return;
     if (!confirm(`Clear all ${artifacts.length} artifacts from this session? Remote files will not be deleted.`)) {
       return;
@@ -249,6 +282,7 @@ export function ArtifactGallery({
     setIsClearing(true);
     try {
       await window.spawneaApi.clearArtifacts(sessionId);
+      if (!current()) return;
       setSelectedArtifact(null);
       setHiddenArtifactIds(new Set());
       try {
@@ -259,9 +293,9 @@ export function ArtifactGallery({
       onRefresh();
       showToast('Cleared session artifacts');
     } catch (err: any) {
-      showToast(`Failed to clear artifacts: ${err?.message || 'Error'}`);
+      if (current()) showToast(`Failed to clear artifacts: ${err?.message || 'Error'}`);
     } finally {
-      setIsClearing(false);
+      if (current()) setIsClearing(false);
     }
   };
 
@@ -669,7 +703,7 @@ export function ArtifactGallery({
               : undefined
           }
           onCopyPath={() => {
-            navigator.clipboard.writeText(contextMenu.artifact.remotePath);
+            void navigator.clipboard.writeText(contextMenu.artifact.remotePath).catch(() => {});
             showToast('Copied remote path');
           }}
           onOpenInOs={() => runOpenInOs(contextMenu.artifact)}
@@ -700,11 +734,16 @@ export function ArtifactGallery({
           uiZoom={uiZoom}
           onClose={() => setSelectedArtifact(null)}
           onDelete={async (id) => {
-            if (onDeleteArtifact) {
-              await onDeleteArtifact(id);
-            } else if (window.spawneaApi?.deleteArtifact) {
-              await window.spawneaApi.deleteArtifact(sessionId, id);
-              onRefresh?.();
+            const current = currentRef.current;
+            try {
+              if (onDeleteArtifact) {
+                await onDeleteArtifact(id);
+              } else if (window.spawneaApi?.deleteArtifact) {
+                await window.spawneaApi.deleteArtifact(sessionId, id);
+                if (current()) onRefresh?.();
+              }
+            } catch (err) {
+              if (current()) showToast(`Unable to delete artifact: ${err instanceof Error ? err.message : 'Unknown error'}`);
             }
           }}
         />

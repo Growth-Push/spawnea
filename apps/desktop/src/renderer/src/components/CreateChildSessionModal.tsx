@@ -30,6 +30,7 @@ export function CreateChildSessionModal({
 }: CreateChildSessionModalProps): React.JSX.Element | null {
   const [name, setName] = useState('');
   const [task, setTask] = useState('');
+  const [originIssueUrl, setOriginIssueUrl] = useState('');
   const [workspace, setWorkspace] = useState<ChildSessionWorkspaceMode>('same-project');
   const [selectedHostId, setSelectedHostId] = useState('');
   const [agentId, setAgentId] = useState('');
@@ -87,6 +88,7 @@ export function CreateChildSessionModal({
       initializedParentIdRef.current = parentSession.id;
       setName('');
       setTask('');
+      setOriginIssueUrl('');
       setWorkspace('same-project');
       setSelectedHostId(parentSession.serverId);
       setAgentId(parentSession.agentId);
@@ -100,6 +102,7 @@ export function CreateChildSessionModal({
     if (!isOpen) return;
 
     const timer = setTimeout(() => {
+      if (typeof document === 'undefined') return;
       if (modalRef.current && !modalRef.current.contains(document.activeElement)) {
         const taskInput = modalRef.current.querySelector<HTMLElement>('#child-task');
         if (taskInput) {
@@ -171,6 +174,7 @@ export function CreateChildSessionModal({
         parentSessionId: parentSession.id,
         name: name.trim() || undefined,
         task: task.trim(),
+        originIssueUrl: originIssueUrl.trim() || undefined,
         workspace,
         agentId,
       });
@@ -191,7 +195,7 @@ export function CreateChildSessionModal({
       data-testid="create-child-session-modal"
       className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center z-50 p-4"
     >
-      <div className="bg-[#161b22] border border-[#30363d] rounded-xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      <div className="bg-[#161b22] border border-[#30363d] rounded-xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-full animate-in fade-in zoom-in-95 duration-150">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#30363d] bg-[#0d1117]">
           <div className="flex items-center gap-2.5">
             <div className="p-1.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
@@ -216,7 +220,7 @@ export function CreateChildSessionModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto">
           {error && (
             <div
               role="alert"
@@ -242,6 +246,10 @@ export function CreateChildSessionModal({
               required
               autoFocus
             />
+          </div>
+          <div>
+            <label htmlFor="child-origin-issue" className="block text-xs font-medium text-zinc-300 mb-1">Originating issue URL (optional)</label>
+            <input id="child-origin-issue" value={originIssueUrl} onChange={(e) => setOriginIssueUrl(e.target.value)} disabled={submitting} placeholder="https://github.com/owner/repo/issues/1" className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-xs text-zinc-200" />
           </div>
 
           {/* Display Name (Optional) */}

@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Session, SessionRepository, SessionStatus, Logger } from '@spawnea/domain';
 import { createLogger } from '@spawnea/domain';
 import type { DbClient } from '../connection.js';
@@ -182,6 +182,7 @@ export class SqliteSessionRepository implements SessionRepository {
         projectId: session.projectId,
         agentId: session.agentId,
         task: session.task,
+        originIssueUrl: session.originIssueUrl ?? existing.originIssueUrl ?? null,
         worktreePath: session.worktreePath,
         branch: session.branch,
         baseBranch: session.baseBranch ?? null,
@@ -221,6 +222,7 @@ export class SqliteSessionRepository implements SessionRepository {
       projectId: session.projectId,
       agentId: session.agentId,
       task: session.task,
+      originIssueUrl: session.originIssueUrl ?? null,
       worktreePath: session.worktreePath,
       branch: session.branch,
       baseBranch: session.baseBranch ?? null,
@@ -273,6 +275,7 @@ export class SqliteSessionRepository implements SessionRepository {
     if (updates.projectId !== undefined) setValues.projectId = updates.projectId;
     if (updates.agentId !== undefined) setValues.agentId = updates.agentId;
     if (updates.task !== undefined) setValues.task = updates.task;
+    if (updates.originIssueUrl !== undefined) setValues.originIssueUrl = updates.originIssueUrl;
     if (updates.worktreePath !== undefined) setValues.worktreePath = updates.worktreePath;
     if (updates.branch !== undefined) setValues.branch = updates.branch;
     if (updates.baseBranch !== undefined) setValues.baseBranch = updates.baseBranch;
@@ -317,7 +320,7 @@ export class SqliteSessionRepository implements SessionRepository {
     return this.update(id, { status, lastActivityAt: timestamp });
   }
 
-  async delete(id: string): Promise<boolean> {
+  async delete(id: string, options?: { countAsClosed?: boolean }): Promise<boolean> {
     this.logger.info('Deleting session', { id });
     try {
       // Atomically resolve child references before parent deletion so no orphaned foreign keys remain
@@ -327,7 +330,12 @@ export class SqliteSessionRepository implements SessionRepository {
           .where(eq(sessions.parentSessionId, id))
           .run();
 
-        return tx.delete(sessions).where(eq(sessions.id, id)).run().changes > 0;
+        const removed = tx.delete(sessions).where(eq(sessions.id, id)).run().changes > 0;
+        if (removed && options?.countAsClosed) {
+          const updated = tx.run(sql`UPDATE dashboard_closed_sessions SET count = count + 1 WHERE singleton = 1`);
+          if (updated.changes !== 1) throw new Error('Dashboard closure counter is unavailable');
+        }
+        return removed;
       });
       this.logger.debug('Session delete result', { id, deleted });
       return deleted;

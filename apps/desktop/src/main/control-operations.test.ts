@@ -78,6 +78,18 @@ describe('Spawnea control operations contract', () => {
     );
   });
 
+  it('forwards an independent originating issue through root and child operations', async () => {
+    const originIssueUrl = 'https://github.com/example/other/issues/42';
+    const createRoot = vi.fn().mockResolvedValue({ sessionId: 'root' });
+    const root = await connectRootModelTool(createRoot);
+    expect((await root.callTool({ name: 'spawnea_create_session', arguments: { projectId: 'project', agentId: 'codex', task: 'Independent task', originIssueUrl } })).isError).toBe(false);
+    expect(createRoot).toHaveBeenCalledWith(expect.objectContaining({ task: 'Independent task', originIssueUrl }), expect.anything());
+    const createChildSession = vi.fn().mockResolvedValue({ sessionId: 'child' });
+    const child = await connect({ createChildSession });
+    expect((await child.callTool({ name: 'spawnea_create_child_session', arguments: { parentSession: 'root', task: 'Child task', originIssueUrl } })).isError).toBe(false);
+    expect(createChildSession).toHaveBeenCalledWith(expect.objectContaining({ task: 'Child task', originIssueUrl }));
+  });
+
   it('exposes bounded integration preflight results', async () => {
     const preflightIntegration = vi.fn().mockResolvedValue({ apiVersion: 'v1', sessionId: 'child', conflictingFiles: ['shared.txt'], parentCommits: [], truncated: false });
     const client = await connect({ preflightIntegration });

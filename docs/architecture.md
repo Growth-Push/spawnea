@@ -324,7 +324,7 @@ HTTP(S) references offer copying and explicit browser opening on local and remot
 
 The sidebar's explicit Dashboard action expands current work into an in-app Host → Project → Root → Children hierarchy. Current work means all session records currently held by the renderer, including done and disconnected records until removed. Children remain beneath their real parent even across host/project boundaries; cross-host/project child rows explicitly label their own host and project, and missing parents/catalog entries have visible fallbacks. Keyboard-accessible group disclosure controls and session buttons support complete keyboard navigation. The dashboard shares App session state and the sidebar's ancestry and attention helpers; it adds no host/tmux polling. Attention means `needs_input` or `error`; filtering retains ancestors of matches. Summary and distribution always count all current records once, independently of tree filters.
 
-Return preserves the mounted workspace, active tab and sidebar preferences; selecting a dashboard row opens that exact session's existing terminal. A renderer-lifetime sampler records only aggregate concurrent `working` root/child counts, including roots without children. It observes state changes and a ten-second timer, retains at most 720 samples across dashboard toggles, and resets on application restart. The chart labels the observation start and plots only retained samples; it does not reconstruct deleted records. Initial loading, hidden-window observations and delayed timers produce gaps. The Harness/Project/Host doughnut is a current all-session snapshot using each child's own identifiers. Both charts are accessible SVG with text legends; no database history, IPC contract, remote telemetry or monitoring while closed is added.
+Return preserves the mounted workspace, active tab and sidebar preferences; selecting a dashboard row opens that exact session's existing terminal. The Harness/Project/Host doughnut is a current all-session snapshot using each child's own identifiers. The activity chart persists aggregate observations through typed IPC and supports bounded history navigation, as described in [Dashboard activity history](#dashboard-activity-history). It does not add host polling or monitoring while the application is closed.
 
 ### Markdown document previews
 
@@ -899,4 +899,35 @@ To keep the initial MVP tight and reliable, the following areas are intentionall
 1. **Custom Remote Server Daemon:** Remote execution uses vanilla SSH/tmux; no custom Spawnea daemon is built for MVP.
 2. **Multi-User / Cloud Collaboration:** Spawnea is 100% local-first desktop. No cloud syncing or multi-user access is designed.
 3. **Full In-App Code Editor / LSP:** Spawnea provides Dired-style file navigation and visual Git diffs, delegating in-depth code editing to external editors or the agents themselves.
-4. **Issue Tracker Synchronization:** Integrations with Linear, Jira, or GitHub Issues are out of scope for the MVP.
+4. **Issue Tracker Synchronization:** Mandatory or bidirectional synchronization with issue trackers is out of scope for the MVP.
+
+### Dashboard activity history
+
+The desktop stores local aggregate observations of sessions in `working` or
+`starting`, separated into parents and children. Observations begin when the
+feature is enabled; no prior activity or terminal output is reconstructed.
+An unobserved marker separates app openings, hidden periods, delayed samples,
+and persistence failures. A range inside an unobserved period remains marked
+unknown. The Dashboard reads bounded time buckets from SQLite and labels
+buckets containing multiple observations; zooming requests the selected range
+again so older stored observations remain accessible. Markers in a summarized
+bucket identify an interval containing a gap, rather than its exact duration.
+The observation browser pages through the selected range, including observations
+with identical timestamps, without loading the entire history into the renderer.
+
+A separate counter records sessions removed by confirmed close or finalization.
+The counter increments in the same SQLite transaction as the session deletion;
+retries after deletion cannot increment it again. Creation rollback, forgetting
+local metadata and releasing an external session do not count as closures. This
+counter starts at feature activation and is separate from the current session
+count. Storage and clipboard errors are reported on the Dashboard without
+blocking terminal use. Copied session details contain only name, ID, host,
+project, harness, state, branch, worktree and tmux identifiers.
+
+### Contextual GitHub references
+
+Session context files and SQLite retain canonical repository, issue and PR identities and their task, prompt, or output provenance, not terminal transcripts. Task references are also admitted when saved contexts are restored and external sessions are adopted, using the same bounded metadata policy. The workspace displays deduplicated contextual buttons only when references exist; opening uses the validated external URL boundary. The optional originating issue is distinguished from incidental references and is never sent as issue content to the harness. Capture examines the most recent bounded window of tmux output while Spawnea is running and can miss output that scrolls away or appears while the application is closed.
+
+Each session retains at most 128 canonical identities and three provenance records per identity; task takes priority over prompt and output, with stable older-first admission within a priority. A higher-priority identity may displace a lower-priority one; the separate originating issue is never evicted by this policy. Extraction examines at most 32,768 characters and accepts raw and canonical URLs of at most 2,048 characters, without accepting a truncated token. SQLite admission, direct insertion, bounded reads and recovery normalize the same policy, and context mutations serialize accepted snapshots without recreating deleted files. Legacy link metadata is normalized on read. Context files larger than 8 MiB are reported and left intact rather than loaded or partially rewritten; this limit does not bound SSH transport or guarantee recovery of arbitrarily large contexts.
+
+Before normalization, an indexed probe checks at most 4,097 link rows for the session. Legacy metadata exceeding 4,096 rows is preserved and reported as requiring explicit recovery; no new metadata is admitted until it is recovered. Normal bounded sessions remain below this technical recovery limit.

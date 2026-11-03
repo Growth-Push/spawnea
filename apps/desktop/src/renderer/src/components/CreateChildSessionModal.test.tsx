@@ -86,6 +86,19 @@ describe('CreateChildSessionModal', () => {
     expect(screen.getByTestId('child-workspace-new-worktree')).toBeDefined();
   });
 
+  it('clears the originating issue on reopen and parent changes', () => {
+    const props = { isOpen: true, parentSession: mockParentSession, agents: mockAgents, onClose: vi.fn(), onSubmit: vi.fn() };
+    const { rerender } = render(<CreateChildSessionModal {...props} />);
+    const fill = () => fireEvent.change(screen.getByLabelText('Originating issue URL (optional)'), { target: { value: 'https://github.com/example/repo/issues/9' } });
+    fill();
+    rerender(<CreateChildSessionModal {...props} isOpen={false} />);
+    rerender(<CreateChildSessionModal {...props} />);
+    expect((screen.getByLabelText('Originating issue URL (optional)') as HTMLInputElement).value).toBe('');
+    fill();
+    rerender(<CreateChildSessionModal {...props} parentSession={{ ...mockParentSession, id: 'parent-2' }} />);
+    expect((screen.getByLabelText('Originating issue URL (optional)') as HTMLInputElement).value).toBe('');
+  });
+
   it('submits form with same-project mode by default', () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(

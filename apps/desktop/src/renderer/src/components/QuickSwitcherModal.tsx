@@ -95,9 +95,10 @@ export function QuickSwitcherModal({
     if (isOpen) {
       setQuery('');
       setSelectedIndex(0);
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         inputRef.current?.focus();
       }, 50);
+      return () => clearTimeout(timer);
     }
   }, [isOpen]);
 

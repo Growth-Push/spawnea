@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useId } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useId } from 'react';
 import type {
   Session,
   Server,
@@ -39,6 +39,7 @@ import {
   Bookmark,
 } from 'lucide-react';
 import { AgentContextView } from './AgentContextView';
+import { SessionLinkButtons } from './SessionLinkButtons';
 import { formatSessionAgentContext } from '../session-agent-context';
 
 export type WorkspaceTabType = 'terminal' | 'files' | 'diff' | 'artifacts' | 'details' | 'agent-context';
@@ -100,12 +101,18 @@ function DetailCard({
   testId,
 }: DetailCardProps): React.JSX.Element {
   const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    setCopied(false);
+    return () => clearTimeout(copyTimer.current);
+  }, [value]);
 
   const handleCopy = () => {
     if (!value) return;
-    navigator.clipboard.writeText(value);
+    void navigator.clipboard.writeText(value).catch(() => {});
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -189,20 +196,35 @@ export function WorkspaceTabs({
   const [isLoadingGit, setIsLoadingGit] = useState(false);
   const [gitError, setGitError] = useState<string | null>(null);
   const gitRequestGeneration = useRef(0);
+  const artifactRequestGeneration = useRef(0);
+  const artifactLifetime = useRef(0);
+  const artifactSession = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    artifactSession.current = session?.id ?? null;
+  }, [session?.id]);
+  const artifactActive = useRef(false);
 
   const fetchArtifacts = useCallback(async (sessionId: string) => {
+    if (!artifactActive.current || artifactSession.current !== sessionId) return;
+    const lifetime = artifactLifetime.current;
+    const request = ++artifactRequestGeneration.current;
+    const current = () => artifactActive.current && artifactSession.current === sessionId &&
+      artifactLifetime.current === lifetime && artifactRequestGeneration.current === request;
     if (!window.spawneaApi?.getArtifacts) {
-      setArtifacts([]);
+      if (current()) {
+        setArtifacts([]);
+        setIsLoadingArtifacts(false);
+      }
       return;
     }
     setIsLoadingArtifacts(true);
     try {
       const list = await window.spawneaApi.getArtifacts(sessionId);
-      setArtifacts(list);
+      if (current()) setArtifacts(list);
     } catch {
-      setArtifacts([]);
+      if (current()) setArtifacts([]);
     } finally {
-      setIsLoadingArtifacts(false);
+      if (current()) setIsLoadingArtifacts(false);
     }
   }, []);
 
@@ -278,7 +300,12 @@ export function WorkspaceTabs({
   }, [onGitStatusChange, session?.branch]);
 
   useEffect(() => {
+    artifactActive.current = true;
+    artifactLifetime.current += 1;
     gitRequestGeneration.current += 1;
+    setArtifacts([]);
+    setIsLoadingArtifacts(false);
+    setPreviewingArtifact(null);
     if (!session) {
       setClipboardBridgeState({ sessionId: null, available: false });
       setArtifacts([]);
@@ -287,11 +314,15 @@ export function WorkspaceTabs({
       setGitDiff(null);
       setSelectedDiffFilePath(null);
       setDetectedOutput(null);
-      return;
+    } else {
+      setDetectedOutput(null);
+      void fetchArtifacts(session.id);
     }
-
-    setDetectedOutput(null);
-    fetchArtifacts(session.id);
+    return () => {
+      artifactActive.current = false;
+      artifactLifetime.current += 1;
+      artifactRequestGeneration.current += 1;
+    };
   }, [session?.id, fetchArtifacts]);
 
   useEffect(() => {
@@ -698,6 +729,7 @@ export function WorkspaceTabs({
           <span>tmux: {session.tmuxSessionName}</span>
         </div>
       </div>
+      <SessionLinkButtons key={session.id} sessionId={session.id} originIssueUrl={session.originIssueUrl} active={!isSuspended} />
 
       {/* Tab Content Panels */}
       <div
@@ -749,7 +781,7 @@ export function WorkspaceTabs({
 
         {/* Git Diff Panel (GitStatusView + DiffViewer) */}
         {activeTab === 'diff' && (
-          <div className="h-full flex flex-col gap-4 overflow-hidden">
+          <div className="h-full flex flex-col gap-4 overflow-y-auto">
             <GitStatusView
               status={gitStatus}
               selectedFilePath={selectedDiffFilePath}
@@ -774,6 +806,7 @@ export function WorkspaceTabs({
 
         {/* Artifacts Panel (ArtifactGallery) */}
         {activeTab === 'artifacts' && (
+          <>
           <ArtifactGallery
             sessionId={session.id}
             artifacts={artifacts}
@@ -781,6 +814,7 @@ export function WorkspaceTabs({
             isLoading={isLoadingArtifacts}
             onRefresh={() => fetchArtifacts(session.id)}
           />
+          </>
         )}
 
         {/* Details Panel */}
@@ -815,7 +849,7 @@ export function WorkspaceTabs({
               )}
               </div>
             </div>
-            <dl className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <dl key={session.id} className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <DetailCard
                 label="Session ID"
                 value={session.id}
@@ -915,7 +949,7 @@ export function WorkspaceTabs({
                   <span>Querying host system telemetry...</span>
                 </div>
               ) : hostInfo ? (
-                <dl className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <dl key={session.id} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <DetailCard
                     label="Operating System"
                     value={hostInfo.osName || 'Linux'}
@@ -996,9 +1030,13 @@ export function WorkspaceTabs({
           uiZoom={uiZoom}
           onClose={() => setPreviewingArtifact(null)}
           onDelete={async (id) => {
+            const lifetime = artifactLifetime.current;
+            const sessionId = session.id;
             if (window.spawneaApi?.deleteArtifact) {
-              await window.spawneaApi.deleteArtifact(session.id, id);
-              fetchArtifacts(session.id);
+              await window.spawneaApi.deleteArtifact(sessionId, id);
+              if (artifactActive.current && artifactSession.current === sessionId && artifactLifetime.current === lifetime) {
+                void fetchArtifacts(sessionId);
+              }
             }
           }}
         />

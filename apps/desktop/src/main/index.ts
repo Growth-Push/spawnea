@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { mkdir, rm as rmAsync, writeFile } from 'node:fs/promises';
-import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
+import { createDatabase, createRepositories, DashboardHistoryRepository, type Repositories } from '@spawnea/db';
 import {
   createLogger,
   createFileLogHandler,
@@ -347,6 +347,27 @@ function registerIpcHandlers(
   discoveryService: LocalDiscoveryService,
   controlService: AgentControlService
 ): void {
+  // Dashboard history is local metadata and never contains terminal output.
+  const history = new DashboardHistoryRepository(dbConnection!.sqlite);
+  ipcMain.handle('dashboard:begin', (_event, time?: number) => {
+    if (time !== undefined && (!Number.isSafeInteger(time) || time < 0)) throw new Error('Invalid dashboard observation time');
+    history.begin(time ?? Date.now());
+  });
+  ipcMain.handle('dashboard:recordObservation', (_event, sample: import('@spawnea/domain').DashboardObservation) => {
+    if (!sample || !Number.isSafeInteger(sample.time) || sample.time < 0 || !Number.isSafeInteger(sample.parents) || sample.parents < 0 || !Number.isSafeInteger(sample.children) || sample.children < 0 || typeof sample.gap !== 'boolean') {
+      throw new Error('Invalid dashboard observation');
+    }
+    history.record(sample);
+  });
+  ipcMain.handle('dashboard:history', (_event, range?: { from: number; to: number }) => {
+    if (range && (!Number.isSafeInteger(range.from) || !Number.isSafeInteger(range.to) || range.from < 0 || range.to < range.from)) throw new Error('Invalid dashboard history range');
+    return history.view(range?.from, range?.to);
+  });
+  ipcMain.handle('dashboard:historyPage', (_event, range: { from: number; to: number }, cursor: import('@spawnea/domain').DashboardHistoryCursor | null) => {
+    if (!range || !Number.isSafeInteger(range.from) || !Number.isSafeInteger(range.to) || range.from < 0 || range.to < range.from || (cursor && (!Number.isSafeInteger(cursor.time) || !Number.isSafeInteger(cursor.id) || cursor.id < 1 || cursor.time < range.from || cursor.time > range.to))) throw new Error('Invalid dashboard history page');
+    return history.page(range.from, range.to, cursor, 100);
+  });
+  ipcMain.handle('github:links', async (_event, sessionId: string) => repos.github?.links(sessionId) ?? []);
   if (process.env.SPAWNEA_RELEASE_SMOKE === '1') {
     ipcMain.handle('app:quitForReleaseSmoke', (event) => {
       if (event.sender !== mainWindowRef?.webContents) {

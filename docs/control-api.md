@@ -254,3 +254,7 @@ Use a disposable Git repository and a disposable Spawnea session.
 5. Request a `close` with `dirtyChanges: "discard"` and no confirmation; confirm nothing is mutated while the dialog is pending, reject it, and check status `rejected`.
 6. Request a `close` with `dirtyChanges: "stash"` and `confirmation: "llm-validated"`; confirm no dialog opens and the result matches the session state.
 7. Stop Spawnea and verify `spawnea list` reports that the app is not running.
+
+### Originating issue
+
+`spawnea_create_session` and `spawnea_create_child_session` accept an optional `originIssueUrl` containing a complete HTTPS github.com issue URL. The CLI exposes the same field as `--origin-issue <url>` on `session create` and `child create`. A child does not inherit this association automatically. The issue can belong to another repository and is independent of task and initial prompt; its contents are not submitted to the agent. Existing requests without the field remain valid.

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { dashboardHistorySchema } from './dashboard-history/schema.js';
 
 export interface Migration {
   name: string;
@@ -136,6 +137,29 @@ export const MIGRATIONS: Migration[] = [
     name: '0010_rename_mcp_creation_source',
     sql: `
       UPDATE sessions SET creation_source = 'control' WHERE creation_source = 'mcp';
+    `,
+  },
+  {
+    name: '0011_dashboard_history',
+    sql: dashboardHistorySchema,
+  },
+  {
+    name: '0012_github_integration',
+    sql: `
+      ALTER TABLE sessions ADD COLUMN origin_issue_url TEXT;
+      CREATE TABLE github_project_settings (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        tracker_enabled INTEGER NOT NULL DEFAULT 0,
+        ci_enabled INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE session_links (
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        url TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        source TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, url, source)
+      );
     `,
   },
 ];

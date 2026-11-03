@@ -1,5 +1,5 @@
 import { MarkdownPreview } from './MarkdownPreview';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { FileContentResult } from '@spawnea/domain';
 import {
   FileText,
@@ -37,6 +37,22 @@ export function FilePreview({
   const [promoted, setPromoted] = useState(false);
   const [isPromoting, setIsPromoting] = useState(false);
   const [activeView, setActiveView] = useState<'preview' | 'raw'>('preview');
+  const timers = useRef<{ content?: ReturnType<typeof setTimeout>; path?: ReturnType<typeof setTimeout>; promoted?: ReturnType<typeof setTimeout> }>({});
+  const isCurrent = useRef<() => boolean>(() => false);
+
+  useEffect(() => {
+    let active = true;
+    isCurrent.current = () => active;
+    setCopiedContent(false);
+    setCopiedPath(false);
+    setPromoted(false);
+    setIsPromoting(false);
+    const pending = timers.current;
+    return () => {
+      active = false;
+      Object.values(pending).forEach(clearTimeout);
+    };
+  }, [sessionId, file?.path]);
 
 
   if (!file && !isLoading && !error) {
@@ -45,20 +61,23 @@ export function FilePreview({
 
   const handleCopyContent = () => {
     if (!file?.content || file.isBinary) return;
-    navigator.clipboard.writeText(file.content);
+    void navigator.clipboard.writeText(file.content).catch(() => {});
     setCopiedContent(true);
-    setTimeout(() => setCopiedContent(false), 2000);
+    clearTimeout(timers.current.content);
+    timers.current.content = setTimeout(() => setCopiedContent(false), 2000);
   };
 
   const handleCopyPath = () => {
     if (!file?.path) return;
-    navigator.clipboard.writeText(file.path);
+    void navigator.clipboard.writeText(file.path).catch(() => {});
     setCopiedPath(true);
-    setTimeout(() => setCopiedPath(false), 2000);
+    clearTimeout(timers.current.path);
+    timers.current.path = setTimeout(() => setCopiedPath(false), 2000);
   };
 
   const handlePromote = async () => {
     if (!file?.path) return;
+    const active = isCurrent.current;
     setIsPromoting(true);
     try {
       if (onPromote) {
@@ -66,12 +85,14 @@ export function FilePreview({
       } else if (sessionId && window.spawneaApi?.promoteToArtifact) {
         await window.spawneaApi.promoteToArtifact(sessionId, file.path);
       }
+      if (!active()) return;
       setPromoted(true);
-      setTimeout(() => setPromoted(false), 2500);
+      clearTimeout(timers.current.promoted);
+      timers.current.promoted = setTimeout(() => setPromoted(false), 2500);
     } catch {
       // ignore
     } finally {
-      setIsPromoting(false);
+      if (active()) setIsPromoting(false);
     }
   };
 
@@ -243,13 +264,19 @@ function CodeViewer({
   content: string;
 }): React.JSX.Element {
   const [copiedLine, setCopiedLine] = useState<number | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    setCopiedLine(null);
+    return () => clearTimeout(copyTimer.current);
+  }, [filePath]);
   const lines = content.split('\n');
 
   const handleCopyLine = (lineNum: number) => {
     const ref = `${filePath}:${lineNum}`;
-    navigator.clipboard.writeText(ref);
+    void navigator.clipboard.writeText(ref).catch(() => {});
     setCopiedLine(lineNum);
-    setTimeout(() => setCopiedLine(null), 2000);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopiedLine(null), 2000);
   };
 
   return (

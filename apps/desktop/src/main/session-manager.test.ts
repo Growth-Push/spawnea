@@ -889,6 +889,85 @@ hosts:
     expect(mockHost.sessions.has(created.tmuxSessionName)).toBe(true);
   });
 
+  it('restores the independent originating issue and retained task links from context', async () => {
+    const created = await sessionManager.createSession({
+      serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude',
+      task: 'Inspect https://github.com/example/repo/pull/9 and https://github.com/example/my_repo', originIssueUrl: 'https://github.com/example/other/issues/4',
+    });
+    expect(created.originIssueUrl).toBe('https://github.com/example/other/issues/4');
+    expect((await contextStore.load(created.id))?.retainedLinks).toEqual([{ url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' }, { url: 'https://github.com/example/my_repo', kind: 'repository', source: 'task' }]);
+    const child = await sessionManager.createChildSession({ parentSessionId: created.id, task: 'Child', workspace: 'same-project' });
+    expect(child.originIssueUrl).toBeUndefined();
+    await repos.sessions.delete(created.id);
+    await sessionManager.restoreSessions();
+    expect((await repos.sessions.findById(created.id))?.originIssueUrl).toBe('https://github.com/example/other/issues/4');
+    expect(await repos.github?.links(created.id)).toEqual(expect.arrayContaining([expect.objectContaining({ url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' }), expect.objectContaining({ url: 'https://github.com/example/my_repo', kind: 'repository', source: 'task' })]));
+  });
+
+  it('rejects a repository as an originating issue', async () => {
+    await expect(sessionManager.createSession({ serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude', task: 'Task', originIssueUrl: 'https://github.com/example/repo' })).rejects.toThrow('Origin must be a complete GitHub issue URL');
+  });
+
+  it.each([
+    { missingRow: false, emptyLinks: false },
+    { missingRow: false, emptyLinks: true },
+    { missingRow: true, emptyLinks: false },
+    { missingRow: true, emptyLinks: true },
+  ])('extracts task references from legacy contexts ($missingRow missing row, $emptyLinks empty links)', async ({ missingRow, emptyLinks }) => {
+    const created = await sessionManager.createSession({
+      serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude',
+      task: 'Inspect https://github.com/Example/Repo/pull/9 and https://github.com/example/my_repo',
+      originIssueUrl: 'https://github.com/example/other/issues/4',
+    });
+    dbConn.sqlite.prepare('DELETE FROM session_links WHERE session_id = ?').run(created.id);
+    await contextStore.update(created.id, (context) => ({ ...context, retainedLinks: emptyLinks ? [] : undefined }));
+    if (missingRow) await repos.sessions.delete(created.id);
+
+    const expected = [
+      { url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' },
+      { url: 'https://github.com/example/my_repo', kind: 'repository', source: 'task' },
+    ];
+    await sessionManager.restoreSessions();
+    expect((await repos.github!.links(created.id)).map(({ url, kind, source }) => ({ url, kind, source }))).toEqual(expected);
+    expect((await contextStore.load(created.id))?.retainedLinks).toEqual(expected);
+    expect((await repos.sessions.findById(created.id))?.originIssueUrl).toBe(created.originIssueUrl);
+    expect((await contextStore.load(created.id))?.originIssueUrl).toBe(created.originIssueUrl);
+    await sessionManager.restoreSessions();
+    expect((await repos.github!.links(created.id)).map(({ url, kind, source }) => ({ url, kind, source }))).toEqual(expected);
+    expect((await contextStore.load(created.id))?.retainedLinks).toEqual(expected);
+  });
+
+  it('restores task references alongside retained prompt and output provenance', async () => {
+    const created = await sessionManager.createSession({
+      serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude',
+      task: 'Inspect https://github.com/example/repo/pull/9',
+    });
+    const retained = [
+      { url: 'https://github.com/example/repo/pull/9', kind: 'pull' as const, source: 'output' as const },
+      { url: 'https://github.com/example/other/issues/2', kind: 'issue' as const, source: 'prompt' as const },
+    ];
+    dbConn.sqlite.prepare('DELETE FROM session_links WHERE session_id = ?').run(created.id);
+    await contextStore.update(created.id, (context) => ({ ...context, retainedLinks: retained }));
+
+    await sessionManager.restoreSessions();
+    const actual = (await repos.github!.links(created.id)).map(({ url, kind, source }) => ({ url, kind, source }));
+    expect(actual).toHaveLength(3);
+    expect(actual).toEqual(expect.arrayContaining([...retained, { url: 'https://github.com/example/repo/pull/9', kind: 'pull', source: 'task' }]));
+    const saved = (await contextStore.load(created.id))?.retainedLinks;
+    expect(saved).toHaveLength(actual.length);
+    expect(saved).toEqual(expect.arrayContaining(actual));
+  });
+
+  it('restores a bounded snapshot after more references than the retention budget', async () => {
+    const created = await sessionManager.createSession({ serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude', task: 'Restore references' });
+    await contextStore.retainLinks(created.id, Array.from({ length: 3000 }, (_, index) => ({ url: `https://github.com/example/repo/issues/${index + 1}`, kind: 'issue' as const, source: 'output' as const })));
+    expect((await contextStore.load(created.id))?.retainedLinks).toHaveLength(128);
+    await repos.sessions.delete(created.id);
+    await sessionManager.restoreSessions();
+    expect(await repos.github?.links(created.id)).toHaveLength(128);
+    expect((await contextStore.load(created.id))?.retainedLinks).toHaveLength(128);
+  });
+
   it('rejects blank and oversized session titles without changing persistence', async () => {
     const session = await sessionManager.createSession({
       serverId: 'dev-workstation',
@@ -1416,6 +1495,16 @@ hosts:
     expect(mockHost.executedCommands.some(({ command }) => /git branch .*-d/.test(command))).toBe(false);
     expect(await repos.sessions.findAll()).toEqual([]);
     expect(await contextStore.list()).toEqual([]);
+    expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 0 });
+  });
+
+  it('does not count a creation rollback after the session row was saved', async () => {
+    const save = vi.spyOn(repos.sessions, 'save');
+    mockHost.customRules.unshift({ pattern: 'tmux new-session', response: { stdout: '', stderr: 'fixture failure', exitCode: 1 } });
+    await expect(sessionManager.createSession({ serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude', task: 'Example' })).rejects.toThrow();
+    expect(save).toHaveBeenCalled();
+    expect(await repos.sessions.findAll()).toEqual([]);
+    expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 0 });
   });
 
   it('fails truthfully if project folder preparation fails (FG-2.2.5)', async () => {
@@ -1784,6 +1873,9 @@ hosts:
     // Verify DB record deleted
     const dbSession = await repos.sessions.findById(session.id);
     expect(dbSession).toBeNull();
+    expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 1 });
+    await sessionManager.deleteSession(session.id);
+    expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 1 });
 
     // Verify context file removed from disk
     const ctx = await contextStore.load(session.id);
@@ -1804,6 +1896,7 @@ hosts:
     expect(await contextStore.load(session.id)).toBeNull();
     expect(mockHost.sessions.has(session.tmuxSessionName)).toBe(true);
     expect(kill).not.toHaveBeenCalled();
+    expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 0 });
   });
 
   it('refuses to forget a child that shares a managed worktree with its parent', async () => {
@@ -1852,7 +1945,7 @@ hosts:
       task: 'Double local failure',
     });
     vi.spyOn(repos.sessions, 'delete').mockRejectedValueOnce(new Error('SQLite unavailable'));
-    vi.spyOn(contextStore, 'save').mockRejectedValueOnce(new Error('Context storage unavailable'));
+    vi.spyOn(contextStore, 'restoreDeleted').mockRejectedValueOnce(new Error('Context storage unavailable'));
 
     await expect(sessionManager.forgetSessionLocally(session.id)).rejects.toThrow('SQLite unavailable');
     expect(await repos.sessions.findById(session.id)).not.toBeNull();
@@ -1867,7 +1960,7 @@ hosts:
     });
     vi.spyOn(repos.sessions, 'delete').mockResolvedValueOnce(false);
     const restoreError = new Error('Context restore error');
-    vi.spyOn(contextStore, 'save').mockRejectedValueOnce(restoreError);
+    vi.spyOn(contextStore, 'restoreDeleted').mockRejectedValueOnce(restoreError);
     const logError = vi.spyOn(logger, 'error');
 
     await expect(sessionManager.forgetSessionLocally(session.id)).resolves.toBe(false);
@@ -2063,6 +2156,22 @@ up 1 day, 5 hours
     expect(ctx).toBeDefined();
     expect(ctx?.isExternal).toBe(true);
     expect(ctx?.persistentSession.name).toBe('external-work-session');
+  });
+
+  it('retains task references when adopting an external tmux session', async () => {
+    mockHost.customRules.push({
+      pattern: "tmux has-session -t 'external-link-session'",
+      response: { stdout: '', stderr: '', exitCode: 0 },
+    });
+    const adopted = await sessionManager.adoptSession({
+      serverId: 'dev-workstation', tmuxSessionName: 'external-link-session',
+      projectId: 'dev-workstation:spawnea', agentId: 'dev-workstation:claude',
+      task: 'Inspect https://github.com/Example/Repo/issues/7',
+    });
+    const expected = [{ url: 'https://github.com/example/repo/issues/7', kind: 'issue', source: 'task' }];
+    expect((await repos.github!.links(adopted.id)).map(({ url, kind, source }) => ({ url, kind, source }))).toEqual(expected);
+    expect((await contextStore.load(adopted.id))?.retainedLinks).toEqual(expected);
+    expect(adopted.originIssueUrl).toBeUndefined();
   });
 
   it('releases an adopted session non-destructively without killing tmux (FG-7.2.3)', async () => {
@@ -2267,6 +2376,7 @@ up 1 day, 5 hours
         'agent-validated'
       );
       expect(result).toEqual({ action: 'close', removed: true });
+      expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 1 });
     });
 
     it('rejects agent-validated close with stashChanges: false on a dirty worktree', async () => {
@@ -2549,10 +2659,10 @@ up 1 day, 5 hours
       const existingContext = await contextStore.load(session.id);
       expect(existingContext).toBeDefined();
       if (existingContext) {
-        await contextStore.save({
-          ...existingContext,
+        await contextStore.update(session.id, (current) => ({
+          ...current,
           finalization: { action: 'close', worktreeRemoved: true },
-        });
+        }));
       }
 
       expect(await sessionManager.isWorktreeRemovalRecorded(session.id, 'close')).toBe(true);
@@ -2571,6 +2681,7 @@ up 1 day, 5 hours
 
       const result = await sessionManager.finishSession(session.id, 'integrate');
       expect(result).toEqual({ action: 'integrate', removed: true });
+      expect(dbConn.sqlite.prepare('SELECT count FROM dashboard_closed_sessions').get()).toEqual({ count: 1 });
 
       // Session record and context removed
       expect(await repos.sessions.findById(session.id)).toBeNull();
@@ -3683,7 +3794,7 @@ up 1 day, 5 hours
         { pattern: 'tmux capture-pane', response: { stdout: '', stderr: '', exitCode: 0 } }
       );
       vi.spyOn(contextStore, 'load').mockResolvedValue({ sessionId: session.id } as any);
-      vi.spyOn(contextStore, 'save').mockRejectedValue(new Error('disk full'));
+      vi.spyOn(contextStore, 'update').mockRejectedValue(new Error('disk full'));
 
       await expect(sessionManager.saveSessionLayout(session.id)).rejects.toThrow('context file could not be updated');
     });

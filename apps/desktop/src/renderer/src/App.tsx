@@ -180,8 +180,34 @@ export function App(): React.JSX.Element {
   const [pendingCloseAllParentId, setPendingCloseAllParentId] = useState<string | null>(null);
   const [pendingCloseAllAction, setPendingCloseAllAction] = useState<ParentCloseAction>('close-all');
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [reloadNotice, setReloadNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const focusFramesRef = useRef(new Set<number>());
+  const appActiveRef = useRef(false);
+  useEffect(() => {
+    appActiveRef.current = true;
+    const frames = focusFramesRef.current;
+    return () => {
+      appActiveRef.current = false;
+      clearTimeout(noticeTimerRef.current);
+      if (typeof cancelAnimationFrame !== 'undefined') frames.forEach((frame) => cancelAnimationFrame(frame));
+      frames.clear();
+    };
+  }, []);
+  const showReloadNotice = useCallback((message: string) => {
+    if (!appActiveRef.current) return;
+    clearTimeout(noticeTimerRef.current);
+    setReloadNotice(message);
+    noticeTimerRef.current = setTimeout(() => setReloadNotice(null), 4000);
+  }, []);
   const restoreWorkspaceFocus = useCallback(() => {
-    requestAnimationFrame(() => {
+    if (!appActiveRef.current || typeof window === 'undefined' || typeof document === 'undefined') return;
+    let frame: number | undefined;
+    let fired = false;
+    frame = requestAnimationFrame(() => {
+      fired = true;
+      if (frame !== undefined) focusFramesRef.current.delete(frame);
+      if (!appActiveRef.current || typeof window === 'undefined' || typeof document === 'undefined') return;
       window.dispatchEvent(new Event('resize'));
       window.dispatchEvent(new CustomEvent('spawnea:focus-terminal'));
       const activeEl = (document.querySelector('.xterm-helper-textarea') ||
@@ -191,6 +217,7 @@ export function App(): React.JSX.Element {
         document.body) as HTMLElement | null;
       activeEl?.focus?.();
     });
+    if (!fired) focusFramesRef.current.add(frame);
   }, []);
 
   const handleCloseDashboard = useCallback(() => {
@@ -472,6 +499,7 @@ export function App(): React.JSX.Element {
     const sessionIds = sessionIdsKey.split('\0');
     let cancelled = false;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    const deadlines = new Map<ReturnType<typeof setTimeout>, () => void>();
     const gitStatusTimeoutMs = 6000;
     const getBoundedGitStatus = async (sessionId: string) => {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -492,10 +520,14 @@ export function App(): React.JSX.Element {
           request,
           new Promise<never>((_, reject) => {
             timeoutId = setTimeout(() => reject(new Error(`Git status timed out after ${gitStatusTimeoutMs}ms`)), gitStatusTimeoutMs);
+            deadlines.set(timeoutId, () => reject(new Error('Git status wait cancelled')));
           }),
         ]);
       } finally {
-        if (timeoutId !== undefined) clearTimeout(timeoutId);
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+          deadlines.delete(timeoutId);
+        }
       }
     };
 
@@ -583,6 +615,8 @@ export function App(): React.JSX.Element {
     return () => {
       cancelled = true;
       if (pollTimer !== undefined) clearTimeout(pollTimer);
+      deadlines.forEach((cancel, deadline) => { clearTimeout(deadline); cancel(); });
+      deadlines.clear();
     };
   }, [sessionIdsKey, activeSessionId, gitRefreshNonce]);
 
@@ -978,8 +1012,7 @@ export function App(): React.JSX.Element {
           Object.keys(gitBranchMismatchBySessionId).length > 0 ||
           Boolean(parentCloseError && /checked out on|not (?:checked out on )?recorded branch/i.test(parentCloseError));
         if (hadMismatch) {
-          setReloadNotice('Closed sessions. Mismatched worktrees, branches, and files were preserved.');
-          setTimeout(() => setReloadNotice(null), 4000);
+          showReloadNotice('Closed sessions. Mismatched worktrees, branches, and files were preserved.');
         }
       }
       return true;
@@ -1133,8 +1166,6 @@ export function App(): React.JSX.Element {
     }
   };
 
-  const [reloadNotice, setReloadNotice] = useState<string | null>(null);
-
   const handleLocalDiscoveryApplied = async () => {
     if (!window.spawneaApi) return;
     const [loadedServers, loadedProjects, loadedAgents, catalogState] = await Promise.all([
@@ -1143,6 +1174,7 @@ export function App(): React.JSX.Element {
       window.spawneaApi.listAgents(),
       window.spawneaApi.getCatalog(),
     ]);
+    if (!appActiveRef.current) return;
     setServers(loadedServers);
     setProjects(loadedProjects);
     setAgents(loadedAgents);
@@ -1150,8 +1182,7 @@ export function App(): React.JSX.Element {
     setCatalogLoaded(!catalogState.errors || Boolean(catalogState.catalog));
     setCatalogPath(catalogState.filePath);
     setCatalogErrors(catalogState.errors);
-    setReloadNotice('Confirmed discovery changes were written to the catalog.');
-    setTimeout(() => setReloadNotice(null), 4000);
+    showReloadNotice('Confirmed discovery changes were written to the catalog.');
   };
 
   const handleReloadCatalog = async () => {
@@ -1159,6 +1190,7 @@ export function App(): React.JSX.Element {
       setIsReloadingCatalog(true);
       try {
         const result = await window.spawneaApi.reloadCatalog();
+        if (!appActiveRef.current || typeof window === 'undefined') return;
         if (result.catalog) {
           setCatalog(result.catalog);
         }
@@ -1171,21 +1203,21 @@ export function App(): React.JSX.Element {
           window.spawneaApi.listProjects(),
           window.spawneaApi.listAgents(),
         ]);
+        if (!appActiveRef.current) return;
         setServers(loadedServers);
         setProjects(loadedProjects);
         setAgents(loadedAgents);
 
         if (result.success && result.catalog) {
           const hostCount = Object.keys(result.catalog.hosts).length;
-          setReloadNotice(
+          showReloadNotice(
             `Config reloaded: ${hostCount} host(s), ${loadedProjects.length} project(s), ${loadedAgents.length} harness(es)`
           );
-          setTimeout(() => setReloadNotice(null), 4000);
         }
       } catch (err) {
         console.error('Failed to reload operational catalog:', err);
       } finally {
-        setIsReloadingCatalog(false);
+        if (appActiveRef.current) setIsReloadingCatalog(false);
       }
     }
   };
@@ -1559,8 +1591,8 @@ export function App(): React.JSX.Element {
           agents={agents}
           activeSessionId={activeSessionId}
           isLoading={isLoading}
-          samples={activity.samples}
-          startedAt={activity.startedAt}
+          historyRevision={activity.revision}
+          historyError={activity.error}
           onReturn={handleCloseDashboard}
           onOpenCreateModal={() => setIsCreateModalOpen(true)}
           onSelectSession={(id) => {

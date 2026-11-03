@@ -36,4 +36,15 @@ describe('useVisibleRefresh', () => {
     act(() => vi.advanceTimersByTime(0));
     expect(result.current.refreshingIds.has('a')).toBe(false);
   });
+
+  it('clears the previous hide timer after repeated completion and unmount', () => {
+    const { result, unmount } = renderHook(() => useVisibleRefresh());
+    act(() => result.current.setChecking('a', true));
+    act(() => vi.advanceTimersByTime(300));
+    act(() => result.current.setChecking('a', false));
+    act(() => result.current.setChecking('a', false));
+    expect(vi.getTimerCount()).toBe(1);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

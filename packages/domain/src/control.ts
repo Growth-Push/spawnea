@@ -35,6 +35,7 @@ export interface ControlSessionView {
   status: SessionStatus;
   creationSource: 'ui' | 'control';
   requestedModel?: string;
+  originIssueUrl?: string;
   active: boolean;
   activeTab?: ControlWorkspaceTab;
   createdAt: string;
@@ -184,6 +185,7 @@ export interface ControlCreateChildSessionRequest {
   parentSession: string;
   name?: string;
   task: string;
+  originIssueUrl?: string;
   workspace: ChildSessionWorkspaceMode;
   agentId?: string;
   serverId?: string;

@@ -77,6 +77,7 @@ export async function getSessionStatus(
 export interface CreateSessionOptions extends OutputOptions {
   project: string;
   task: string;
+  originIssueUrl?: string;
   agent?: string;
   server?: string;
   branch?: string;
@@ -97,6 +98,7 @@ export async function createSession(client: ControlCliClient, options: CreateSes
   const result = await client.callTool('spawnea_create_session', {
     projectId: options.project,
     task: options.task,
+    originIssueUrl: options.originIssueUrl,
     agentId: options.agent,
     serverId: options.server,
     baseBranch: options.branch,
@@ -123,6 +125,7 @@ export async function createSession(client: ControlCliClient, options: CreateSes
 export interface CreateChildOptions extends OutputOptions {
   parent: string;
   task: string;
+  originIssueUrl?: string;
   agent?: string;
   workspace?: 'same-project' | 'new-worktree';
   name?: string;
@@ -141,6 +144,7 @@ export async function createChild(client: ControlCliClient, options: CreateChild
   const result = await client.callTool('spawnea_create_child_session', {
     parentSession: options.parent,
     task: options.task,
+    originIssueUrl: options.originIssueUrl,
     agentId: options.agent,
     workspace: options.workspace ?? 'same-project',
     name: options.name,

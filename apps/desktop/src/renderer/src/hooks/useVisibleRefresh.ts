@@ -58,6 +58,8 @@ export function useVisibleRefresh(
       }
       const started = shownAt.current.get(sessionId);
       if (started === undefined) return;
+      const pendingHide = hideTimers.current.get(sessionId);
+      if (pendingHide) clearTimeout(pendingHide);
       const remaining = Math.max(0, minVisibleMs - (Date.now() - started));
       hideTimers.current.set(
         sessionId,
@@ -77,6 +79,8 @@ export function useVisibleRefresh(
     return () => {
       shows.forEach(clearTimeout);
       hides.forEach(clearTimeout);
+      shows.clear();
+      hides.clear();
     };
   }, []);
 

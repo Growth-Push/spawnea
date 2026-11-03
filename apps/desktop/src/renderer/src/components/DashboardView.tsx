@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { Agent, Project, Server, Session } from '@spawnea/domain';
 import {
   ArrowLeft,
@@ -14,8 +14,11 @@ import {
   Search,
   ChevronDown,
   ChevronRight,
+  Copy,
 } from 'lucide-react';
 import { needsAttention, sessionForest, type ActivitySample } from './session-overview';
+import { ActivityChart, HistoryChart } from './ActivityChart';
+import { sessionTableRows, sessionTableTsv } from './dashboard-table';
 
 interface Props {
   sessions: Session[];
@@ -26,13 +29,14 @@ interface Props {
   onSelectSession: (id: string) => void;
   onReturn: () => void;
   onOpenCreateModal?: () => void;
-  samples: ActivitySample[];
-  startedAt: number;
+  samples?: ActivitySample[];
+  startedAt?: number;
   isLoading: boolean;
+  historyRevision?: number;
+  historyError?: string;
 }
 
 const colors = ['#10b981', '#06b6d4', '#8b5cf6', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899'];
-const timeLabel = (time: number) => new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 function formatRelativeTime(dateInput: Date | string | number): string {
   const date = typeof dateInput === 'string' || typeof dateInput === 'number' ? new Date(dateInput) : dateInput;
@@ -101,181 +105,7 @@ function StatusPill({ status }: { status: Session['status'] }) {
   }
 }
 
-export function ActivityChart({ samples, startedAt }: Pick<Props, 'samples' | 'startedAt'>) {
-  const validSamples = samples.filter((s) => !s.gap);
-  const max = Math.max(1, ...validSamples.map((s) => Math.max(s.parents, s.children)));
-  const start = samples[0]?.time ?? startedAt;
-  const end = samples.at(-1)?.time ?? start;
-  const latest = samples.at(-1);
-
-  // Build segmented SVG lines breaking across gaps
-  const buildPath = (key: 'parents' | 'children') => {
-    let penDown = false;
-    return samples
-      .map((s) => {
-        if (s.gap) {
-          penDown = false;
-          return '';
-        }
-        const x = 35 + ((s.time - start) / Math.max(1, end - start)) * 430;
-        const y = 140 - (s[key] / max) * 110;
-        const cmd = penDown ? 'L' : 'M';
-        penDown = true;
-        return `${cmd}${x.toFixed(1)},${y.toFixed(1)}`;
-      })
-      .filter(Boolean)
-      .join(' ');
-  };
-
-  const linePath = buildPath('parents');
-  const childrenLinePath = buildPath('children');
-
-  // Build area segments only for contiguous non-gap samples
-  const areaSegments: string[] = [];
-  let currentSegment: { x: number; y: number }[] = [];
-  for (const s of samples) {
-    if (s.gap) {
-      if (currentSegment.length > 0) {
-        const segLine = currentSegment.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-        const segArea = `${segLine} L${currentSegment[currentSegment.length - 1].x.toFixed(1)},140 L${currentSegment[0].x.toFixed(1)},140 Z`;
-        areaSegments.push(segArea);
-        currentSegment = [];
-      }
-    } else {
-      const x = 35 + ((s.time - start) / Math.max(1, end - start)) * 430;
-      const y = 140 - (s.parents / max) * 110;
-      currentSegment.push({ x, y });
-    }
-  }
-  if (currentSegment.length > 0) {
-    const segLine = currentSegment.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-    const segArea = `${segLine} L${currentSegment[currentSegment.length - 1].x.toFixed(1)},140 L${currentSegment[0].x.toFixed(1)},140 Z`;
-    areaSegments.push(segArea);
-  }
-
-  const lastSample = [...samples].reverse().find((s) => !s.gap);
-  const lastPoint = lastSample
-    ? {
-        x: 35 + ((lastSample.time - start) / Math.max(1, end - start)) * 430,
-        y: 140 - (lastSample.parents / max) * 110,
-      }
-    : null;
-
-  return (
-    <section className="rounded-xl border border-zinc-800/80 bg-[#111620] p-4 flex flex-col justify-between">
-      <div className="flex items-center justify-between pb-2 border-b border-zinc-850/60">
-        <div>
-          <h2 className="text-sm font-semibold text-white">Observed activity</h2>
-          <p className="text-[11px] text-zinc-400">
-            Working sessions · local time · started {timeLabel(startedAt)}
-          </p>
-        </div>
-      </div>
-
-      <div className="py-2">
-        <svg
-          viewBox="0 0 500 170"
-          role="img"
-          aria-label={`Concurrent working sessions. Parents: ${latest && !latest.gap ? latest.parents : 'unavailable'}. Children: ${latest && !latest.gap ? latest.children : 'unavailable'}.`}
-          className="w-full max-h-48"
-        >
-          <defs>
-            <linearGradient id="activityAreaGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#10b981" stopOpacity="0.25" />
-              <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
-            </linearGradient>
-          </defs>
-
-          {/* Grid lines */}
-          <line x1="35" y1="30" x2="480" y2="30" stroke="#27272a" strokeDasharray="3 3" />
-          <line x1="35" y1="85" x2="480" y2="85" stroke="#27272a" strokeDasharray="3 3" />
-          <line x1="35" y1="140" x2="480" y2="140" stroke="#3f3f46" />
-
-          {/* Y-axis values */}
-          <text x="10" y="34" fill="#71717a" fontSize="10">{max}</text>
-          <text x="10" y="89" fill="#71717a" fontSize="10">{(max / 2).toFixed(max % 2 === 0 ? 0 : 1)}</text>
-          <text x="10" y="144" fill="#71717a" fontSize="10">0</text>
-
-          {/* Segmented Area fills */}
-          {areaSegments.map((d, idx) => (
-            <path key={idx} d={d} fill="url(#activityAreaGrad)" />
-          ))}
-
-          {/* Parents line */}
-          {linePath && <path d={linePath} stroke="#10b981" strokeWidth="2.5" fill="none" />}
-
-          {/* Children line */}
-          {childrenLinePath && (
-            <path d={childrenLinePath} stroke="#38bdf8" strokeWidth="2" strokeDasharray="4 3" fill="none" />
-          )}
-
-          {/* Now vertical line marker */}
-          {lastPoint && (
-            <g>
-              <line
-                x1={lastPoint.x}
-                y1="18"
-                x2={lastPoint.x}
-                y2="140"
-                stroke="#10b981"
-                strokeDasharray="3 3"
-                strokeWidth="1.5"
-              />
-              <circle cx={lastPoint.x} cy={lastPoint.y} r="3.5" fill="#10b981" />
-              <text x={lastPoint.x} y="14" fill="#10b981" fontSize="9" fontWeight="bold" textAnchor="middle">
-                Now
-              </text>
-            </g>
-          )}
-
-          {/* X-axis labels */}
-          <text x="35" y="160" fill="#71717a" fontSize="10">{timeLabel(start)}</text>
-          <text x="480" y="160" textAnchor="end" fill="#71717a" fontSize="10">{timeLabel(end)}</text>
-        </svg>
-      </div>
-
-      <div className="flex items-center justify-between text-xs pt-1 border-t border-zinc-850/60">
-        <div className="flex items-center gap-4">
-          <span className="flex items-center gap-1.5 text-emerald-400">
-            <span className="w-2.5 h-0.5 bg-emerald-400" />
-            Parents: {latest && !latest.gap ? latest.parents : '—'}
-          </span>
-          <span className="flex items-center gap-1.5 text-sky-400">
-            <span className="w-2.5 h-0.5 bg-sky-400 border-b border-dashed border-sky-400" />
-            Children: {latest && !latest.gap ? latest.children : '—'}
-          </span>
-        </div>
-        {!validSamples.length && <p className="text-zinc-500 text-xs">Waiting for observations</p>}
-      </div>
-
-      {samples.length > 0 && (
-        <details className="mt-2 text-xs text-zinc-500">
-          <summary className="cursor-pointer hover:text-zinc-400">Detailed activity log</summary>
-          <table className="mt-1 w-full text-left" aria-label="Observed session activity history">
-            <thead>
-              <tr className="border-b border-zinc-800 text-[11px] text-zinc-400">
-                <th className="pr-2 py-1">Time</th>
-                <th className="pr-2 py-1">Parents</th>
-                <th className="pr-2 py-1">Children</th>
-                <th className="py-1">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {samples.map((s, i) => (
-                <tr key={`${s.time}-${i}`} className="border-b border-zinc-850/40">
-                  <td className="pr-2 py-1">{timeLabel(s.time)}</td>
-                  <td className="pr-2 py-1">{s.gap ? '—' : s.parents}</td>
-                  <td className="pr-2 py-1">{s.gap ? '—' : s.children}</td>
-                  <td className="py-1">{s.gap ? 'Unobserved period (gap)' : 'Observed'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </details>
-      )}
-    </section>
-  );
-}
+export { ActivityChart } from './ActivityChart';
 
 export function DashboardView(props: Props) {
   const {
@@ -288,12 +118,23 @@ export function DashboardView(props: Props) {
     onOpenCreateModal,
     activeSessionId,
     isLoading,
-    samples,
-    startedAt,
+    samples = [],
+    startedAt = 0,
+    historyRevision,
+    historyError,
   } = props;
 
   const [attention, setAttention] = useState(false);
   const [search, setSearch] = useState('');
+  const [copyError, setCopyError] = useState('');
+  const [copyStatus, setCopyStatus] = useState('');
+  const [isCopying, setIsCopying] = useState(false);
+  const copying = useRef(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [dimension, setDimension] = useState<'Harness' | 'Project' | 'Host'>('Harness');
   const [collapsedHosts, setCollapsedHosts] = useState<Set<string>>(new Set());
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
@@ -321,6 +162,33 @@ export function DashboardView(props: Props) {
   const hostName = (id: string) => servers.find((s) => s.id === id)?.name ?? `Unavailable host (${id})`;
   const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? `Unavailable project (${id})`;
   const harness = (id: string) => agents.find((a) => a.id === id)?.harness ?? `Unavailable harness (${id})`;
+  const copyText = async (text: string, errorMessage: string, successMessage = '') => {
+    if (copying.current) return;
+    copying.current = true;
+    setIsCopying(true);
+    setCopyStatus('');
+    try {
+      await window.spawneaApi.writeClipboardText(text);
+      if (mounted.current) {
+        setCopyError('');
+        setCopyStatus(successMessage);
+      }
+    } catch {
+      if (mounted.current) setCopyError(errorMessage);
+    } finally {
+      copying.current = false;
+      if (mounted.current) setIsCopying(false);
+    }
+  };
+  const copySession = (s: Session) => {
+    const text = [
+      `Name: ${s.name}`, `ID: ${s.id}`, `Host: ${hostName(s.serverId)}`,
+      `Project: ${projectName(s.projectId)}`, `Harness: ${harness(s.agentId)}`,
+      `State: ${s.status}`, `Branch: ${s.branch}`, `Worktree: ${s.worktreePath}`,
+      `tmux: ${s.tmuxSessionName}${s.tmuxWindowName ? `:${s.tmuxWindowName}` : ''}`,
+    ].join('\n');
+    return copyText(text, `Could not copy session ${s.name}.`);
+  };
 
   // KPI counts
   const workingSessions = all.filter((s) => s.status === 'working' || s.status === 'starting').length;
@@ -344,6 +212,12 @@ export function DashboardView(props: Props) {
     host.set(root.projectId, [...(host.get(root.projectId) ?? []), root]);
     groups.set(root.serverId, host);
   }
+  const copyTable = () => {
+    if (isLoading || !groups.size) return;
+    const roots = [...groups.values()].flatMap((hostProjects) => [...hostProjects.values()].flat());
+    const rows = sessionTableRows(roots, forest.children, visible);
+    return copyText(sessionTableTsv(rows, { hostName, projectName, harness }), 'Could not copy session table. Please try again.', 'Table copied.');
+  };
 
   // Distribution calculation
   const distribution = new Map<string, { label: string; count: number }>();
@@ -476,7 +350,10 @@ export function DashboardView(props: Props) {
       {/* Middle Row: Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Activity Chart */}
-        <ActivityChart samples={samples} startedAt={startedAt} />
+        <div>
+          {historyError && <p role="alert" className="text-xs text-rose-400">{historyError}</p>}
+          {historyRevision === undefined ? <ActivityChart samples={samples} startedAt={startedAt} /> : <HistoryChart revision={historyRevision} />}
+        </div>
 
         {/* Distribution Chart */}
         <section className="rounded-xl border border-zinc-800/80 bg-[#111620] p-4 flex flex-col justify-between">
@@ -638,6 +515,8 @@ export function DashboardView(props: Props) {
       </div>
 
       {/* Structured Sessions Table */}
+      {copyError && <p role="alert" className="text-xs text-rose-400">{copyError}</p>}
+      {copyStatus && <p role="status" className="text-xs text-emerald-400">{copyStatus}</p>}
       <div className="rounded-xl border border-zinc-800/80 bg-[#111620] overflow-hidden">
         {/* Table Column Headers */}
         <div className="grid grid-cols-[1fr_120px_100px_170px_110px_48px] items-center px-4 py-2.5 bg-[#161b22]/70 border-b border-zinc-800 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
@@ -646,7 +525,18 @@ export function DashboardView(props: Props) {
           <div>HARNESS</div>
           <div>BRANCH</div>
           <div className="text-right pr-2">LAST ACTIVITY</div>
-          <div className="text-center"></div>
+          <div className="flex justify-center">
+            <button
+              type="button"
+              aria-label="Copy table"
+              onClick={() => void copyTable()}
+              disabled={isLoading || !groups.size || isCopying}
+              title="Copy filtered sessions as TSV, including collapsed groups"
+              className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500"
+            >
+              <Copy aria-hidden="true" className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
 
         {isLoading && (
@@ -775,6 +665,9 @@ export function DashboardView(props: Props) {
                                   {s.task}
                                 </p>
                               )}
+                              <p className="text-[11px] text-zinc-500 truncate" title={s.tmuxSessionName}>
+                                tmux: {s.tmuxSessionName}{s.tmuxWindowName ? `:${s.tmuxWindowName}` : ''}
+                              </p>
                               {s.parentSessionId && !forest.byId.has(s.parentSessionId) && (
                                 <span className="text-[11px] text-amber-400 font-medium">
                                   Missing parent
@@ -815,6 +708,7 @@ export function DashboardView(props: Props) {
                             >
                               <Terminal className="w-3.5 h-3.5" />
                             </button>
+                            <button type="button" onClick={() => void copySession(s)} disabled={isCopying} aria-label={`Copy ${s.name} details`} className="p-1 rounded text-zinc-500 hover:text-emerald-400 disabled:opacity-50">Copy</button>
                           </div>
                         </div>
                         {directChildren.map((child) => renderSessionTree(child, depth + 1))}
@@ -869,7 +763,6 @@ export function DashboardView(props: Props) {
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
             <span>Live session updates</span>
           </div>
-          <div>{samples.length > 0 ? `Observed through ${timeLabel(samples.at(-1)!.time)}` : 'Updated now'}</div>
         </div>
       </div>
     </section>

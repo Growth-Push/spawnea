@@ -144,6 +144,10 @@ const mockSessions: Session[] = [
 function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Window['spawneaApi'] {
   return {
     quitForReleaseSmoke: vi.fn().mockResolvedValue(true),
+    beginDashboardHistory: vi.fn().mockResolvedValue(undefined),
+    recordDashboardObservation: vi.fn().mockResolvedValue(undefined),
+    getDashboardHistory: vi.fn().mockResolvedValue({ first: null, last: null, closedCount: 0, points: [] }),
+    getDashboardHistoryPage: vi.fn().mockResolvedValue({ observations: [], next: null }),
     writeClipboardText: vi.fn().mockResolvedValue(undefined),
     getCliPathStatus: vi.fn().mockResolvedValue({
       installed: false,
@@ -290,6 +294,7 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
       message: 'Worktree is on its recorded task branch.',
     }),
     openExternalUrl: vi.fn().mockResolvedValue(true),
+    getSessionLinks: vi.fn().mockResolvedValue([]),
     openConfig: vi.fn().mockResolvedValue({ success: true }),
     deleteSession: vi.fn().mockResolvedValue(true),
     forgetSessionLocally: vi.fn().mockResolvedValue(true),
@@ -544,6 +549,24 @@ describe('App Desktop Shell', () => {
     expect(screen.queryByRole('region', { name: 'Session dashboard' })).toBeNull();
     await waitFor(() => expect(focusEventSpy).toHaveBeenCalled());
     window.removeEventListener('spawnea:focus-terminal', focusEventSpy);
+  });
+
+  it('cancels a pending focus restoration when the app unmounts', async () => {
+    window.spawneaApi = createMockSpawneaApi();
+    const view = render(<App />);
+    await screen.findByText('Active Sessions (2)');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand session dashboard' }));
+    const request = vi.spyOn(globalThis, 'requestAnimationFrame').mockReturnValue(123456);
+    const originalCancel = globalThis.cancelAnimationFrame;
+    const cancel = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation((id) => {
+      if (id !== 123456) originalCancel(id);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Return to workspace' }));
+    expect(request).toHaveBeenCalled();
+    view.unmount();
+    expect(cancel).toHaveBeenCalledWith(123456);
+    request.mockRestore();
+    cancel.mockRestore();
   });
 
   it('marks sessions as observed after recovering via manual session refresh', async () => {
@@ -1134,6 +1157,51 @@ describe('App Desktop Shell', () => {
       expect(getGitStatus.mock.calls.filter(([sessionId]) => sessionId === healthySession.id)).toHaveLength(2);
     } finally {
       view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears pending Git deadlines on session switch and unmount without rearming stale work', async () => {
+    vi.useFakeTimers();
+    let resolveStatus!: (value: GitStatusResult) => void;
+    const pending = new Promise<GitStatusResult>((resolve) => { resolveStatus = resolve; });
+    const getGitStatus = vi.fn(() => pending);
+    window.spawneaApi = createMockSpawneaApi({ getGitStatus });
+    const allSettled = vi.spyOn(Promise, 'allSettled');
+    const setTimer = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimer = vi.spyOn(globalThis, 'clearTimeout');
+    const view = render(<App />);
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      const deadlines = () => setTimer.mock.calls.flatMap((args, index) => args[1] === 6000 ? [setTimer.mock.results[index].value] : []);
+      const oldWait = allSettled.mock.results.at(-1)!.value as Promise<unknown>;
+      let oldSettled = false;
+      void oldWait.then(() => { oldSettled = true; });
+      const oldDeadlines = deadlines();
+      expect(oldDeadlines.length).toBeGreaterThan(0);
+      fireEvent.click(screen.getByTestId('session-item-sess-2'));
+      for (const deadline of oldDeadlines) expect(clearTimer).toHaveBeenCalledWith(deadline);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(oldSettled).toBe(true);
+      const newDeadlines = deadlines().filter((deadline) => !oldDeadlines.includes(deadline));
+      expect(newDeadlines.length).toBeGreaterThan(0);
+      expect(getGitStatus).toHaveBeenCalledTimes(2);
+      view.unmount();
+      for (const deadline of newDeadlines) expect(clearTimer).toHaveBeenCalledWith(deadline);
+      clearTimer.mockClear();
+      const calls = getGitStatus.mock.calls.length;
+      await act(async () => {
+        resolveStatus({ isGitRepo: true, branch: 'main', ahead: 0, behind: 0, isClean: false, staged: [], unstaged: [], untracked: [], totalChanges: 1 });
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(21_000);
+      });
+      expect(getGitStatus).toHaveBeenCalledTimes(calls);
+      expect(setTimer.mock.calls.filter(([, delay]) => delay === 15_000)).toHaveLength(0);
+    } finally {
+      view.unmount();
+      setTimer.mockRestore();
+      clearTimer.mockRestore();
+      allSettled.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -1871,6 +1939,21 @@ describe('App Desktop Shell', () => {
       expect(screen.getByTestId('catalog-error-banner')).toBeDefined();
       expect(screen.getByText(/Last valid catalog remains active/i)).toBeDefined();
     });
+  });
+
+  it('does not arm a reload notice after unmount while the reload is pending', async () => {
+    let resolveReload!: (value: any) => void;
+    const api = createMockSpawneaApi({ reloadCatalog: vi.fn().mockReturnValue(new Promise((resolve) => { resolveReload = resolve; })) });
+    window.spawneaApi = api;
+    const view = render(<App />);
+    await screen.findByText('Active Sessions (2)');
+    fireEvent.click(screen.getByTestId('sidebar-actions-menu-button'));
+    fireEvent.click(screen.getByTestId('sidebar-reload-catalog-button'));
+    view.unmount();
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    await act(async () => { resolveReload({ success: true, catalog: { version: 1, hosts: {} }, errors: [], filePath: '/fixture/config.yaml' }); await Promise.resolve(); });
+    expect(timer.mock.calls.some(([, delay]) => delay === 4000)).toBe(false);
+    timer.mockRestore();
   });
 
   it('tests the selected host only after the operator presses Test Connection (FG-1.2, FG-2.1)', async () => {

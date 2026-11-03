@@ -584,6 +584,15 @@ describe('CreateSessionModal', () => {
     expect((screen.getByTestId('checkbox-use-worktree') as HTMLInputElement).checked).toBe(false);
   });
 
+  it('clears the originating issue after cancel and reopen', () => {
+    const props = { isOpen: true, onClose: vi.fn(), onSubmit: vi.fn(), servers: mockServers, projects: mockProjects, agents: mockAgents };
+    const { rerender } = render(<CreateSessionModal {...props} />);
+    fireEvent.change(screen.getByLabelText('Originating issue URL (optional)'), { target: { value: 'https://github.com/example/repo/issues/9' } });
+    rerender(<CreateSessionModal {...props} isOpen={false} />);
+    rerender(<CreateSessionModal {...props} />);
+    expect((screen.getByLabelText('Originating issue URL (optional)') as HTMLInputElement).value).toBe('');
+  });
+
   it('exposes worktree options only after explicit customization', () => {
     const catalog = {
       version: 1 as const,
