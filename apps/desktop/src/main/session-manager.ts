@@ -1,4 +1,5 @@
 import { posix } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { WebContents } from 'electron';
 import type {
   Session,
@@ -31,8 +32,10 @@ import type {
   ParentCloseAction,
   SessionStatus,
   SessionTopologySnapshot,
+  SessionHistoryQuery,
+  SessionHistoryResult,
 } from '@spawnea/domain';
-import { parseGitHubLink } from '@spawnea/domain';
+import { parseGitHubLink, normalizeHarnessExecutable } from '@spawnea/domain';
 import { retainSessionLinks } from './session-links.js';
 import {
   createCatalogProjectPathLocator,
@@ -62,7 +65,7 @@ import {
   type ManagedWorktreeIdentity,
   type ResolvedValueLease,
 } from '@spawnea/hosts';
-import { detectAgentSessionId } from '@spawnea/state';
+import { canonicalHarnessId, detectAgentSessionId, SessionHistoryService } from '@spawnea/state';
 import type { CatalogManager } from './catalog-manager.js';
 import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
@@ -92,9 +95,11 @@ export interface SessionManagerOptions {
   logger?: Logger;
   hostHealthChecker?: HostHealthChecker;
   onePasswordResolver?: OnePasswordResolver;
+  historyService?: SessionHistoryService;
 }
 
 export class SessionManager {
+  readonly historyService: SessionHistoryService;
   private readonly repos: Repositories;
   private readonly catalogManager: CatalogManager;
   private readonly contextStore: SessionContextStore;
@@ -137,6 +142,7 @@ export class SessionManager {
     this.profile = options.profile === undefined ? undefined : sanitizeProfileName(options.profile);
     this.customHostFactory = options.hostAdapterFactory;
     this.logger = options.logger || createLogger('SessionManager');
+    this.historyService = options.historyService || new SessionHistoryService();
 
     this.onePasswordResolver = options.onePasswordResolver || new OnePasswordResolver();
     this.tmuxManager = new TmuxManager(this.logger.child('tmux'));
@@ -761,13 +767,40 @@ export class SessionManager {
       const isLocalHost = !(host instanceof SSHHostAdapter) && isConfirmedLocalHost;
       const defaultShell = isLocalHost ? (process.env.SHELL || 'sh') : 'sh';
       const harnessCommand = catHarness?.command || dbAgent?.command || defaultShell;
+      const harnessIdentity = catHarness?.id || dbAgent?.harness || harnessCommand;
       const harnessArgs = this.harnessLaunchRegistry.withModel(
         harnessCommand,
-        catHarness?.id || dbAgent?.harness,
+        harnessIdentity,
         catHarness?.args || dbAgent?.argsTemplate || [],
         options.model,
         Boolean(options.parentSessionId),
       );
+      const commandExecutable = normalizeHarnessExecutable(harnessCommand);
+      const isClaude =
+        canonicalHarnessId(harnessIdentity) === 'claude' ||
+        commandExecutable === 'claude' ||
+        commandExecutable === 'claude-code';
+      let agentSessionId: string | undefined = undefined;
+      let effectiveHarnessArgs = harnessArgs;
+
+      if (isLocalHost && isClaude) {
+        const candidateSessionId = randomUUID();
+        effectiveHarnessArgs = this.harnessLaunchRegistry.withSessionId(
+          harnessCommand,
+          harnessIdentity,
+          harnessArgs,
+          candidateSessionId,
+        );
+        const explicitIdx = effectiveHarnessArgs.findIndex((a) => a === '--session-id');
+        if (explicitIdx !== -1 && effectiveHarnessArgs[explicitIdx + 1]) {
+          agentSessionId = effectiveHarnessArgs[explicitIdx + 1];
+        } else {
+          const inlineArg = effectiveHarnessArgs.find((a) => a.startsWith('--session-id='));
+          if (inlineArg) {
+            agentSessionId = inlineArg.slice('--session-id='.length);
+          }
+        }
+      }
       const harnessName = catHarness?.name || dbAgent?.name || 'Harness';
 
       // 2. Prepare remote project folder (FG-2.2.2 - FG-2.2.5)
@@ -978,7 +1011,7 @@ export class SessionManager {
             id: options.agentId,
             name: harnessName,
             command: harnessCommand,
-            args: harnessArgs,
+            args: effectiveHarnessArgs,
           },
           persistentSession: {
             type: 'tmux',
@@ -993,6 +1026,7 @@ export class SessionManager {
           status: effectiveStatus,
           creationSource,
           requestedModel: options.model,
+          agentSessionId,
           createdAt: nowIso,
           updatedAt: nowIso,
         };
@@ -1019,6 +1053,7 @@ export class SessionManager {
           status: effectiveStatus,
           creationSource,
           requestedModel: options.model,
+          agentSessionId,
         });
         sessionPersisted = true;
         await retainSessionLinks(this.repos, sessionId, 'task', options.task, this.contextStore).catch(() => {});
@@ -1029,7 +1064,7 @@ export class SessionManager {
           sessionName: tmuxSessionName,
           cwd: runtimePath,
           command: harnessCommand,
-          args: harnessArgs,
+          args: effectiveHarnessArgs,
           env: {
             SPAWNEA_SESSION_ID: sessionId,
             ...(this.profile ? { SPAWNEA_PROFILE: this.profile } : {}),
@@ -2597,6 +2632,91 @@ export class SessionManager {
       return await this.gitService.getGitDiff(host, worktreePath.value, options);
     } finally {
       worktreePath.release();
+    }
+  }
+
+  /**
+   * Retrieves bounded and incremental session history using the hybrid model:
+   * local Claude/Codex transcripts from agent files, falling back to terminal screen output.
+   */
+  async getSessionHistory(
+    sessionId: string,
+    query?: SessionHistoryQuery
+  ): Promise<SessionHistoryResult> {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session) {
+      throw new Error(`Session '${sessionId}' not found`);
+    }
+
+    let isLocal = false;
+    let panePid: number | undefined = undefined;
+    let tailLines: string[] = [];
+
+    try {
+      const host = await this.getHostAdapter(session.serverId);
+      const dbServer = await this.repos.servers.findById(session.serverId);
+      const catalog = this.catalogManager.getState().catalog;
+      const catalogHost = catalog?.hosts[session.serverId];
+      const isConfirmedLocalHost =
+        host instanceof LocalHostAdapter ||
+        (catalogHost ? !catalogHost.ssh : false) ||
+        (dbServer ? isLoopbackHost(dbServer.host) && !dbServer.sshConfigAlias && !dbServer.sshUser && dbServer.sshPort === 22 : false);
+      isLocal = !(host instanceof SSHHostAdapter) && isConfirmedLocalHost;
+
+      const hasSession = await this.tmuxManager.hasSession(host, session.tmuxSessionName);
+      if (hasSession) {
+        const historyWindowIndex = await this.tmuxManager.resolveFirstWindowIndex(host, session.tmuxSessionName).catch(() => undefined);
+        const pane = await this.tmuxManager.getPaneInspection(host, session.tmuxSessionName, historyWindowIndex);
+        if (pane) {
+          panePid = pane.panePid;
+        }
+        tailLines = await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, 100, historyWindowIndex, true).catch(() => []);
+      }
+    } catch {
+      // Host or tmux inspection failed; proceed to history service with available context
+    }
+
+    let harness = 'shell';
+    if (session.agentId) {
+      try {
+        const agent = await this.repos.agents.findById(session.agentId);
+        harness = agent?.harness || agent?.command || 'shell';
+      } catch {
+        // Fall back to default
+      }
+    }
+
+    let worktreePath: string | undefined = undefined;
+    let sessionPathLease: ResolvedValueLease<string> | undefined = undefined;
+
+    if (isLocal) {
+      try {
+        const lease = await this.resolveSessionWorktreePath(session);
+        sessionPathLease = lease;
+        worktreePath = lease.value;
+      } catch (err) {
+        this.logger.warn?.('Failed to resolve session worktree path for history; falling back to screen', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    try {
+      return await this.historyService.getHistory(
+        {
+          sessionId: session.id,
+          harness,
+          worktreePath,
+          isLocal,
+          agentSessionId: session.agentSessionId,
+          panePid,
+          tailLines,
+        },
+        query
+      );
+    } finally {
+      sessionPathLease?.release();
     }
   }
 

@@ -313,6 +313,18 @@ describe('TmuxManager', () => {
     expect(host.executedCommands.at(-1)?.command).toContain("-t 'sess-1:1'");
   });
 
+  it('resolves the lowest window index as the first window', async () => {
+    const host = new MockHostAdapter('host-1');
+    host.customRules.push({
+      pattern: 'tmux list-windows -t',
+      response: { stdout: '2\n0\n1\n', stderr: '', exitCode: 0 },
+    });
+
+    const tmux = new TmuxManager();
+    const firstWin = await tmux.resolveFirstWindowIndex(host, 'sess-1');
+    expect(firstWin).toBe(0);
+  });
+
   it('falls back to the session target when no valid first window index is returned', async () => {
     const host = new MockHostAdapter('host-1');
     host.customRules.push({
