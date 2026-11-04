@@ -558,4 +558,98 @@ describe('CodexHistoryReader', () => {
     expect(secondRead?.items[0].text).toContain('Substantially longer replaced prompt');
     expect(secondRead?.items[1].text).toContain('Substantially longer replaced response');
   });
+
+  it('skips injected context blocks (<user_instructions>, <environment_context>) without creating user items or starting turns', async () => {
+    const file = path.join(tempDir, 'rollout-injected.jsonl');
+    const records = [
+      { id: 'meta-0', timestamp: '2026-01-01T00:00:00Z', instructions: 'fictional', git: {} },
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: '<user_instructions>\n# Fictional Guidelines\n- Work on one task at a time.\n- Build in dedicated worktrees.\n</user_instructions>',
+          },
+        ],
+      },
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: '<environment_context>\n  <cwd>/workspace/project</cwd>\n  <approval_policy>on-request</approval_policy>\n</environment_context>',
+          },
+        ],
+      },
+      {
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: '<injected_context>\nSystem injected parameters\n</injected_context>',
+        },
+      },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'task_started',
+          turn_id: 'turn-real-1',
+        },
+      },
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: 'Please implement the fictional feature according to specification.',
+          },
+        ],
+      },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: 'I have implemented the fictional feature and verified tests.',
+          },
+        ],
+      },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+        },
+      },
+    ];
+    fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+    const context = {
+      sessionId: 'sess-injected-codex',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      resolvedTranscriptPath: file,
+    };
+
+    const res = await reader.readHistory(context);
+    expect(res).not.toBeNull();
+    // The three injected context records must be skipped; only the real prompt and response are returned
+    expect(res?.items).toHaveLength(2);
+    expect(res?.items[0]).toMatchObject({
+      role: 'user',
+      text: 'Please implement the fictional feature according to specification.',
+      turnBoundary: 'start',
+      turnId: 'turn-real-1',
+    });
+    expect(res?.items[1]).toMatchObject({
+      role: 'agent',
+      text: 'I have implemented the fictional feature and verified tests.',
+      turnBoundary: 'end',
+      turnId: 'turn-real-1',
+    });
+  });
 });

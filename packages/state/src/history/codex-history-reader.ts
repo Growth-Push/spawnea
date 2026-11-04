@@ -163,6 +163,13 @@ interface RawItem {
   explicitTurnEnd?: boolean;
 }
 
+const INJECTED_CONTEXT_TAG_REGEX =
+  /^\s*(?:<(?:user_instructions|environment_context|system_instructions|project_instructions|injected_context|context|agent_instructions|custom_instructions)[\s>]|#\s*AGENTS\.md\b)/i;
+
+export function isInjectedContextMessage(rawText: string): boolean {
+  return INJECTED_CONTEXT_TAG_REGEX.test(rawText);
+}
+
 function extractRawItemFromRecord(
   record: Record<string, unknown>,
   recordOffset: number,
@@ -177,7 +184,24 @@ function extractRawItemFromRecord(
 
   if (type === 'event_msg' && payload) {
     const eventType = String(payload.type);
-    if (eventType === 'item_completed') {
+    if (eventType === 'user_message') {
+      const rawText = typeof payload.message === 'string' ? payload.message : extractMessageText(payload.message);
+      if (rawText.trim()) {
+        if (isInjectedContextMessage(rawText)) {
+          return null;
+        }
+        const { text, textTruncated } = boundText(rawText, maxChars);
+        return {
+          id: `${sessionId}-${recordBaseId}`,
+          role: 'user',
+          text,
+          timestamp,
+          turnId,
+          textTruncated,
+          explicitTurnStart: true,
+        };
+      }
+    } else if (eventType === 'item_completed') {
       const item = payload.item as Record<string, unknown> | undefined;
       if (item?.type === 'CommandExecution' || item?.type === 'command_execution') {
         const cmd = Array.isArray(item.command)
@@ -226,6 +250,9 @@ function extractRawItemFromRecord(
       if (msgRole === 'user' || msgRole === 'assistant') {
         const rawText = extractMessageText(payload.content);
         if (rawText.trim()) {
+          if (msgRole === 'user' && isInjectedContextMessage(rawText)) {
+            return null;
+          }
           const { text, textTruncated } = boundText(rawText, maxChars);
           return {
             id: `${sessionId}-${payload.id || recordBaseId}`,
@@ -271,6 +298,9 @@ function extractRawItemFromRecord(
     if (msgRole === 'user' || msgRole === 'assistant') {
       const rawText = extractMessageText(record.content);
       if (rawText.trim()) {
+        if (msgRole === 'user' && isInjectedContextMessage(rawText)) {
+          return null;
+        }
         const { text, textTruncated } = boundText(rawText, maxChars);
         return {
           id: `${sessionId}-${recordBaseId}`,
@@ -445,58 +475,58 @@ export class CodexHistoryReader implements HarnessHistoryReader {
       return null;
     }
 
-    let stat: fs.Stats;
+    let fd: number;
     try {
-      stat = fs.statSync(filePath);
+      fd = fs.openSync(filePath, 'r');
     } catch {
       return null;
     }
 
-    const currentFileName = path.basename(filePath);
+    try {
+      const stat = fs.fstatSync(fd);
+      const currentFileName = path.basename(filePath);
 
-    if (stat.size === 0) {
-      return {
-        sessionId: context.sessionId,
-        source: 'transcript',
-        items: [],
-        cursor: `offset:0:file:${currentFileName}`,
-        hasMore: false,
-        transcriptPath: filePath,
-      };
-    }
+      if (stat.size === 0) {
+        return {
+          sessionId: context.sessionId,
+          source: 'transcript',
+          items: [],
+          cursor: `offset:0:file:${currentFileName}`,
+          hasMore: false,
+          transcriptPath: filePath,
+        };
+      }
 
-    const maxChars = query?.maxItemChars || DEFAULT_MAX_ITEM_CHARS;
-    let parsedCursor = parseOffsetCursor(query?.cursor);
-    if (parsedCursor.file && parsedCursor.file !== currentFileName) {
-      // Switched to a new rollout file; reset offset and turn state
-      parsedCursor = { offset: 0 };
-    }
+      const maxChars = query?.maxItemChars || DEFAULT_MAX_ITEM_CHARS;
+      let parsedCursor = parseOffsetCursor(query?.cursor);
+      if (parsedCursor.file && parsedCursor.file !== currentFileName) {
+        // Switched to a new rollout file; reset offset and turn state
+        parsedCursor = { offset: 0 };
+      }
 
-    const limit = query?.limit || DEFAULT_LIMIT;
+      const limit = query?.limit || DEFAULT_LIMIT;
 
-    const fd = fs.openSync(filePath, 'r');
-    const headFp = computeHeadFingerprint(fd, stat.size);
-    if (parsedCursor.head && !isHeadMatching(fd, stat.size, parsedCursor.head)) {
-      // Rollout was replaced under the same filename; reset offset and turn state
-      parsedCursor = { offset: 0 };
-    }
+      const headFp = computeHeadFingerprint(fd, stat.size);
+      if (parsedCursor.head && !isHeadMatching(fd, stat.size, parsedCursor.head)) {
+        // Rollout was replaced under the same filename; reset offset and turn state
+        parsedCursor = { offset: 0 };
+      }
 
-    if (parsedCursor.offset > stat.size) {
-      parsedCursor = { offset: 0 };
-    }
-    const startOffset = parsedCursor.offset;
+      if (parsedCursor.offset > stat.size) {
+        parsedCursor = { offset: 0 };
+      }
+      const startOffset = parsedCursor.offset;
 
-    if (startOffset === stat.size) {
-      fs.closeSync(fd);
-      return {
-        sessionId: context.sessionId,
-        source: 'transcript',
-        items: [],
-        cursor: query?.cursor || `offset:${stat.size}:file:${currentFileName}:head:${headFp}`,
-        hasMore: false,
-        transcriptPath: filePath,
-      };
-    }
+      if (startOffset === stat.size) {
+        return {
+          sessionId: context.sessionId,
+          source: 'transcript',
+          items: [],
+          cursor: query?.cursor || `offset:${stat.size}:file:${currentFileName}:head:${headFp}`,
+          hasMore: false,
+          transcriptPath: filePath,
+        };
+      }
 
     const rawItems: RawItem[] = [];
     let currentTurnId = parsedCursor.turnId || `turn-off-${startOffset}`;
@@ -582,8 +612,7 @@ export class CodexHistoryReader implements HarnessHistoryReader {
       return false;
     };
 
-    try {
-      readingLoop: while (true) {
+    readingLoop: while (true) {
         const bytesRead = fs.readSync(fd, chunkBuffer, 0, bufferSize, currentFilePos);
         if (bytesRead === 0) {
           break;
@@ -661,9 +690,6 @@ export class CodexHistoryReader implements HarnessHistoryReader {
           }
         }
       }
-    } finally {
-      fs.closeSync(fd);
-    }
 
     let returnCursor = `offset:${lastCompleteByteOffset}:file:${currentFileName}:head:${headFp}`;
     if (currentTurnId) {
@@ -754,13 +780,16 @@ export class CodexHistoryReader implements HarnessHistoryReader {
     const isTurnComplete = isCurrentTurnClosed || Boolean(lastItem && lastItem.explicitTurnEnd);
     flushTurn(isTurnComplete);
 
-    return {
-      sessionId: context.sessionId,
-      source: 'transcript',
-      items,
-      cursor: returnCursor,
-      hasMore,
-      transcriptPath: filePath,
-    };
+      return {
+        sessionId: context.sessionId,
+        source: 'transcript',
+        items,
+        cursor: returnCursor,
+        hasMore,
+        transcriptPath: filePath,
+      };
+    } finally {
+      fs.closeSync(fd);
+    }
   }
 }

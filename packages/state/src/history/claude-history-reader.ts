@@ -372,57 +372,57 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
       return null;
     }
 
-    let stat: fs.Stats;
+    let fd: number;
     try {
-      stat = fs.statSync(filePath);
+      fd = fs.openSync(filePath, 'r');
     } catch {
       return null;
     }
 
-    const currentFileName = path.basename(filePath);
+    try {
+      const stat = fs.fstatSync(fd);
+      const currentFileName = path.basename(filePath);
 
-    if (stat.size === 0) {
-      return {
-        sessionId: context.sessionId,
-        source: 'transcript',
-        items: [],
-        cursor: `offset:0:file:${currentFileName}`,
-        hasMore: false,
-        transcriptPath: filePath,
-      };
-    }
+      if (stat.size === 0) {
+        return {
+          sessionId: context.sessionId,
+          source: 'transcript',
+          items: [],
+          cursor: `offset:0:file:${currentFileName}`,
+          hasMore: false,
+          transcriptPath: filePath,
+        };
+      }
 
-    const maxChars = query?.maxItemChars || DEFAULT_MAX_ITEM_CHARS;
-    let parsedCursor = parseOffsetCursor(query?.cursor);
-    if (parsedCursor.file && parsedCursor.file !== currentFileName) {
-      // Switched to a new transcript file; reset offset and turn state
-      parsedCursor = { offset: 0 };
-    }
-    const limit = query?.limit || DEFAULT_LIMIT;
+      const maxChars = query?.maxItemChars || DEFAULT_MAX_ITEM_CHARS;
+      let parsedCursor = parseOffsetCursor(query?.cursor);
+      if (parsedCursor.file && parsedCursor.file !== currentFileName) {
+        // Switched to a new transcript file; reset offset and turn state
+        parsedCursor = { offset: 0 };
+      }
+      const limit = query?.limit || DEFAULT_LIMIT;
 
-    const fd = fs.openSync(filePath, 'r');
-    const headFp = computeHeadFingerprint(fd, stat.size);
-    if (parsedCursor.head && !isHeadMatching(fd, stat.size, parsedCursor.head)) {
-      // Transcript was replaced under the same filename; reset offset and state
-      parsedCursor = { offset: 0 };
-    }
+      const headFp = computeHeadFingerprint(fd, stat.size);
+      if (parsedCursor.head && !isHeadMatching(fd, stat.size, parsedCursor.head)) {
+        // Transcript was replaced under the same filename; reset offset and state
+        parsedCursor = { offset: 0 };
+      }
 
-    if (parsedCursor.offset > stat.size) {
-      parsedCursor = { offset: 0 };
-    }
-    const startOffset = parsedCursor.offset;
+      if (parsedCursor.offset > stat.size) {
+        parsedCursor = { offset: 0 };
+      }
+      const startOffset = parsedCursor.offset;
 
-    if (startOffset === stat.size) {
-      fs.closeSync(fd);
-      return {
-        sessionId: context.sessionId,
-        source: 'transcript',
-        items: [],
-        cursor: query?.cursor || `offset:${stat.size}:file:${currentFileName}:head:${headFp}`,
-        hasMore: false,
-        transcriptPath: filePath,
-      };
-    }
+      if (startOffset === stat.size) {
+        return {
+          sessionId: context.sessionId,
+          source: 'transcript',
+          items: [],
+          cursor: query?.cursor || `offset:${stat.size}:file:${currentFileName}:head:${headFp}`,
+          hasMore: false,
+          transcriptPath: filePath,
+        };
+      }
 
     const rawItems: RawItem[] = [];
     let currentTurnId: string | undefined = parsedCursor.turnId;
@@ -459,7 +459,16 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
       const timestamp = typeof record.timestamp === 'string' ? record.timestamp : undefined;
 
       if (type === 'user') {
-        const msg = record.message as { role?: string; content?: unknown } | undefined;
+        const msg = record.message as { role?: string; content?: unknown; isMeta?: unknown } | undefined;
+        const isMeta =
+          record.isMeta === true ||
+          (msg && typeof msg === 'object' && msg.isMeta === true);
+
+        if (isMeta) {
+          lastCompleteByteOffset = recordOffset + lineBytes;
+          return false;
+        }
+
         const isToolResultOnly =
           Array.isArray(msg?.content) &&
           msg.content.length > 0 &&
@@ -655,8 +664,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
       return false;
     };
 
-    try {
-      readingLoop: while (true) {
+    readingLoop: while (true) {
         const bytesRead = fs.readSync(fd, chunkBuffer, 0, bufferSize, currentFilePos);
         if (bytesRead === 0) {
           break;
@@ -740,9 +748,6 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
           }
         }
       }
-    } finally {
-      fs.closeSync(fd);
-    }
 
     let returnCursor = `offset:${lastCompleteByteOffset}:file:${currentFileName}:head:${headFp}`;
     if (currentTurnId) {
@@ -837,13 +842,16 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
     const isTurnComplete = isCurrentTurnClosed || Boolean(lastItem && lastItem.explicitTurnEnd);
     flushTurn(isTurnComplete);
 
-    return {
-      sessionId: context.sessionId,
-      source: 'transcript',
-      items,
-      cursor: returnCursor,
-      hasMore,
-      transcriptPath: filePath,
-    };
+      return {
+        sessionId: context.sessionId,
+        source: 'transcript',
+        items,
+        cursor: returnCursor,
+        hasMore,
+        transcriptPath: filePath,
+      };
+    } finally {
+      fs.closeSync(fd);
+    }
   }
 }

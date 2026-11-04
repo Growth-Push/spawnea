@@ -1082,5 +1082,71 @@ describe('ClaudeHistoryReader', () => {
       expect(result?.items[2].turnBoundary).toBe('end');
       expect(result?.items[2].text).toBe('Finished after retry.');
     });
+
+    it('skips user records with isMeta: true without creating user items or starting turns', async () => {
+      const worktreePath = '/workspace/myproject';
+      const sanitized = encodeClaudeProjectPath(worktreePath);
+      const projectDir = path.join(tempHome, '.claude', 'projects', sanitized);
+      fs.mkdirSync(projectDir, { recursive: true });
+      const file = path.join(projectDir, 'sess-meta.jsonl');
+
+      const records = [
+        {
+          type: 'user',
+          uuid: 'u-1',
+          message: { role: 'user', content: 'First actual prompt' },
+        },
+        {
+          type: 'assistant',
+          uuid: 'a-1',
+          message: { role: 'assistant', stop_reason: 'end_turn', content: 'First reply' },
+        },
+        {
+          type: 'user',
+          uuid: 'u-meta-1',
+          isMeta: true,
+          message: { role: 'user', content: 'System injected caveat or hook reminder' },
+        },
+        {
+          type: 'user',
+          uuid: 'u-meta-2',
+          message: { role: 'user', content: 'Another injected caveat', isMeta: true },
+        },
+        {
+          type: 'user',
+          uuid: 'u-2',
+          message: { role: 'user', content: 'Second actual prompt' },
+        },
+        {
+          type: 'assistant',
+          uuid: 'a-2',
+          message: { role: 'assistant', stop_reason: 'end_turn', content: 'Second reply' },
+        },
+      ];
+      fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+      const result = await reader.readHistory({
+        sessionId: 'sess-meta',
+        harness: 'claude',
+        worktreePath,
+        isLocal: true,
+        agentSessionId: 'sess-meta',
+        homeDir: tempHome,
+      });
+
+      expect(result).not.toBeNull();
+      // Only u-1, a-1, u-2, a-2 should be items; the two isMeta records must be skipped completely
+      expect(result?.items).toHaveLength(4);
+      expect(result?.items.map((i) => i.text)).toEqual([
+        'First actual prompt',
+        'First reply',
+        'Second actual prompt',
+        'Second reply',
+      ]);
+      expect(result?.items[0]).toMatchObject({ role: 'user', turnBoundary: 'start', turnId: 'u-1' });
+      expect(result?.items[1]).toMatchObject({ role: 'agent', turnBoundary: 'end', turnId: 'u-1' });
+      expect(result?.items[2]).toMatchObject({ role: 'user', turnBoundary: 'start', turnId: 'u-2' });
+      expect(result?.items[3]).toMatchObject({ role: 'agent', turnBoundary: 'end', turnId: 'u-2' });
+    });
   });
 });
