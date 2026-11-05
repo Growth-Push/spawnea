@@ -23,17 +23,14 @@ The mobile API is a **thin HTTP adapter** over Spawnea's internal control servic
 
 ### Step 1: Generate an Argon2id Hash
 
-Use the offline `spawnea hash-key` command to generate an Argon2id hash for your chosen secret key:
+Use the offline `spawnea hash-key` command to generate an Argon2id hash for your chosen secret key (minimum 32 characters). Supplying the key via standard input is recommended to keep it out of shell history:
 
 ```bash
-# Using an argument
-spawnea hash-key "your-secure-random-passphrase"
-
-# Using a flag
-spawnea hash-key --key "your-secure-random-passphrase"
+# Piped via stdin (recommended; the key must be at least 32 characters)
+printf '%s' "$MOBILE_SECRET_KEY" | spawnea hash-key
 
 # JSON output
-spawnea hash-key "your-secure-random-passphrase" --json
+printf '%s' "$MOBILE_SECRET_KEY" | spawnea hash-key --json
 ```
 
 Output:
@@ -71,7 +68,7 @@ Restart Spawnea desktop for the configuration to take effect. If `key_hash` is m
 
 To rotate the mobile access key:
 
-1. Generate a new Argon2id hash using `spawnea hash-key "new-passphrase"`.
+1. Generate a new Argon2id hash with `printf '%s' "$NEW_KEY" | spawnea hash-key` (minimum 32 characters).
 2. Update the `key_hash` field in `config.yaml`.
 3. Restart the Spawnea desktop app.
 4. Update the key stored on your mobile device.
@@ -236,7 +233,7 @@ All JSON responses include `"apiVersion": "v1"`.
   ```
 - **Requirements:**
   - `message` (or `prompt`): Non-empty string, maximum 32,000 characters (returns `400 invalid_request` if missing or empty).
-  - `clientRequestId`: Non-empty string (returns `400 invalid_request` if missing or empty). Mobile clients must supply a unique client request ID so retries can never double-send.
+  - `clientRequestId`: Non-empty string, maximum 128 characters (returns `400 invalid_request` if missing, empty, or exceeds 128 characters). Mobile clients must supply a unique client request ID so retries can never double-send.
 - **Response (Delivered):**
   ```json
   {

@@ -420,6 +420,31 @@ describe('MobileApiServer', () => {
       expect(data2.error.code).toBe('not_found');
     });
 
+    it('returns 400 invalid_request when session ID contains malformed percent-encoding', async () => {
+      const { baseUrl } = await createAndStartServer();
+      const res = await fetch(`${baseUrl}/api/v1/sessions/%E0%A4%A`, {
+        headers: { Authorization: `Bearer ${rawSecretKey}` },
+      });
+      expect(res.status).toBe(400);
+      const data = await jsonBody(res);
+      expect(data.error.code).toBe('invalid_request');
+      expect(data.error.message).toBe('Malformed session ID');
+
+      // Also on sub-resource route
+      const resSub = await fetch(`${baseUrl}/api/v1/sessions/%E0%A4%A/message`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawSecretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: 'test', clientRequestId: 'req-malformed-id' }),
+      });
+      expect(resSub.status).toBe(400);
+      const dataSub = await jsonBody(resSub);
+      expect(dataSub.error.code).toBe('invalid_request');
+      expect(dataSub.error.message).toBe('Malformed session ID');
+    });
+
     it('GET /api/v1/sessions/:id/output returns live output or 404', async () => {
       await repositories.sessions.save(mockSession('sess-live', { status: 'idle' }));
       sessionManager.captureSessionTerminal.mockResolvedValueOnce('Live output line 1\nLive output line 2');
@@ -717,6 +742,41 @@ describe('MobileApiServer', () => {
       const dataEmpty = await jsonBody(resEmpty);
       expect(dataEmpty.error.code).toBe('invalid_request');
       expect(dataEmpty.error.message).toContain('clientRequestId is required');
+    });
+
+    it('bounds clientRequestId length to 128 characters (400 invalid_request if exceeded)', async () => {
+      await repositories.sessions.save(mockSession('sess-bound-id', { status: 'idle' }));
+
+      const { baseUrl } = await createAndStartServer();
+
+      // Exceeds 128 chars (129 chars)
+      const longId = 'a'.repeat(129);
+      const resTooLong = await fetch(`${baseUrl}/api/v1/sessions/sess-bound-id/message`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawSecretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: 'Valid prompt', clientRequestId: longId }),
+      });
+      expect(resTooLong.status).toBe(400);
+      const dataTooLong = await jsonBody(resTooLong);
+      expect(dataTooLong.error.code).toBe('invalid_request');
+      expect(dataTooLong.error.message).toContain('clientRequestId must be 128 characters or fewer');
+
+      // Exactly 128 chars succeeds
+      const exactId = 'b'.repeat(128);
+      const resExact = await fetch(`${baseUrl}/api/v1/sessions/sess-bound-id/message`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawSecretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: 'Valid prompt', clientRequestId: exactId }),
+      });
+      expect(resExact.status).toBe(200);
+      const dataExact = await jsonBody(resExact);
+      expect(dataExact.delivered).toBe(true);
     });
 
     it('rejects non-object JSON bodies with 400 invalid_request', async () => {

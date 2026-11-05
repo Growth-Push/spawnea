@@ -22,6 +22,9 @@ export interface TailScannerStats {
  * At the start of the file, uses events if any, else responses.
  * Never reads the whole file if the target exchanges are found in the tail.
  * Returns -1 if no matching user prompt records exist in the scanned file.
+ * If maxScanBytes is reached with no prompt offset collected, returns the start
+ * of the last scanned chunk. That offset can fall inside a record, so the caller
+ * must discard the partial first line.
  */
 export function findCodexTailExchangeOffset(
   fd: number,
@@ -234,6 +237,9 @@ export function findCodexTailExchangeOffset(
  * to locate the byte offset of the N-th most recent user exchange start.
  * Never reads the whole file if the target exchanges are found in the tail.
  * Returns -1 if no matching user prompt records exist in the scanned file.
+ * If maxScanBytes is reached with no prompt offset collected, returns the start
+ * of the last scanned chunk. That offset can fall inside a record, so the caller
+ * must discard the partial first line.
  */
 export function findTailExchangeOffset(
   fd: number,

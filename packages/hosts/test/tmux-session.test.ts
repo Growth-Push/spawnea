@@ -389,6 +389,23 @@ describe('TmuxManager', () => {
     await expect(tmux.capturePaneTail(host, 'sess-1', 25, 0)).rejects.toThrow('SSH disconnect or timeout');
   });
 
+  it('capturePaneTailDetailed treats missing or non-zero exit status as failure', async () => {
+    const host = new MockHostAdapter('host-1');
+    const tmux = new TmuxManager();
+
+    // Missing / undefined exit code
+    vi.spyOn(host, 'execute').mockResolvedValueOnce({ stdout: 'partial line\n', stderr: '', exitCode: undefined as any });
+    const missingExit = await tmux.capturePaneTailDetailed(host, 'sess-1', 25, 0);
+    expect(missingExit.success).toBe(false);
+    expect(missingExit.lines).toEqual([]);
+
+    // Non-zero exit code (1)
+    vi.spyOn(host, 'execute').mockResolvedValueOnce({ stdout: 'partial line\n', stderr: 'error', exitCode: 1 });
+    const nonZeroExit = await tmux.capturePaneTailDetailed(host, 'sess-1', 25, 0);
+    expect(nonZeroExit.success).toBe(false);
+    expect(nonZeroExit.lines).toEqual([]);
+  });
+
   it('discovers external tmux sessions and filters out already known Spawnea sessions (FG-7.2.1)', async () => {
     const host = new MockHostAdapter('host-1');
     host.customRules.push({

@@ -20,6 +20,7 @@ export const MAX_REQUEST_BODY_BYTES = 128 * 1024; // 128 KiB
 export const DEFAULT_AUTH_RATE_LIMIT_MAX = 300; // Sized for client polling (list/detail/history)
 export const DEFAULT_FAILED_AUTH_RATE_LIMIT_MAX = 10; // Strict limit for failed auth attempts
 export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
+export const MAX_CLIENT_REQUEST_ID_LENGTH = 128;
 
 export interface MobileApiServerOptions {
   control: AgentControlService;
@@ -412,7 +413,13 @@ export class MobileApiServer {
       return;
     }
 
-    const sessionId = decodeURIComponent(pathParts[3]);
+    let sessionId: string;
+    try {
+      sessionId = decodeURIComponent(pathParts[3]);
+    } catch {
+      sendError(res, 400, 'invalid_request', 'Malformed session ID');
+      return;
+    }
 
     // GET /api/v1/sessions/:id
     if (pathParts.length === 4) {
@@ -659,6 +666,16 @@ export class MobileApiServer {
 
     if (!clientRequestId) {
       sendError(res, 400, 'invalid_request', 'clientRequestId is required');
+      return;
+    }
+
+    if (clientRequestId.length > MAX_CLIENT_REQUEST_ID_LENGTH) {
+      sendError(
+        res,
+        400,
+        'invalid_request',
+        `clientRequestId must be ${MAX_CLIENT_REQUEST_ID_LENGTH} characters or fewer`
+      );
       return;
     }
 

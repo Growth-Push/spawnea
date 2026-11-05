@@ -505,7 +505,7 @@ export class TmuxManager {
     } catch (error) {
       return { success: false, lines: [], error };
     }
-    if (result.exitCode !== 0) {
+    if (typeof result.exitCode !== 'number' || result.exitCode !== 0) {
       return { success: false, lines: [] };
     }
     return { success: true, lines: result.stdout.split('\n') };
