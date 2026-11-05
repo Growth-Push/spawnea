@@ -18,6 +18,9 @@ files:
   - node_modules/bcrypt-pbkdf/**
   - node_modules/tweetnacl/**
   - node_modules/nan/**
+  - node_modules/@node-rs/**
+  - node_modules/@node-rs/argon2/**
+  - node_modules/@node-rs/argon2-*/**
   - '!**/*.map'
   - '!**/*.ts'
   - '!**/*.{test,spec}.{js,ts,tsx}'

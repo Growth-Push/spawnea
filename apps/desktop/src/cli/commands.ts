@@ -1,4 +1,5 @@
 import { getAgentSkillPrompt, MODEL_ID_PATTERN } from '@spawnea/domain';
+import { hashKey, MIN_MOBILE_API_KEY_LENGTH } from '../main/mobile-api-auth.js';
 import type { ControlCliClient } from './client.js';
 
 export interface OutputOptions {
@@ -792,4 +793,23 @@ export function showSkillPrompt(options: ShowSkillPromptOptions = {}): void {
     return;
   }
   console.log(prompt);
+}
+
+export async function hashKeyCommand(
+  keyInput: string | undefined,
+  options: OutputOptions = {}
+): Promise<void> {
+  const key = keyInput?.trim();
+  if (!key) {
+    throw new Error('spawnea hash-key requires a key to hash. Pass the key as an argument, --key flag, or via stdin.');
+  }
+  if (key.length < MIN_MOBILE_API_KEY_LENGTH) {
+    throw new Error(`spawnea hash-key requires a key of at least ${MIN_MOBILE_API_KEY_LENGTH} characters.`);
+  }
+  const hash = await hashKey(key);
+  if (options.json) {
+    console.log(JSON.stringify({ hash }));
+  } else {
+    console.log(hash);
+  }
 }

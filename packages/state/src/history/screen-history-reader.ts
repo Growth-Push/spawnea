@@ -77,6 +77,8 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
       lines = stripClaudeComposerTail(lines);
     }
 
+    const captureSuccess = context.captureSuccess ?? true;
+
     if (lines.length === 0) {
       return {
         sessionId: context.sessionId,
@@ -84,6 +86,7 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
         items: [],
         cursor: 'line:0',
         hasMore: false,
+        captureSuccess,
       };
     }
 
@@ -100,6 +103,7 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
           items: [],
           cursor: `line:${lines.length}:fp:${currentFp}`,
           hasMore: false,
+          captureSuccess,
         };
       }
     } else if (parsed.fingerprint && parsed.fingerprint !== currentFp) {
@@ -114,12 +118,40 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
         items: [],
         cursor: `line:${lines.length}:fp:${currentFp}`,
         hasMore: false,
+        captureSuccess,
       };
     }
 
-    const effectiveLines = startLine > 0 ? lines.slice(startLine) : lines;
+    const isRecentMode =
+      (query?.mode === 'recent_exchanges' || typeof query?.recentExchanges === 'number') &&
+      !query?.cursor;
+    const targetExchanges = query?.recentExchanges || query?.limit || 20;
+
+    let effectiveStartLine = startLine;
+    if (isRecentMode) {
+      const promptLineIndices: number[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const promptMatch = line.match(PROMPT_LINE_REGEX);
+        const isMenuChoice = MENU_CHOICE_REGEX.test(line);
+        if (promptMatch && !isMenuChoice && promptMatch[1]?.trim()) {
+          promptLineIndices.push(i);
+        }
+      }
+      if (promptLineIndices.length > 0) {
+        const idx = Math.max(0, promptLineIndices.length - targetExchanges);
+        effectiveStartLine = promptLineIndices[idx];
+      } else {
+        effectiveStartLine = 0;
+      }
+    }
+
+    const effectiveLines = effectiveStartLine > 0 ? lines.slice(effectiveStartLine) : lines;
     const maxChars = query?.maxItemChars || DEFAULT_MAX_ITEM_CHARS;
-    const limit = query?.limit || DEFAULT_LIMIT;
+    const MAX_PAGE_ITEMS_RECENT = 200;
+    const limit = isRecentMode
+      ? Math.min(Math.max((query?.recentExchanges || query?.limit || 20) * 5, DEFAULT_LIMIT), MAX_PAGE_ITEMS_RECENT)
+      : (query?.limit || DEFAULT_LIMIT);
 
     interface GroupedBlock {
       role: SessionHistoryRole;
@@ -134,7 +166,7 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
 
     for (let idx = 0; idx < effectiveLines.length; idx++) {
       const line = effectiveLines[idx];
-      const absoluteLineIndex = startLine + idx + 1;
+      const absoluteLineIndex = effectiveStartLine + idx + 1;
       const promptMatch = line.match(PROMPT_LINE_REGEX);
       const isMenuChoice = MENU_CHOICE_REGEX.test(line);
       const isTool = TOOL_LINE_REGEX.test(line);
@@ -258,6 +290,7 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
       items,
       cursor: `line:${nextCursorLine}:fp:${currentFp}`,
       hasMore,
+      captureSuccess,
     };
   }
 }

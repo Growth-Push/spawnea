@@ -27,6 +27,9 @@ Spawnea is a local-first desktop workspace for supervising and operating AI codi
 - **[Terminal Data and Security](terminal-data-and-security.md)**  
   Technical details on terminal streaming (`@xterm/xterm`, `node-pty`, `ssh2`), status detection from `tmux capture-pane`, and Spawnea's data privacy boundaries.
 
+- **[Mobile API](mobile-api.md)**
+  Configuring the private mobile HTTP API, offline Argon2id key generation, key rotation, and secure remote access via Tailscale Serve without Funnel.
+
 - **[Inspiration and Related Tools](inspiration-and-related-tools.md)**  
   The ideas behind Spawnea from `tmux`, Git worktrees, Workmux, and agent multiplexers, and how Spawnea provides a multi-project, multi-harness desktop model.
 

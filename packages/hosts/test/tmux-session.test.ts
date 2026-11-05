@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createLogger, type LogEntry, type SessionTopologySnapshot } from '@spawnea/domain';
 import { MockHostAdapter } from '../src/mock-host.js';
 import { TmuxManager } from '../src/tmux-session.js';
@@ -370,6 +370,23 @@ describe('TmuxManager', () => {
       "tmux capture-pane -p -t 'sess-1' -S -10",
       "tmux capture-pane -p -t 'sess-1' -S -2147483647",
     ]);
+  });
+
+  it('capturePaneTailDetailed captures errors as structured failure while capturePaneTail rethrows host.execute rejection', async () => {
+    const host = new MockHostAdapter('host-1');
+    const tmux = new TmuxManager();
+    const rejectError = new Error('SSH disconnect or timeout');
+    vi.spyOn(host, 'execute').mockRejectedValueOnce(rejectError);
+
+    // Detailed captures structured failure with error object
+    const detailed = await tmux.capturePaneTailDetailed(host, 'sess-1', 25, 0);
+    expect(detailed.success).toBe(false);
+    expect(detailed.lines).toEqual([]);
+    expect(detailed.error).toBe(rejectError);
+
+    // Regular rethrows host.execute rejection
+    vi.spyOn(host, 'execute').mockRejectedValueOnce(rejectError);
+    await expect(tmux.capturePaneTail(host, 'sess-1', 25, 0)).rejects.toThrow('SSH disconnect or timeout');
   });
 
   it('discovers external tmux sessions and filters out already known Spawnea sessions (FG-7.2.1)', async () => {

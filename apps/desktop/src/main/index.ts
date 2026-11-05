@@ -33,6 +33,7 @@ import { openWorkspaceHtml } from './open-workspace-html.js';
 import { LocalDiscoveryService } from './local-discovery-service.js';
 import { AgentControlService } from './agent-control-service.js';
 import { ControlGateway } from './control-gateway.js';
+import { MobileApiServer } from './mobile-api-server.js';
 import { isControlEnabled } from './control-config.js';
 import { getOriginalProcessPath, initializeProcessPath } from './process-path.js';
 import { getCliPathStatus, installCliInPath } from './cli-path-installer.js';
@@ -120,6 +121,7 @@ let localDiscoveryService: LocalDiscoveryService | null = null;
 let agentControlService: AgentControlService | null = null;
 let stateRulesStatus: StateRulesStatus | null = null;
 let controlGateway: ControlGateway | null = null;
+let mobileApiServer: MobileApiServer | null = null;
 let mainWindowRef: BrowserWindow | null = null;
 let shutdownPromise: Promise<void> | null = null;
 let shutdownComplete = false;
@@ -150,6 +152,12 @@ async function shutdownApplication(): Promise<void> {
         logger.error('Error closing Spawnea control gateway', { error: err });
       });
       controlGateway = null;
+    }
+    if (mobileApiServer) {
+      await mobileApiServer.close().catch((err) => {
+        logger.error('Error closing Mobile API server', { error: err });
+      });
+      mobileApiServer = null;
     }
     if (sessionSupervisor) {
       sessionSupervisor.stopPolling();
@@ -1247,6 +1255,20 @@ app.whenReady().then(async () => {
       await controlGateway.start();
     } else {
       logger.info('Spawnea control gateway is disabled by SPAWNEA_CONTROL_ENABLED');
+    }
+
+    const activeCatalog = catalogManager.getActiveCatalog();
+    if (activeCatalog?.api?.enabled) {
+      mobileApiServer = new MobileApiServer({
+        control: agentControlService,
+        sessionManager,
+        logger: logger.child('mobile-api'),
+        config: activeCatalog.api,
+        profile: activeProfile,
+      });
+      await mobileApiServer.start().catch((err) => {
+        logger.error('Failed to start Mobile API server', { error: err });
+      });
     }
   } catch (error) {
     console.error('[Spawnea Bootstrap Error]:', error);

@@ -32,6 +32,7 @@ import type {
   TurnBoundary,
 } from '@spawnea/domain';
 import type { HarnessHistoryContext, HarnessHistoryReader } from './types.js';
+import { findTailExchangeOffset } from './tail-scanner.js';
 
 const DEFAULT_MAX_ITEM_CHARS = 64 * 1024;
 const DEFAULT_LIMIT = 50;
@@ -229,6 +230,20 @@ function tryPeekTurnCompletion(
   return { found: false };
 }
 
+export function isClaudeUserPromptRecord(record: Record<string, unknown>): boolean {
+  if (record.type !== 'user') return false;
+  const msg = record.message as { role?: string; content?: unknown; isMeta?: unknown } | undefined;
+  const isMeta =
+    record.isMeta === true ||
+    (msg && typeof msg === 'object' && msg.isMeta === true);
+  if (isMeta) return false;
+  const isToolResultOnly =
+    Array.isArray(msg?.content) &&
+    msg.content.length > 0 &&
+    msg.content.every((b) => b && typeof b === 'object' && (b as { type?: unknown }).type === 'tool_result');
+  return !isToolResultOnly;
+}
+
 function computeHeadFingerprint(fd: number, statSize: number, sampleLen = 256): string {
   const len = Math.min(sampleLen, statSize);
   if (len === 0) return '0-0';
@@ -400,18 +415,28 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
         // Switched to a new transcript file; reset offset and turn state
         parsedCursor = { offset: 0 };
       }
-      const limit = query?.limit || DEFAULT_LIMIT;
-
       const headFp = computeHeadFingerprint(fd, stat.size);
       if (parsedCursor.head && !isHeadMatching(fd, stat.size, parsedCursor.head)) {
         // Transcript was replaced under the same filename; reset offset and state
         parsedCursor = { offset: 0 };
       }
 
+      const isRecentMode =
+        (query?.mode === 'recent_exchanges' || typeof query?.recentExchanges === 'number') &&
+        !query?.cursor;
+      const targetExchanges = query?.recentExchanges || query?.limit || 20;
+
       if (parsedCursor.offset > stat.size) {
         parsedCursor = { offset: 0 };
       }
-      const startOffset = parsedCursor.offset;
+      const startOffset = isRecentMode
+        ? Math.max(0, findTailExchangeOffset(fd, stat.size, isClaudeUserPromptRecord, targetExchanges))
+        : parsedCursor.offset;
+      const MAX_PAGE_ITEMS_RECENT = 200;
+      const MAX_PAGE_BYTES = 512 * 1024;
+      const limit = isRecentMode
+        ? Math.min(Math.max(targetExchanges * 5, DEFAULT_LIMIT), MAX_PAGE_ITEMS_RECENT)
+        : (query?.limit || DEFAULT_LIMIT);
 
       if (startOffset === stat.size) {
         return {
@@ -425,6 +450,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
       }
 
     const rawItems: RawItem[] = [];
+    let pageTextBytes = 0;
     let currentTurnId: string | undefined = parsedCursor.turnId;
     let isCurrentTurnClosed = Boolean(parsedCursor.turnClosed);
     let lastCompleteByteOffset = startOffset;
@@ -487,6 +513,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
         if (typeof msg?.content === 'string') {
           if (skipBlocksBefore === 0) {
             const { text, textTruncated } = boundText(msg.content, maxChars);
+            pageTextBytes += Buffer.byteLength(text, 'utf8');
             rawItems.push({
               id: `${context.sessionId}-${recordUuid}`,
               role: 'user',
@@ -507,7 +534,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
             if (currentBlockIdx < skipBlocksBefore) {
               continue;
             }
-            if (rawItems.length >= limit) {
+            if (rawItems.length >= limit || pageTextBytes >= MAX_PAGE_BYTES) {
               hasMore = true;
               nextBlockCursorIndex = currentBlockIdx;
               lastCompleteByteOffset = recordOffset;
@@ -518,6 +545,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
               const blockObj = block as { type?: string; text?: unknown; content?: unknown };
               if (blockObj.type === 'text' && typeof blockObj.text === 'string' && blockObj.text) {
                 const { text, textTruncated } = boundText(blockObj.text, maxChars);
+                pageTextBytes += Buffer.byteLength(text, 'utf8');
                 rawItems.push({
                   id: `${context.sessionId}-${recordUuid}-${currentBlockIdx}`,
                   role: 'user',
@@ -531,6 +559,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
               } else if (blockObj.type === 'tool_result') {
                 const toolText = formatToolResult(blockObj.content);
                 const { text, textTruncated } = boundText(toolText, maxChars);
+                pageTextBytes += Buffer.byteLength(text, 'utf8');
                 rawItems.push({
                   id: `${context.sessionId}-${recordUuid}-${currentBlockIdx}`,
                   role: 'tool',
@@ -558,6 +587,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
         if (typeof msg?.content === 'string') {
           if (skipBlocksBefore === 0) {
             const { text, textTruncated } = boundText(msg.content, maxChars);
+            pageTextBytes += Buffer.byteLength(text, 'utf8');
             rawItems.push({
               id: `${context.sessionId}-${recordUuid}`,
               role: 'agent',
@@ -584,7 +614,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
             if (currentBlockIdx < skipBlocksBefore) {
               continue;
             }
-            if (rawItems.length >= limit) {
+            if (rawItems.length >= limit || pageTextBytes >= MAX_PAGE_BYTES) {
               hasMore = true;
               nextBlockCursorIndex = currentBlockIdx;
               lastCompleteByteOffset = recordOffset;
@@ -595,6 +625,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
               const blockObj = block as { type?: string; text?: unknown; name?: unknown; input?: unknown };
               if (blockObj.type === 'text' && typeof blockObj.text === 'string' && blockObj.text) {
                 const { text, textTruncated } = boundText(blockObj.text, maxChars);
+                pageTextBytes += Buffer.byteLength(text, 'utf8');
                 rawItems.push({
                   id: `${context.sessionId}-${recordUuid}-${currentBlockIdx}`,
                   role: 'agent',
@@ -607,6 +638,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
               } else if (blockObj.type === 'tool_use') {
                 const toolText = formatToolCall(blockObj.name, blockObj.input);
                 const { text, textTruncated } = boundText(toolText, maxChars);
+                pageTextBytes += Buffer.byteLength(text, 'utf8');
                 rawItems.push({
                   id: `${context.sessionId}-${recordUuid}-${currentBlockIdx}`,
                   role: 'tool',
@@ -649,6 +681,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
                   const finalItem = replayed[replayed.length - 1];
                   finalItem.explicitTurnEnd = true;
                   rawItems.push(finalItem);
+                  pageTextBytes += Buffer.byteLength(finalItem.text, 'utf8');
                 }
               }
             }
@@ -658,7 +691,7 @@ export class ClaudeHistoryReader implements HarnessHistoryReader {
       }
 
       lastCompleteByteOffset = recordOffset + lineBytes;
-      if (rawItems.length >= limit) {
+      if (rawItems.length >= limit || pageTextBytes >= MAX_PAGE_BYTES) {
         return true;
       }
       return false;

@@ -45,8 +45,17 @@ export interface CatalogHost {
   harnesses: Record<string, CatalogHarness>;
 }
 
+export const DEFAULT_MOBILE_API_PORT = 5757;
+
+export interface CatalogApiConfig {
+  enabled?: boolean;
+  port?: number;
+  key_hash?: string;
+}
+
 export interface OperationalCatalog {
   version: 1;
+  api?: CatalogApiConfig;
   hosts: Record<string, CatalogHost>;
 }
 
@@ -351,11 +360,25 @@ export const RawCatalogHostSchema = z
   })
   .strict();
 
+export const CatalogApiSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    port: z
+      .number()
+      .int('API port must be an integer')
+      .min(1, 'API port must be at least 1')
+      .max(65535, 'API port must not exceed 65535')
+      .optional(),
+    key_hash: z.string().trim().min(1, 'key_hash must not be empty').optional(),
+  })
+  .strict();
+
 export const RawOperationalCatalogSchema = z
   .object({
     version: z.literal(1, {
       error: () => 'Catalog version must be 1 for Pilot 1',
     }),
+    api: CatalogApiSchema.optional(),
     hosts: z.record(z.string(), RawCatalogHostSchema),
   })
   .strict();
@@ -494,6 +517,7 @@ export function validateOperationalCatalog(raw: unknown): CatalogValidationResul
 
   const catalog: OperationalCatalog = {
     version: 1,
+    ...(validatedRaw.api ? { api: validatedRaw.api } : {}),
     hosts: transformedHosts,
   };
 
