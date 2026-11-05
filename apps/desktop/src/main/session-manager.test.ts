@@ -349,6 +349,114 @@ ${profile ? `      ${profile.id}:
     expect(session.creationSource).toBe('ui');
   });
 
+  it('creates a local Claude session with injected --session-id and persists agentSessionId', async () => {
+    await enableManagedWorktrees();
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Local Claude task',
+    });
+
+    expect(session.agentSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    const context = await contextStore.load(session.id);
+    expect(context?.agentSessionId).toBe(session.agentSessionId);
+    expect(context?.harness.args).toEqual(['--session-id', session.agentSessionId!]);
+  });
+
+  it('retrieves session history through getSessionHistory delegating to SessionHistoryService', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Check history retrieval',
+    });
+
+    const history = await sessionManager.getSessionHistory(session.id);
+    expect(history).toBeDefined();
+    expect(history.sessionId).toBe(session.id);
+    // Because no transcript file exists on disk in unit test, it falls back to screen
+    expect(history.source).toBe('screen');
+    expect(Array.isArray(history.items)).toBe(true);
+  });
+
+  it('resolves the first window once and inspects that window for both pane PID and screen tail', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Check window alignment',
+    });
+
+    const tmux = (sessionManager as any).tmuxManager;
+    const resolveWindowSpy = vi.spyOn(tmux, 'resolveFirstWindowIndex').mockResolvedValue(0);
+    const getPaneSpy = vi.spyOn(tmux, 'getPaneInspection').mockResolvedValue({
+      sessionName: session.tmuxSessionName,
+      panePid: 9876,
+      paneCurrentCommand: 'codex',
+      paneDead: false,
+    });
+    const captureTailSpy = vi.spyOn(tmux, 'capturePaneTail').mockResolvedValue([
+      '› Prompt in window 0',
+      'Worked for 1s · done',
+    ]);
+    vi.spyOn(tmux, 'hasSession').mockResolvedValue(true);
+
+    const history = await sessionManager.getSessionHistory(session.id);
+
+    expect(resolveWindowSpy).toHaveBeenCalledWith(expect.anything(), session.tmuxSessionName);
+    expect(getPaneSpy).toHaveBeenCalledWith(expect.anything(), session.tmuxSessionName, 0);
+    expect(captureTailSpy).toHaveBeenCalledWith(expect.anything(), session.tmuxSessionName, 100, 0, true);
+    expect(history.sessionId).toBe(session.id);
+  });
+
+  it('captures screen history with joinWrapped = true to preserve soft-wrapped prompts', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Check soft wrapped prompt',
+    });
+
+    const tmux = (sessionManager as any).tmuxManager;
+    vi.spyOn(tmux, 'hasSession').mockResolvedValue(true);
+    vi.spyOn(tmux, 'resolveFirstWindowIndex').mockResolvedValue(0);
+    vi.spyOn(tmux, 'getPaneInspection').mockResolvedValue(null);
+    const captureTailSpy = vi.spyOn(tmux, 'capturePaneTail').mockImplementation(
+      async (_host, _sess, _lines, _win, joinWrapped) => {
+        if (joinWrapped) {
+          // Soft-wrapped prompt joined with -J by tmux
+          return [
+            '❯ Please review the entire patch carefully and check for soft-wrapped input across terminal widths',
+            '● The patch looks solid and verified',
+            '✻ Done in 0.8s',
+          ];
+        }
+        // Physical terminal lines without -J would split across screen width
+        return [
+          '❯ Please review the entire patch carefully',
+          'and check for soft-wrapped input across terminal widths',
+          '● The patch looks solid and verified',
+          '✻ Done in 0.8s',
+        ];
+      }
+    );
+
+    const history = await sessionManager.getSessionHistory(session.id);
+
+    // Verify joinWrapped flag was passed
+    expect(captureTailSpy).toHaveBeenCalledWith(expect.anything(), session.tmuxSessionName, 100, 0, true);
+
+    // Because joinWrapped was true, user prompt is unified into a single user turn rather than split into agent role
+    expect(history.items.length).toBeGreaterThanOrEqual(2);
+    expect(history.items[0]).toMatchObject({
+      role: 'user',
+      text: 'Please review the entire patch carefully and check for soft-wrapped input across terminal widths',
+      turnBoundary: 'start',
+    });
+    expect(history.items[1].role).toBe('agent');
+  });
+
   describe('direct root model validation before resource creation', () => {
     const input = {
       serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
@@ -410,7 +518,10 @@ ${profile ? `      ${profile.id}:
         expect((await repos.sessions.findById(created.id))?.requestedModel).toBe(model);
         const context = await contextStore.load(created.id);
         expect(context?.requestedModel).toBe(model);
-        expect(context?.harness.args).toEqual([harness === 'claude' ? '--model' : '-m', model]);
+        const expectedArgs = harness === 'claude'
+          ? ['--model', model, '--session-id', context?.agentSessionId ?? '']
+          : ['-m', model];
+        expect(context?.harness.args).toEqual(expectedArgs);
         expect(mockHost.executedCommands.some(({ command }) => command.includes('git worktree add -b'))).toBe(true);
         expect(mockHost.executedCommands.some(({ command }) => command.includes('tmux new-session'))).toBe(true);
       },
@@ -433,12 +544,18 @@ ${profile ? `      ${profile.id}:
       expect((await repos.sessions.findById(created.id))?.requestedModel).toBe(model);
       const context = await contextStore.load(created.id);
       expect(context?.harness.command).toBe(command);
-      expect(context?.harness.args).toEqual(['--profile', 'example-profile', '--verbose', flag, model]);
+      const expectedCreatedArgs = command === 'claude'
+        ? ['--profile', 'example-profile', '--verbose', flag, model, '--session-id', created.agentSessionId ?? '']
+        : ['--profile', 'example-profile', '--verbose', flag, model];
+      expect(context?.harness.args).toEqual(expectedCreatedArgs);
       expect(mockHost.sessions.has(created.tmuxSessionName)).toBe(true);
 
       const defaultSession = await sessionManager.createSession({ ...input, agentId });
       expect(defaultSession.requestedModel).toBeUndefined();
-      expect((await contextStore.load(defaultSession.id))?.harness.args).toEqual(profile.args);
+      const expectedDefaultArgs = command === 'claude'
+        ? [...profile.args, '--session-id', defaultSession.agentSessionId ?? '']
+        : profile.args;
+      expect((await contextStore.load(defaultSession.id))?.harness.args).toEqual(expectedDefaultArgs);
       expect(JSON.stringify(catManager.getActiveCatalog())).toBe(originalCatalog);
     });
 
@@ -452,7 +569,10 @@ ${profile ? `      ${profile.id}:
         expect(created.managedWorktree).toBe(true);
         const context = await contextStore.load(created.id);
         expect(context?.requestedModel).toBeUndefined();
-        expect(context?.harness.args).toEqual(harness === 'claude' ? [] : ['--fixture-option']);
+        const expectedArgs = harness === 'claude'
+          ? ['--session-id', context?.agentSessionId ?? '']
+          : ['--fixture-option'];
+        expect(context?.harness.args).toEqual(expectedArgs);
       },
     );
 

@@ -848,6 +848,15 @@ is then reported normally. Indented lines are wrapped, quoted, or draft content
 and count as neither a failure nor a recovery. Interrupt notices that share the
 glyph are not failures.
 
+### 9.4 Session history hybrid model
+
+Spawnea provides structured session conversation history through a per-harness reader interface (`HarnessHistoryReader`), combining direct agent transcript reading with terminal screen capture fallback:
+
+- **Local Claude sessions:** Launched with `--session-id <uuid>`, generating a random UUID (`randomUUID` at session creation) stored in session metadata and context files. History is streamed from `~/.claude/projects/<sanitized-cwd>/<uuid>.jsonl`, mapping user prompts, assistant text, tool usage blocks, and tool results to normalized history items with bounded text and incremental byte cursors (`offset:<bytes>`). The project directory sanitizes the project root path by replacing non-alphanumeric characters with `-`.
+- **Local Codex sessions:** The active transcript is resolved dynamically by inspecting open file descriptors of the pane's process tree in Linux `/proc/<pid>/fd`, matching `~/.codex/sessions/.../rollout-*.jsonl`. Turn boundaries are marked by Codex `task_started` and `task_complete` events. Tool calls (`custom_tool_call`, `function_call`) and responses are mapped to structured tool history items.
+- **Graceful screen fallback:** When transcript files are absent, rotated, unreadable, or truncated, or when sessions are remote (SSH), pre-existing, or running other harnesses (such as Hermes, OpenCode, Shell, or Antigravity), Spawnea falls back to the screen history reader without raising errors. Live operational status (`working`, `idle`, `needs_input`, `error`) continues to be driven exclusively by the real-time screen parser.
+- **Data boundaries & pagination:** History items are strictly bounded in length (`maxItemChars` UTF-16 characters, with `textTruncated: true`), support limit-based pagination, and provide resumption cursors. Each item indicates its role (`user`, `agent`, `tool`), bounded content, timestamp, turn boundary (`start`, `end`, `single`), `turnId`, and data source (`transcript` or `screen`).
+
 ---
 
 ## 10. Security Architecture & Dependency Verification

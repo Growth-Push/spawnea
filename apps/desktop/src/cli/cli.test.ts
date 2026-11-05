@@ -282,21 +282,26 @@ describe('Spawnea Control CLI', () => {
     });
 
     it('rounds fractional timeouts to integer milliseconds in pollTurn', async () => {
-      let passedWaitMs: number | undefined;
-      const mockClient = {
-        callTool: vi.fn().mockImplementation(async (_name, args) => {
-          passedWaitMs = args.waitMs;
-          return {
-            turnId: 'fractional-turn',
-            status: 'completed',
-            output: 'done',
-          };
-        }),
-      } as unknown as ControlCliClient;
+      vi.useFakeTimers();
+      try {
+        let passedWaitMs: number | undefined;
+        const mockClient = {
+          callTool: vi.fn().mockImplementation(async (_name, args) => {
+            passedWaitMs = args.waitMs;
+            return {
+              turnId: 'fractional-turn',
+              status: 'completed',
+              output: 'done',
+            };
+          }),
+        } as unknown as ControlCliClient;
 
-      await pollTurn(mockClient, 'fractional-turn', 1.2345);
-      expect(Number.isInteger(passedWaitMs)).toBe(true);
-      expect(passedWaitMs).toBe(1235);
+        await pollTurn(mockClient, 'fractional-turn', 1.2345);
+        expect(Number.isInteger(passedWaitMs)).toBe(true);
+        expect(passedWaitMs).toBe(1235);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('validates timeout in sendAndWaitPrompt and waitTurn upfront', async () => {

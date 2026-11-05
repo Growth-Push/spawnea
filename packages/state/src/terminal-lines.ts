@@ -92,3 +92,86 @@ export function codexSignalLines(lines: string[]): string[] {
   }
   return signalLines;
 }
+
+/**
+ * Trims the live editable composer and its footer from a Codex tail.
+ * Returns the transcript lines up to the start of the live composer.
+ */
+export function stripCodexComposerTail(lines: string[]): string[] {
+  let lastColumnZero = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^\S/.test(lines[i])) {
+      lastColumnZero = i;
+      break;
+    }
+  }
+  if (lastColumnZero < 0) return lines;
+  const promptLine = lines[lastColumnZero];
+  const hasEditablePrompt =
+    CODEX_EDITABLE_PROMPT.test(promptLine) &&
+    !CODEX_MENU_SELECTOR.test(promptLine) &&
+    !isCodexLiveDialog(lines.slice(lastColumnZero + 1));
+  if (hasEditablePrompt) {
+    return lines.slice(0, lastColumnZero);
+  }
+  return lines;
+}
+
+const CLAUDE_INPUT_BOX_BORDER = /^\s*─{3,}\s*$/;
+const CLAUDE_INPUT_LINE = /^\s*[>❯](?!\s*(?:\d+[.)]|[a-zA-Z][.)]|\[[0-9a-zA-Z]\]|\([0-9a-zA-Z]\))\s+)/;
+const CLAUDE_MODE_FOOTER = /^\s*⏵⏵[^\n]*\b(?:auto\s+mode|plan\s+mode|accept edits(?:\s+mode)?|bypass permissions(?:\s+mode)?)\s+on\b/i;
+const CLAUDE_PROMPT_CHROME = /^\s*(?:\?|\/)\s+(?:for\s+(?:commands|shortcuts|help)|help)\b|^\s*(?:esc|ctrl|\(shift|bypass permissions|auto mode|plan mode)\b/i;
+
+function isTrailingClaudeChrome(lines: string[]): boolean {
+  return lines.every((l) => {
+    const trimmed = l.trim();
+    if (trimmed.length === 0) return true;
+    if (CLAUDE_INPUT_BOX_BORDER.test(l)) return true;
+    if (CLAUDE_MODE_FOOTER.test(l)) return true;
+    if (CLAUDE_PROMPT_CHROME.test(l)) return true;
+    if (/^[A-Za-z0-9.\s]+(?:\|[A-Za-z0-9.\s%]+)+$/.test(trimmed)) return true;
+    return false;
+  });
+}
+
+/**
+ * Trims the live editable composer, input box borders, and UI chrome from a Claude tail.
+ * Returns the transcript lines up to the start of the live composer.
+ */
+export function stripClaudeComposerTail(lines: string[]): string[] {
+  // Check for a trailing bordered input box
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (CLAUDE_INPUT_BOX_BORDER.test(lines[i])) {
+      const closingIdx = lines.findIndex((l, idx) => idx > i && CLAUDE_INPUT_BOX_BORDER.test(l));
+      if (closingIdx !== -1) {
+        const insideBox = lines.slice(i + 1, closingIdx);
+        const hasPrompt = insideBox.some((l) => CLAUDE_INPUT_LINE.test(l));
+        const afterBox = lines.slice(closingIdx + 1);
+        if (hasPrompt && isTrailingClaudeChrome(afterBox)) {
+          return lines.slice(0, i);
+        }
+      }
+    }
+  }
+
+  // Check for trailing unsubmitted prompt at EOF
+  let lastPromptIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (CLAUDE_INPUT_LINE.test(lines[i])) {
+      lastPromptIdx = i;
+      break;
+    }
+  }
+  if (lastPromptIdx >= 0) {
+    const linesBelow = lines.slice(lastPromptIdx + 1);
+    if (isTrailingClaudeChrome(linesBelow)) {
+      const prevIdx = lastPromptIdx - 1;
+      if (prevIdx >= 0 && CLAUDE_INPUT_BOX_BORDER.test(lines[prevIdx])) {
+        return lines.slice(0, prevIdx);
+      }
+      return lines.slice(0, lastPromptIdx);
+    }
+  }
+
+  return lines;
+}

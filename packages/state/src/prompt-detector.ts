@@ -4,7 +4,7 @@ import { matchStateRules } from './rules/rule-config.js';
 import { getFactoryStateRuleSet } from './rules/factory-rules.js';
 import { HarnessStatusAdapterRegistry } from './adapters/registry.js';
 
-export { stripAnsi, cleanTailLines, codexSignalLines } from './terminal-lines.js';
+export { stripAnsi, cleanTailLines, codexSignalLines, stripCodexComposerTail, stripClaudeComposerTail } from './terminal-lines.js';
 
 export type PromptKind = RuleState | 'none';
 

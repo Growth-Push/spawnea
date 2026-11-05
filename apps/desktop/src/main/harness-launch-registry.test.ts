@@ -79,4 +79,55 @@ describe('HarnessLaunchRegistry', () => {
   it.each([' model', 'model ', 'mo del', ''])('rejects a non-literal model identifier: %j', (model) => {
     expect(() => registry.withModel('codex', 'codex', [], model)).toThrow();
   });
+
+  describe('withSessionId', () => {
+    it('appends --session-id for claude when not already present', () => {
+      expect(registry.withSessionId('claude', 'claude', ['--verbose'], '11111111-1111-1111-1111-111111111111'))
+        .toEqual(['--verbose', '--session-id', '11111111-1111-1111-1111-111111111111']);
+      expect(registry.withSessionId('claude-code', 'claude-code', [], '22222222-2222-2222-2222-222222222222'))
+        .toEqual(['--session-id', '22222222-2222-2222-2222-222222222222']);
+    });
+
+    it('preserves existing --session-id and does not duplicate', () => {
+      expect(registry.withSessionId('claude', 'claude', ['--session-id', 'existing-uuid'], 'new-uuid'))
+        .toEqual(['--session-id', 'existing-uuid']);
+      expect(registry.withSessionId('claude', 'claude', ['--session-id=inline-uuid'], 'new-uuid'))
+        .toEqual(['--session-id=inline-uuid']);
+    });
+
+    it('ignores non-claude harnesses', () => {
+      expect(registry.withSessionId('codex', 'codex', ['-m', 'o1'], 'some-uuid'))
+        .toEqual(['-m', 'o1']);
+      expect(registry.withSessionId('bash', 'shell', [], 'some-uuid'))
+        .toEqual([]);
+      expect(registry.withSessionId('bash', 'claude', ['-l'], '11111111-1111-1111-1111-111111111111'))
+        .toEqual(['-l']);
+      expect(registry.withSessionId('my-wrapper', 'claude', ['--verbose'], '11111111-1111-1111-1111-111111111111'))
+        .toEqual(['--verbose']);
+    });
+
+    it('does not append --session-id for --continue or --resume without --fork-session', () => {
+      expect(registry.withSessionId('claude', 'claude', ['--continue'], 'new-uuid'))
+        .toEqual(['--continue']);
+      expect(registry.withSessionId('claude', 'claude', ['-c'], 'new-uuid'))
+        .toEqual(['-c']);
+      expect(registry.withSessionId('claude', 'claude', ['--resume', 'session-123'], 'new-uuid'))
+        .toEqual(['--resume', 'session-123']);
+      expect(registry.withSessionId('claude', 'claude', ['-r', 'session-123'], 'new-uuid'))
+        .toEqual(['-r', 'session-123']);
+      expect(registry.withSessionId('claude', 'claude', ['-rsession-123'], 'new-uuid'))
+        .toEqual(['-rsession-123']);
+      expect(registry.withSessionId('claude', 'claude', ['--resume=session-123'], 'new-uuid'))
+        .toEqual(['--resume=session-123']);
+      expect(registry.withSessionId('claude', 'claude', ['--resume', 'session-123', '--fork-session'], 'new-uuid'))
+        .toEqual(['--resume', 'session-123', '--fork-session', '--session-id', 'new-uuid']);
+    });
+
+    it('inserts --session-id before the end-of-options separator --', () => {
+      expect(registry.withSessionId('claude', 'claude', ['--', 'Review this repository'], 'new-uuid'))
+        .toEqual(['--session-id', 'new-uuid', '--', 'Review this repository']);
+      expect(registry.withSessionId('claude', 'claude', ['-p', 'agent', '--', '--continue'], 'new-uuid'))
+        .toEqual(['-p', 'agent', '--session-id', 'new-uuid', '--', '--continue']);
+    });
+  });
 });

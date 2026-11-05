@@ -47,4 +47,35 @@ export class HarnessLaunchRegistry {
     result.push(flag, model);
     return result;
   }
+
+  withSessionId(command: string, _harness: string | undefined, args: string[], sessionId: string): string[] {
+    const commandName = normalizeHarnessExecutable(command);
+    if (commandName !== 'claude' && commandName !== 'claude-code') {
+      return [...args];
+    }
+    const doubleDashIndex = args.indexOf('--');
+    const optionsSlice = doubleDashIndex !== -1 ? args.slice(0, doubleDashIndex) : args;
+
+    for (let index = 0; index < optionsSlice.length; index += 1) {
+      if (optionsSlice[index] === '--session-id' || optionsSlice[index].startsWith('--session-id=')) {
+        return [...args];
+      }
+    }
+    const hasResumeOrContinue = optionsSlice.some(
+      (arg) =>
+        arg === '--continue' ||
+        arg === '-c' ||
+        arg === '--resume' ||
+        arg.startsWith('--resume=') ||
+        (arg.startsWith('-r') && !arg.startsWith('--'))
+    );
+    const hasForkSession = optionsSlice.includes('--fork-session');
+    if (hasResumeOrContinue && !hasForkSession) {
+      return [...args];
+    }
+    if (doubleDashIndex !== -1) {
+      return [...args.slice(0, doubleDashIndex), '--session-id', sessionId, ...args.slice(doubleDashIndex)];
+    }
+    return [...args, '--session-id', sessionId];
+  }
 }

@@ -343,8 +343,11 @@ export class TmuxManager {
   /**
    * Inspects the foreground process and liveness of a specific session pane.
    */
-  async getPaneInspection(host: HostAdapter, sessionName: string): Promise<PaneInspectionResult | null> {
-    const cmd = `tmux list-panes -t ${escapeShellArg(sessionName)} -F "#{pane_id}:::#{pane_pid}:::#{pane_current_command}:::#{pane_dead}"`;
+  async getPaneInspection(host: HostAdapter, sessionName: string, windowIndex?: number): Promise<PaneInspectionResult | null> {
+    const target = windowIndex !== undefined && Number.isSafeInteger(windowIndex) && windowIndex >= 0
+      ? `${sessionName}:${windowIndex}`
+      : sessionName;
+    const cmd = `tmux list-panes -t ${escapeShellArg(target)} -F "#{pane_id}:::#{pane_pid}:::#{pane_current_command}:::#{pane_dead}"`;
     const result = await host.execute(cmd, { timeoutMs: 5000 });
     if (result.exitCode !== 0 || !result.stdout.trim()) {
       return null;
@@ -461,6 +464,26 @@ export class TmuxManager {
   }
 
   /**
+   * Resolves the first window index of a tmux session.
+   */
+  async resolveFirstWindowIndex(host: HostAdapter, sessionName: string): Promise<number | undefined> {
+    const windowsResult = await host.execute(
+      `tmux list-windows -t ${escapeShellArg(sessionName)} -F '#{window_index}'`,
+      { timeoutMs: 5000 }
+    ).catch(() => null);
+    if (!windowsResult || windowsResult.exitCode !== 0) {
+      return undefined;
+    }
+    return windowsResult.stdout
+      .split('\n')
+      .map((value) => value.trim())
+      .filter((value) => /^\d+$/.test(value))
+      .map((value) => Number(value))
+      .filter((value) => Number.isSafeInteger(value) && value >= 0)
+      .sort((a, b) => a - b)[0];
+  }
+
+  /**
    * Captures the tail buffer lines of a tmux pane without altering terminal state.
    */
   async capturePaneTail(
@@ -473,18 +496,9 @@ export class TmuxManager {
     // A session target without a window selects whichever tab the user last
     // viewed. Hermes can leave its metrics footer in the first tab while a
     // later tab is focused, so resolve the first window explicitly.
-    const windowsResult = await host.execute(
-      `tmux list-windows -t ${escapeShellArg(sessionName)} -F '#{window_index}'`,
-      { timeoutMs: 5000 }
-    );
-    const firstWindow = windowsResult.stdout
-      .split('\n')
-      .map((value) => value.trim())
-      .filter((value) => /^\d+$/.test(value))
-      .map((value) => Number(value))
-      .filter((value) => Number.isSafeInteger(value) && value >= 0)
-      .sort((a, b) => a - b)[0];
-    const targetWindow = windowIndex !== undefined && Number.isSafeInteger(windowIndex) && windowIndex >= 0 ? windowIndex : firstWindow;
+    const targetWindow = windowIndex !== undefined && Number.isSafeInteger(windowIndex) && windowIndex >= 0
+      ? windowIndex
+      : await this.resolveFirstWindowIndex(host, sessionName);
     const target = targetWindow === undefined ? sessionName : `${sessionName}:${targetWindow}`;
     const safeLines = Number.isFinite(lines) ? Math.min(Math.max(0, Math.trunc(lines)), 2_147_483_647) : 25;
     const cmd = `tmux capture-pane -p${joinWrapped ? ' -J' : ''} -t ${escapeShellArg(target)} -S -${safeLines}`;
