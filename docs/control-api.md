@@ -5,8 +5,10 @@ sessions, inspect them, submit prompts, read turns, and request guarded
 finalization. The supported client is the [`spawnea` CLI](cli.md); this document
 describes the contract behind it.
 
-There is no MCP server, stdio bridge, or network listener. The CLI talks to the
-running desktop app over an owner-only Unix-domain socket.
+There is no MCP server or stdio bridge. The CLI talks to the
+running desktop app over an owner-only Unix-domain socket. For mobile companion clients,
+Spawnea additionally provides an optional, disabled-by-default private HTTP API
+listening exclusively on loopback (127.0.0.1).
 
 ## Compatibility
 
@@ -258,3 +260,23 @@ Use a disposable Git repository and a disposable Spawnea session.
 ### Originating issue
 
 `spawnea_create_session` and `spawnea_create_child_session` accept an optional `originIssueUrl` containing a complete HTTPS github.com issue URL. The CLI exposes the same field as `--origin-issue <url>` on `session create` and `child create`. A child does not inherit this association automatically. The issue can belong to another repository and is independent of task and initial prompt; its contents are not submitted to the agent. Existing requests without the field remain valid.
+
+## Private mobile HTTP API
+
+Spawnea provides an optional, private HTTP API adapter over `AgentControlService` and `SessionManager` for mobile companion clients (such as Spawnea Mobile).
+
+- **Disabled by default:** Configured in `config.yaml` under `api:`. If omitted or `enabled: false`, no listener is opened.
+- **Strict loopback binding:** Listens strictly on `127.0.0.1` (configurable port, defaulting to 5757). Network exposure to mobile devices must be routed through Tailscale Serve outside Spawnea; never expose via Tailscale Funnel.
+- **Argon2id authentication:** The key is generated with `spawnea hash-key` and stored only as an Argon2id hash in `config.yaml`. Requests pass `Authorization: Bearer <key>`. Failed authentication attempts return `401 Unauthorized` and never echo or log the candidate key. If authentication configuration is missing or invalid, Spawnea never opens a listener.
+- **Endpoints:**
+  - `GET /api/v1/sessions` — list active sessions and their normalized status.
+  - `GET /api/v1/sessions/:id` — session detail.
+  - `GET /api/v1/sessions/:id/output` — current terminal output (query parameter `lines`, bounded).
+  - `GET /api/v1/sessions/:id/history` — conversation history (query parameter `limit`, defaulting to 20 exchanges).
+  - `POST /api/v1/sessions/:id/message` — send a message to any active root or child session.
+- **Polling only:** No WebSockets or persistent push connections.
+- **Idempotency & uncertain delivery:** Bounded `clientRequestId` deduplication replays exact matches and rejects conflicts. If prompt delivery is uncertain, the API returns status `unknown` and `delivered: false`, advising callers not to resend.
+- **No persistence (#68):** What does not come from agent files (e.g. live terminal tails or screen history) is reported as unavailable after an application restart, never as live.
+- **Request limits:** Requests are bounded to 128 KiB with dual-tier rate limiting (default 300 authenticated requests per minute, 10 failed authentication attempts per minute).
+
+See [Mobile API Guide](mobile-api.md) for full enablement, key generation, rotation, and Tailscale Serve configuration instructions.

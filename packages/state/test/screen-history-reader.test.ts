@@ -325,4 +325,26 @@ describe('ScreenHistoryReader', () => {
     expect(result.items[2].role).toBe('agent');
     expect(result.items[2].text).toContain('Finished');
   });
+
+  it('returns the most recent N exchanges in recent_exchanges mode for screen', async () => {
+    const tailLines: string[] = [];
+    for (let i = 1; i <= 25; i++) {
+      tailLines.push(`› screen question ${i}`);
+      tailLines.push(`screen answer ${i}`);
+      tailLines.push('Worked for 1s · done');
+    }
+
+    const context = {
+      sessionId: 'sess-recent-screen',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      tailLines,
+    };
+
+    const result = await reader.readHistory(context, { limit: 10, mode: 'recent_exchanges' });
+    expect(result.items[0].text).toBe('screen question 16');
+    expect(result.items.at(-1)?.text).toContain('screen answer 25');
+    expect(result.hasMore).toBe(false);
+  });
 });

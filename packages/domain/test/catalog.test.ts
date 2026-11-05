@@ -523,5 +523,46 @@ hosts:
 
       expect(resolveProjectWorktreesDir({})).toBeUndefined();
     });
+
+    it('parses valid api configuration and defaults enabled to false', () => {
+      const yaml = `
+version: 1
+api:
+  enabled: true
+  port: 5757
+  key_hash: "$argon2id$v=19$m=19456,t=2,p=1$sample$hash"
+hosts:
+  local:
+    name: Local
+    projects: {}
+    harnesses: {}
+`;
+      const result = parseOperationalCatalog(yaml);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.catalog.api).toEqual({
+        enabled: true,
+        port: 5757,
+        key_hash: '$argon2id$v=19$m=19456,t=2,p=1$sample$hash',
+      });
+    });
+
+    it('rejects invalid api port configuration', () => {
+      const yaml = `
+version: 1
+api:
+  enabled: true
+  port: 99999
+hosts:
+  local:
+    name: Local
+    projects: {}
+    harnesses: {}
+`;
+      const result = parseOperationalCatalog(yaml);
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.errors.some((e) => e.path.includes('port'))).toBe(true);
+    });
   });
 });

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PassThrough } from 'node:stream';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -877,6 +878,56 @@ describe('Spawnea Control CLI', () => {
           delete process.env.SPAWNEA_SESSION_ID;
         }
       }
+    });
+
+    it('generates an Argon2id hash offline via spawnea hash-key', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const validKey = 'mobile-secret-auth-key-32-chars-long';
+
+      // Positional argument
+      await runCli(['hash-key', validKey]);
+      expect(logSpy).toHaveBeenCalled();
+      const firstHash = logSpy.mock.calls[0][0];
+      expect(typeof firstHash).toBe('string');
+      expect(firstHash.startsWith('$argon2id$')).toBe(true);
+
+      // Flag --key
+      logSpy.mockClear();
+      await runCli(['hash-key', '--key', validKey]);
+      expect(logSpy).toHaveBeenCalled();
+      const flagHash = logSpy.mock.calls[0][0];
+      expect(typeof flagHash).toBe('string');
+      expect(flagHash.startsWith('$argon2id$')).toBe(true);
+
+      // JSON output
+      logSpy.mockClear();
+      await runCli(['hash-key', validKey, '--json']);
+      expect(logSpy).toHaveBeenCalled();
+      const jsonParsed = JSON.parse(logSpy.mock.calls[0][0]);
+      expect(jsonParsed.hash).toBeDefined();
+      expect(jsonParsed.hash.startsWith('$argon2id$')).toBe(true);
+
+      // Rejection on missing key
+      const ttyStream = new PassThrough() as PassThrough & { isTTY?: boolean };
+      ttyStream.isTTY = true;
+      await expect(runCli(['hash-key'], { stdin: ttyStream })).rejects.toThrow('spawnea hash-key requires a key to hash');
+
+      // Rejection on key shorter than 32 characters
+      await expect(runCli(['hash-key', 'too-short-secret-key'])).rejects.toThrow('requires a key of at least 32 characters');
+
+      // Piped stdin across multiple chunks waiting for EOF via injected stream
+      logSpy.mockClear();
+      const stdinStream = new PassThrough();
+      const cliPromise = runCli(['hash-key'], { stdin: stdinStream });
+      stdinStream.write('first-half-of-long-secret-key-32-chars-');
+      stdinStream.write('second-half-of-the-secret-key');
+      stdinStream.end();
+      await cliPromise;
+      expect(logSpy).toHaveBeenCalled();
+      const pipedHash = logSpy.mock.calls[0][0];
+      const { verifyKey } = await import('../main/mobile-api-auth.js');
+      expect(await verifyKey(pipedHash, 'first-half-of-long-secret-key-32-chars-second-half-of-the-secret-key')).toBe(true);
+      expect(await verifyKey(pipedHash, 'first-half-of-long-secret-key-32-chars-')).toBe(false);
     });
   });
 });

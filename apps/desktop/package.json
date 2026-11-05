@@ -24,6 +24,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.2.2",
     "@spawnea/db": "workspace:*",
     "@spawnea/domain": "workspace:*",
     "@spawnea/hosts": "workspace:*",

@@ -486,6 +486,31 @@ export class TmuxManager {
   /**
    * Captures the tail buffer lines of a tmux pane without altering terminal state.
    */
+  async capturePaneTailDetailed(
+    host: HostAdapter,
+    sessionName: string,
+    lines: number = 25,
+    windowIndex?: number,
+    joinWrapped = false
+  ): Promise<{ success: boolean; lines: string[]; error?: unknown }> {
+    const targetWindow = windowIndex !== undefined && Number.isSafeInteger(windowIndex) && windowIndex >= 0
+      ? windowIndex
+      : await this.resolveFirstWindowIndex(host, sessionName);
+    const target = targetWindow === undefined ? sessionName : `${sessionName}:${targetWindow}`;
+    const safeLines = Number.isFinite(lines) ? Math.min(Math.max(0, Math.trunc(lines)), 2_147_483_647) : 25;
+    const cmd = `tmux capture-pane -p${joinWrapped ? ' -J' : ''} -t ${escapeShellArg(target)} -S -${safeLines}`;
+    let result: { exitCode: number; stdout: string; stderr?: string };
+    try {
+      result = await host.execute(cmd, { timeoutMs: 5000 });
+    } catch (error) {
+      return { success: false, lines: [], error };
+    }
+    if (typeof result.exitCode !== 'number' || result.exitCode !== 0) {
+      return { success: false, lines: [] };
+    }
+    return { success: true, lines: result.stdout.split('\n') };
+  }
+
   async capturePaneTail(
     host: HostAdapter,
     sessionName: string,
@@ -493,20 +518,11 @@ export class TmuxManager {
     windowIndex?: number,
     joinWrapped = false
   ): Promise<string[]> {
-    // A session target without a window selects whichever tab the user last
-    // viewed. Hermes can leave its metrics footer in the first tab while a
-    // later tab is focused, so resolve the first window explicitly.
-    const targetWindow = windowIndex !== undefined && Number.isSafeInteger(windowIndex) && windowIndex >= 0
-      ? windowIndex
-      : await this.resolveFirstWindowIndex(host, sessionName);
-    const target = targetWindow === undefined ? sessionName : `${sessionName}:${targetWindow}`;
-    const safeLines = Number.isFinite(lines) ? Math.min(Math.max(0, Math.trunc(lines)), 2_147_483_647) : 25;
-    const cmd = `tmux capture-pane -p${joinWrapped ? ' -J' : ''} -t ${escapeShellArg(target)} -S -${safeLines}`;
-    const result = await host.execute(cmd, { timeoutMs: 5000 });
-    if (result.exitCode !== 0) {
-      return [];
+    const result = await this.capturePaneTailDetailed(host, sessionName, lines, windowIndex, joinWrapped);
+    if ('error' in result && result.error !== undefined) {
+      throw result.error;
     }
-    return result.stdout.split('\n');
+    return result.lines;
   }
 
   /**

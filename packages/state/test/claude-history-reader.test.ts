@@ -1148,5 +1148,121 @@ describe('ClaudeHistoryReader', () => {
       expect(result?.items[2]).toMatchObject({ role: 'user', turnBoundary: 'start', turnId: 'u-2' });
       expect(result?.items[3]).toMatchObject({ role: 'agent', turnBoundary: 'end', turnId: 'u-2' });
     });
+
+    it('returns the most recent N exchanges in recent_exchanges mode and allows forward polling', async () => {
+      const worktreePath = '/data/test-project-recent';
+      const encoded = encodeClaudeProjectPath(worktreePath);
+      const projDir = path.join(tempHome, '.claude', 'projects', encoded);
+      fs.mkdirSync(projDir, { recursive: true });
+
+      const file = path.join(projDir, 'sess-recent.jsonl');
+      const records = [];
+      for (let i = 1; i <= 30; i++) {
+        records.push({
+          type: 'user',
+          uuid: `turn-${i}`,
+          message: { role: 'user', content: `question ${i}` },
+        });
+        records.push({
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            stop_reason: 'end_turn',
+            content: [{ type: 'text', text: `answer ${i}` }],
+          },
+        });
+      }
+      fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+      const context = {
+        sessionId: 'sess-recent',
+        harness: 'claude',
+        worktreePath,
+        isLocal: true,
+        agentSessionId: 'sess-recent',
+        homeDir: tempHome,
+      };
+
+      const result = await reader.readHistory(context, { limit: 20, mode: 'recent_exchanges' });
+      expect(result).not.toBeNull();
+      expect(result?.items).toHaveLength(40);
+      expect(result?.items[0].text).toBe('question 11');
+      expect(result?.items.at(-1)?.text).toBe('answer 30');
+      expect(result?.hasMore).toBe(false);
+
+      // Incremental forward poll returns 0 items
+      const poll1 = await reader.readHistory(context, { limit: 20, cursor: result?.cursor });
+      expect(poll1?.items).toHaveLength(0);
+
+      // Append turn 31
+      fs.appendFileSync(
+        file,
+        JSON.stringify({ type: 'user', uuid: 'turn-31', message: { role: 'user', content: 'question 31' } }) +
+          '\n' +
+          JSON.stringify({
+            type: 'assistant',
+            message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'answer 31' }] },
+          }) +
+          '\n'
+      );
+
+      const poll2 = await reader.readHistory(context, { limit: 20, cursor: result?.cursor });
+      expect(poll2?.items).toHaveLength(2);
+      expect(poll2?.items[0].text).toBe('question 31');
+      expect(poll2?.items[1].text).toBe('answer 31');
+    });
+
+    it('enforces a hard bound on recent-history pages when an exchange contains hundreds of tool calls', async () => {
+      const worktreePath = '/data/test-project-bounded';
+      const encoded = encodeClaudeProjectPath(worktreePath);
+      const projDir = path.join(tempHome, '.claude', 'projects', encoded);
+      fs.mkdirSync(projDir, { recursive: true });
+
+      const file = path.join(projDir, 'sess-many-tools.jsonl');
+      const lines = [
+        JSON.stringify({ type: 'user', uuid: 'turn-1', message: { role: 'user', content: 'Run many commands' } }),
+      ];
+
+      // Add 250 tool calls in the exchange
+      for (let i = 1; i <= 250; i++) {
+        lines.push(
+          JSON.stringify({
+            type: 'assistant',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'tool_use', name: 'Bash', input: { command: `echo ${i}` } }],
+            },
+          })
+        );
+      }
+      lines.push(
+        JSON.stringify({
+          type: 'assistant',
+          message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'All done' }] },
+        })
+      );
+      fs.writeFileSync(file, lines.join('\n') + '\n');
+
+      const context = {
+        sessionId: 'sess-many-tools',
+        harness: 'claude',
+        worktreePath,
+        isLocal: true,
+        agentSessionId: 'sess-many-tools',
+        homeDir: tempHome,
+      };
+
+      const page1 = await reader.readHistory(context, { limit: 1, mode: 'recent_exchanges', recentExchanges: 50 });
+      expect(page1).not.toBeNull();
+      // Page is capped at MAX_PAGE_ITEMS_RECENT (200), not 252 items
+      expect(page1!.items).toHaveLength(200);
+      expect(page1!.hasMore).toBe(true);
+      expect(page1!.cursor).toBeDefined();
+
+      // Remaining items reachable through the cursor
+      const page2 = await reader.readHistory(context, { limit: 100, cursor: page1!.cursor });
+      expect(page2).not.toBeNull();
+      expect(page2!.items.length).toBeGreaterThan(0);
+    });
   });
 });

@@ -396,10 +396,13 @@ ${profile ? `      ${profile.id}:
       paneCurrentCommand: 'codex',
       paneDead: false,
     });
-    const captureTailSpy = vi.spyOn(tmux, 'capturePaneTail').mockResolvedValue([
-      '› Prompt in window 0',
-      'Worked for 1s · done',
-    ]);
+    const captureTailSpy = vi.spyOn(tmux, 'capturePaneTailDetailed').mockResolvedValue({
+      success: true,
+      lines: [
+        '› Prompt in window 0',
+        'Worked for 1s · done',
+      ],
+    });
     vi.spyOn(tmux, 'hasSession').mockResolvedValue(true);
 
     const history = await sessionManager.getSessionHistory(session.id);
@@ -408,6 +411,7 @@ ${profile ? `      ${profile.id}:
     expect(getPaneSpy).toHaveBeenCalledWith(expect.anything(), session.tmuxSessionName, 0);
     expect(captureTailSpy).toHaveBeenCalledWith(expect.anything(), session.tmuxSessionName, 100, 0, true);
     expect(history.sessionId).toBe(session.id);
+    expect(history.captureSuccess).toBe(true);
   });
 
   it('captures screen history with joinWrapped = true to preserve soft-wrapped prompts', async () => {
@@ -422,23 +426,29 @@ ${profile ? `      ${profile.id}:
     vi.spyOn(tmux, 'hasSession').mockResolvedValue(true);
     vi.spyOn(tmux, 'resolveFirstWindowIndex').mockResolvedValue(0);
     vi.spyOn(tmux, 'getPaneInspection').mockResolvedValue(null);
-    const captureTailSpy = vi.spyOn(tmux, 'capturePaneTail').mockImplementation(
+    const captureTailSpy = vi.spyOn(tmux, 'capturePaneTailDetailed').mockImplementation(
       async (_host, _sess, _lines, _win, joinWrapped) => {
         if (joinWrapped) {
           // Soft-wrapped prompt joined with -J by tmux
-          return [
-            '❯ Please review the entire patch carefully and check for soft-wrapped input across terminal widths',
-            '● The patch looks solid and verified',
-            '✻ Done in 0.8s',
-          ];
+          return {
+            success: true,
+            lines: [
+              '❯ Please review the entire patch carefully and check for soft-wrapped input across terminal widths',
+              '● The patch looks solid and verified',
+              '✻ Done in 0.8s',
+            ],
+          };
         }
         // Physical terminal lines without -J would split across screen width
-        return [
-          '❯ Please review the entire patch carefully',
-          'and check for soft-wrapped input across terminal widths',
-          '● The patch looks solid and verified',
-          '✻ Done in 0.8s',
-        ];
+        return {
+          success: true,
+          lines: [
+            '❯ Please review the entire patch carefully',
+            'and check for soft-wrapped input across terminal widths',
+            '● The patch looks solid and verified',
+            '✻ Done in 0.8s',
+          ],
+        };
       }
     );
 
@@ -446,6 +456,7 @@ ${profile ? `      ${profile.id}:
 
     // Verify joinWrapped flag was passed
     expect(captureTailSpy).toHaveBeenCalledWith(expect.anything(), session.tmuxSessionName, 100, 0, true);
+    expect(history.captureSuccess).toBe(true);
 
     // Because joinWrapped was true, user prompt is unified into a single user turn rather than split into agent role
     expect(history.items.length).toBeGreaterThanOrEqual(2);
@@ -455,6 +466,29 @@ ${profile ? `      ${profile.id}:
       turnBoundary: 'start',
     });
     expect(history.items[1].role).toBe('agent');
+  });
+
+  it('propagates captureSuccess: false when capturePaneTailDetailed fails even if hasSession succeeds', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Check capture failure propagation',
+    });
+
+    const tmux = (sessionManager as any).tmuxManager;
+    vi.spyOn(tmux, 'hasSession').mockResolvedValue(true);
+    vi.spyOn(tmux, 'resolveFirstWindowIndex').mockResolvedValue(0);
+    vi.spyOn(tmux, 'getPaneInspection').mockResolvedValue(null);
+    vi.spyOn(tmux, 'capturePaneTailDetailed').mockResolvedValue({
+      success: false,
+      lines: [],
+    });
+
+    const history = await sessionManager.getSessionHistory(session.id);
+    expect(history.captureSuccess).toBe(false);
+    expect(history.source).toBe('screen');
+    expect(history.items).toEqual([]);
   });
 
   describe('direct root model validation before resource creation', () => {

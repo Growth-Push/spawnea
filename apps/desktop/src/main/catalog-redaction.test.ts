@@ -64,4 +64,25 @@ hosts:
     expect(JSON.stringify(result)).not.toContain('private-vault');
     expect(result.errors?.[0].message).toContain('[REDACTED 1PASSWORD REFERENCE]');
   });
+
+  it('redacts api.key_hash from operational catalog while retaining enabled and port', () => {
+    const parsed = parseOperationalCatalog(`
+version: 1
+api:
+  enabled: true
+  port: 8080
+  key_hash: "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$dGVzdGhhc2g"
+hosts: {}
+`);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+
+    const sanitized = sanitizeCatalogForRenderer(parsed.catalog);
+    expect(sanitized?.api).toEqual({
+      enabled: true,
+      port: 8080,
+    });
+    expect((sanitized?.api as any)?.key_hash).toBeUndefined();
+    expect(JSON.stringify(sanitized)).not.toContain('argon2id');
+  });
 });

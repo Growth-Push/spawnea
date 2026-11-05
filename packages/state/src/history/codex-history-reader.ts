@@ -33,6 +33,7 @@ import type {
 } from '@spawnea/domain';
 import { resolveCodexRolloutFromProc } from './proc-fd-resolver.js';
 import type { HarnessHistoryContext, HarnessHistoryReader } from './types.js';
+import { findCodexTailExchangeOffset } from './tail-scanner.js';
 
 const DEFAULT_MAX_ITEM_CHARS = 64 * 1024;
 const DEFAULT_LIMIT = 50;
@@ -122,6 +123,37 @@ function parseOffsetCursor(cursor?: string): ParsedCursor {
   };
 }
 
+export function isCodexEventMsgPromptRecord(record: Record<string, unknown>): boolean {
+  const type = typeof record.type === 'string' ? record.type : '';
+  const payload = record.payload as Record<string, unknown> | undefined;
+  if (type === 'event_msg' && payload && payload.type === 'user_message') {
+    const rawText = typeof payload.message === 'string' ? payload.message : extractMessageText(payload.message);
+    const trimmed = rawText.trim();
+    return Boolean(trimmed && !isInjectedContextMessage(trimmed));
+  }
+  return false;
+}
+
+export function isCodexResponseItemPromptRecord(record: Record<string, unknown>): boolean {
+  const type = typeof record.type === 'string' ? record.type : '';
+  const payload = record.payload as Record<string, unknown> | undefined;
+  if (type === 'response_item' && payload && payload.type === 'message' && payload.role === 'user') {
+    const rawText = extractMessageText(payload.content);
+    const trimmed = rawText.trim();
+    return Boolean(trimmed && !isInjectedContextMessage(trimmed));
+  }
+  return false;
+}
+
+export function isCodexUserPromptRecord(
+  record: Record<string, unknown>,
+  hasEventMsg = false
+): boolean {
+  return hasEventMsg
+    ? isCodexEventMsgPromptRecord(record)
+    : isCodexResponseItemPromptRecord(record);
+}
+
 function computeHeadFingerprint(fd: number, statSize: number, sampleLen = 256): string {
   const len = Math.min(sampleLen, statSize);
   if (len === 0) return '0-0';
@@ -161,6 +193,17 @@ interface RawItem {
   textTruncated?: boolean;
   explicitTurnStart?: boolean;
   explicitTurnEnd?: boolean;
+  recordSource?: 'event_msg' | 'response_item' | 'other';
+  recordOffset?: number;
+}
+
+function isComplementaryUserPair(prev: RawItem, next: RawItem): boolean {
+  if (prev.role !== 'user' || next.role !== 'user') return false;
+  if (!prev.turnId || !next.turnId || prev.turnId !== next.turnId) return false;
+  return (
+    (prev.recordSource === 'event_msg' && next.recordSource === 'response_item') ||
+    (prev.recordSource === 'response_item' && next.recordSource === 'event_msg')
+  );
 }
 
 const INJECTED_CONTEXT_TAG_REGEX =
@@ -199,6 +242,8 @@ function extractRawItemFromRecord(
           turnId,
           textTruncated,
           explicitTurnStart: true,
+          recordSource: 'event_msg',
+          recordOffset,
         };
       }
     } else if (eventType === 'item_completed') {
@@ -217,6 +262,8 @@ function extractRawItemFromRecord(
           timestamp,
           turnId,
           textTruncated,
+          recordSource: 'event_msg',
+          recordOffset,
         };
       } else if (item?.type === 'FileChange' || item?.type === 'file_change') {
         const changes = item.changes as Record<string, unknown> | undefined;
@@ -236,6 +283,8 @@ function extractRawItemFromRecord(
           timestamp,
           turnId,
           textTruncated,
+          recordSource: 'event_msg',
+          recordOffset,
         };
       }
     }
@@ -262,6 +311,8 @@ function extractRawItemFromRecord(
             turnId,
             textTruncated,
             explicitTurnStart: msgRole === 'user',
+            recordSource: 'response_item',
+            recordOffset,
           };
         }
       }
@@ -277,6 +328,8 @@ function extractRawItemFromRecord(
         timestamp,
         turnId,
         textTruncated,
+        recordSource: 'response_item',
+        recordOffset,
       };
     } else if (itemType === 'custom_tool_call_output' || itemType === 'function_call_output') {
       const toolText = formatToolResult(payload.output);
@@ -288,6 +341,8 @@ function extractRawItemFromRecord(
         timestamp,
         turnId,
         textTruncated,
+        recordSource: 'response_item',
+        recordOffset,
       };
     }
     return null;
@@ -310,6 +365,8 @@ function extractRawItemFromRecord(
           turnId,
           textTruncated,
           explicitTurnStart: msgRole === 'user',
+          recordSource: 'other',
+          recordOffset,
         };
       }
     }
@@ -326,6 +383,8 @@ function extractRawItemFromRecord(
       timestamp,
       turnId,
       textTruncated,
+      recordSource: 'other',
+      recordOffset,
     };
   }
 
@@ -339,6 +398,8 @@ function extractRawItemFromRecord(
       timestamp,
       turnId,
       textTruncated,
+      recordSource: 'other',
+      recordOffset,
     };
   }
 
@@ -504,18 +565,36 @@ export class CodexHistoryReader implements HarnessHistoryReader {
         parsedCursor = { offset: 0 };
       }
 
-      const limit = query?.limit || DEFAULT_LIMIT;
-
       const headFp = computeHeadFingerprint(fd, stat.size);
       if (parsedCursor.head && !isHeadMatching(fd, stat.size, parsedCursor.head)) {
         // Rollout was replaced under the same filename; reset offset and turn state
         parsedCursor = { offset: 0 };
       }
 
+      const isRecentMode =
+        (query?.mode === 'recent_exchanges' || typeof query?.recentExchanges === 'number') &&
+        !query?.cursor;
+      const targetExchanges = query?.recentExchanges || query?.limit || 20;
+
       if (parsedCursor.offset > stat.size) {
         parsedCursor = { offset: 0 };
       }
-      const startOffset = parsedCursor.offset;
+      let startOffset = parsedCursor.offset;
+      if (isRecentMode) {
+        const tailOffset = findCodexTailExchangeOffset(
+          fd,
+          stat.size,
+          isCodexEventMsgPromptRecord,
+          isCodexResponseItemPromptRecord,
+          targetExchanges
+        );
+        startOffset = Math.max(0, tailOffset);
+      }
+      const MAX_PAGE_ITEMS_RECENT = 200;
+      const MAX_PAGE_BYTES = 512 * 1024;
+      const limit = isRecentMode
+        ? Math.min(Math.max(targetExchanges * 5, DEFAULT_LIMIT), MAX_PAGE_ITEMS_RECENT)
+        : (query?.limit || DEFAULT_LIMIT);
 
       if (startOffset === stat.size) {
         return {
@@ -529,6 +608,7 @@ export class CodexHistoryReader implements HarnessHistoryReader {
       }
 
     const rawItems: RawItem[] = [];
+    let pageTextBytes = 0;
     let currentTurnId = parsedCursor.turnId || `turn-off-${startOffset}`;
     let isCurrentTurnClosed = Boolean(parsedCursor.turnClosed);
     let lastCompleteByteOffset = startOffset;
@@ -560,7 +640,7 @@ export class CodexHistoryReader implements HarnessHistoryReader {
           isCurrentTurnClosed = false;
           lastItemRecordOffset = undefined;
           pendingTurnToClose = undefined;
-        } else if (eventType === 'task_complete') {
+        } else if (eventType === 'task_complete' || eventType === 'turn_aborted') {
           isCurrentTurnClosed = true;
           if (rawItems.length > 0) {
             rawItems[rawItems.length - 1].explicitTurnEnd = true;
@@ -583,6 +663,7 @@ export class CodexHistoryReader implements HarnessHistoryReader {
                   if (replayed) {
                     replayed.explicitTurnEnd = true;
                     rawItems.push(replayed);
+                    pageTextBytes += Buffer.byteLength(replayed.text, 'utf8');
                   }
                 }
               }
@@ -592,7 +673,18 @@ export class CodexHistoryReader implements HarnessHistoryReader {
         } else {
           const item = extractRawItemFromRecord(record, recordOffset, maxChars, context.sessionId, currentTurnId);
           if (item) {
+            if (
+              rawItems.length > 0 &&
+              isComplementaryUserPair(rawItems[rawItems.length - 1], item)
+            ) {
+              // Paired user representation (event_msg.user_message + response_item user message); do not duplicate.
+              // Keep the offset of the retained item, not the discarded one.
+              const retained = rawItems[rawItems.length - 1];
+              lastItemRecordOffset = retained.recordOffset ?? lastItemRecordOffset;
+              return false;
+            }
             rawItems.push(item);
+            pageTextBytes += Buffer.byteLength(item.text, 'utf8');
             lastItemRecordOffset = recordOffset;
             pendingTurnToClose = undefined;
           }
@@ -600,13 +692,24 @@ export class CodexHistoryReader implements HarnessHistoryReader {
       } else {
         const item = extractRawItemFromRecord(record, recordOffset, maxChars, context.sessionId, currentTurnId);
         if (item) {
+          if (
+            rawItems.length > 0 &&
+            isComplementaryUserPair(rawItems[rawItems.length - 1], item)
+          ) {
+            // Paired user representation (event_msg.user_message + response_item user message); do not duplicate.
+            // Keep the offset of the retained item, not the discarded one.
+            const retained = rawItems[rawItems.length - 1];
+            lastItemRecordOffset = retained.recordOffset ?? lastItemRecordOffset;
+            return false;
+          }
           rawItems.push(item);
+          pageTextBytes += Buffer.byteLength(item.text, 'utf8');
           lastItemRecordOffset = recordOffset;
           pendingTurnToClose = undefined;
         }
       }
 
-      if (rawItems.length >= limit) {
+      if (rawItems.length >= limit || pageTextBytes >= MAX_PAGE_BYTES) {
         return true;
       }
       return false;

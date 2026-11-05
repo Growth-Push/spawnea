@@ -57,6 +57,27 @@ describe('SSHHostAdapter execution', () => {
     expect(stream.close).toHaveBeenCalledTimes(1);
   });
 
+  it('maps missing or undefined channel exit status to exitCode 1', async () => {
+    const stream = new FakeCommandStream();
+    const exec = vi.fn((
+      _command: string,
+      _options: unknown,
+      callback: (error: Error | undefined, channel: FakeCommandStream) => void
+    ) => {
+      callback(undefined, stream);
+      queueMicrotask(() => stream.emit('close', undefined));
+    });
+    const adapter = new SSHHostAdapter({
+      serverId: 'ssh-exit-test',
+      target: 'ssh-exit.example.test',
+    });
+    (adapter as unknown as { client: unknown }).client = { exec };
+    (adapter as unknown as { connected: boolean }).connected = true;
+
+    const result = await adapter.execute('remote-command');
+    expect(result.exitCode).toBe(1);
+  });
+
   it('does not use IdentityAgent for automatic health probes when agent auth is disabled', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'spawnea-ssh-health-'));
     const configPath = join(tempDir, 'ssh_config');

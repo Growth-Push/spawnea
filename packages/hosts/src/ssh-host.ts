@@ -467,7 +467,7 @@ export class SSHHostAdapter implements HostAdapter {
           resolve({
             stdout,
             stderr,
-            exitCode: truncated ? 1 : typeof exitCode === 'number' ? exitCode : 0,
+            exitCode: truncated ? 1 : typeof exitCode === 'number' ? exitCode : 1,
             truncated,
           });
         };

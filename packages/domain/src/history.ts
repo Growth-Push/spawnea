@@ -21,6 +21,8 @@ export interface SessionHistoryQuery {
   limit?: number;
   cursor?: string;
   maxItemChars?: number;
+  mode?: 'recent_exchanges' | 'forward';
+  recentExchanges?: number;
 }
 
 export interface SessionHistoryResult {
@@ -30,6 +32,7 @@ export interface SessionHistoryResult {
   cursor?: string;
   hasMore?: boolean;
   transcriptPath?: string;
+  captureSuccess?: boolean;
 }
 
 export const SessionHistoryRoleSchema = z.enum(['user', 'agent', 'tool']);
@@ -53,6 +56,8 @@ export const SessionHistoryQuerySchema = z.object({
   limit: z.number().int().positive().optional(),
   cursor: z.string().optional(),
   maxItemChars: z.number().int().positive().optional(),
+  mode: z.enum(['recent_exchanges', 'forward']).optional(),
+  recentExchanges: z.number().int().positive().optional(),
 });
 
 export const SessionHistoryResultSchema = z.object({
@@ -62,4 +67,5 @@ export const SessionHistoryResultSchema = z.object({
   cursor: z.string().optional(),
   hasMore: z.boolean().optional(),
   transcriptPath: z.string().optional(),
+  captureSuccess: z.boolean().optional(),
 });

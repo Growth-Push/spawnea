@@ -1328,6 +1328,18 @@ export class SessionManager {
     return (await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, lines)).join('\n');
   }
 
+  /** Captures bounded terminal context and indicates whether tmux capture succeeded. */
+  async captureSessionTerminalDetailed(
+    sessionId: string,
+    lines = 2_000
+  ): Promise<{ success: boolean; output: string }> {
+    const session = await this.repos.sessions.findById(sessionId);
+    if (!session) throw new Error(`Session '${sessionId}' not found`);
+    const host = await this.getHostAdapter(session.serverId);
+    const result = await this.tmuxManager.capturePaneTailDetailed(host, session.tmuxSessionName, lines);
+    return { success: result.success, output: result.lines.join('\n') };
+  }
+
   /** Updates the operator-facing name without changing task or runtime identity. */
   async renameSession(sessionId: string, requestedName: string): Promise<Session> {
     const name = requestedName.trim();
@@ -2651,6 +2663,7 @@ export class SessionManager {
     let isLocal = false;
     let panePid: number | undefined = undefined;
     let tailLines: string[] = [];
+    let captureSuccess = false;
 
     try {
       const host = await this.getHostAdapter(session.serverId);
@@ -2670,9 +2683,14 @@ export class SessionManager {
         if (pane) {
           panePid = pane.panePid;
         }
-        tailLines = await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, 100, historyWindowIndex, true).catch(() => []);
+        const capture = await this.tmuxManager.capturePaneTailDetailed(host, session.tmuxSessionName, 100, historyWindowIndex, true);
+        captureSuccess = capture.success;
+        tailLines = capture.lines;
+      } else {
+        captureSuccess = false;
       }
     } catch {
+      captureSuccess = false;
       // Host or tmux inspection failed; proceed to history service with available context
     }
 
@@ -2703,7 +2721,7 @@ export class SessionManager {
     }
 
     try {
-      return await this.historyService.getHistory(
+      const historyResult = await this.historyService.getHistory(
         {
           sessionId: session.id,
           harness,
@@ -2712,9 +2730,14 @@ export class SessionManager {
           agentSessionId: session.agentSessionId,
           panePid,
           tailLines,
+          captureSuccess,
         },
         query
       );
+      if (historyResult.source === 'screen') {
+        historyResult.captureSuccess = captureSuccess;
+      }
+      return historyResult;
     } finally {
       sessionPathLease?.release();
     }

@@ -11,6 +11,14 @@ export function sanitizeCatalogForRenderer(catalog: OperationalCatalog | null): 
   if (!catalog) return null;
   return {
     ...catalog,
+    ...(catalog.api
+      ? {
+          api: {
+            enabled: catalog.api.enabled,
+            port: catalog.api.port,
+          },
+        }
+      : {}),
     hosts: Object.fromEntries(Object.entries(catalog.hosts).map(([hostId, host]) => {
       const credentialBackedSsh = Boolean(host.ssh && (
         isOnePasswordReference(host.ssh.target)

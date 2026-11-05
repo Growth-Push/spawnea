@@ -1,4 +1,5 @@
-import * as fs from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -433,6 +434,58 @@ describe('CodexHistoryReader', () => {
     expect(second?.cursor).not.toContain(':pending:');
   });
 
+  it('keeps retained item offset when deduplicating paired user prompt so subsequent task_complete maintains stable item id', async () => {
+    const file = path.join(tempDir, 'paired-prompt-stable-id.jsonl');
+    const initialRecords = [
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-pair-stable' } },
+      { type: 'event_msg', payload: { type: 'user_message', message: 'Hello Codex paired prompt' } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: 'Hello Codex paired prompt' } },
+    ];
+    fs.writeFileSync(file, initialRecords.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+    // Poll 1: after paired prompt records and before assistant output
+    const first = await reader.readHistory({
+      sessionId: 'sess-paired',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      resolvedTranscriptPath: file,
+    });
+
+    expect(first).not.toBeNull();
+    expect(first?.items).toHaveLength(1);
+    expect(first?.items[0].role).toBe('user');
+    expect(first?.items[0].turnBoundary).toBe('start');
+    const firstUserId = first!.items[0].id;
+    expect(first?.cursor).toContain(':pending:');
+
+    // Append task_complete without assistant output
+    fs.appendFileSync(
+      file,
+      JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-pair-stable' } }) + '\n'
+    );
+
+    // Poll 2: after task_complete
+    const second = await reader.readHistory(
+      {
+        sessionId: 'sess-paired',
+        harness: 'codex',
+        worktreePath: '/ws',
+        isLocal: true,
+        resolvedTranscriptPath: file,
+      },
+      { cursor: first?.cursor }
+    );
+
+    expect(second).not.toBeNull();
+    expect(second?.items).toHaveLength(1);
+    expect(second?.items[0].role).toBe('user');
+    expect(second?.items[0].id).toBe(firstUserId);
+    expect(second?.items[0].turnBoundary).toBe('single');
+    expect(second?.cursor).toContain(':closed:1');
+    expect(second?.cursor).not.toContain(':pending:');
+  });
+
   it('returns null on nonempty unreadable transcript to allow screen fallback', async () => {
     const file = path.join(tempDir, 'corrupt.jsonl');
     fs.writeFileSync(file, 'not a valid json line at all\nsecond broken line\n');
@@ -651,5 +704,359 @@ describe('CodexHistoryReader', () => {
       turnBoundary: 'end',
       turnId: 'turn-real-1',
     });
+  });
+
+  it('returns the most recent N exchanges in recent_exchanges mode for Codex and allows forward polling', async () => {
+    const file = path.join(tempDir, 'rollout-recent.jsonl');
+    const records = [];
+    for (let i = 1; i <= 25; i++) {
+      records.push({
+        type: 'event_msg',
+        payload: { type: 'user_message', message: `codex question ${i}` },
+      });
+      records.push({
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: `codex answer ${i}` },
+      });
+    }
+    fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+    const context = {
+      sessionId: 'sess-recent-codex',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      resolvedTranscriptPath: file,
+    };
+
+    const result = await reader.readHistory(context, { limit: 15, mode: 'recent_exchanges' });
+    expect(result).not.toBeNull();
+    // 15 exchanges = 30 items
+    expect(result?.items).toHaveLength(30);
+    expect(result?.items[0].text).toBe('codex question 11');
+    expect(result?.items.at(-1)?.text).toBe('codex answer 25');
+    expect(result?.hasMore).toBe(false);
+
+    // Incremental forward poll returns 0 items
+    const poll1 = await reader.readHistory(context, { limit: 15, cursor: result?.cursor });
+    expect(poll1?.items).toHaveLength(0);
+  });
+
+  it('counts paired user_message event and response_item user message as one logical exchange with 25 exchanges and limit 20', async () => {
+    const file = path.join(tempDir, 'rollout-paired-25.jsonl');
+    const records = [];
+    for (let i = 1; i <= 25; i++) {
+      // Paired prompt: both event_msg.user_message and response_item.message(user)
+      records.push({
+        type: 'event_msg',
+        payload: { type: 'user_message', message: `question ${i}` },
+      });
+      records.push({
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: `question ${i}` },
+      });
+      records.push({
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: `answer ${i}` },
+      });
+    }
+    fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+    const context = {
+      sessionId: 'sess-paired-codex',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      resolvedTranscriptPath: file,
+    };
+
+    // Query 20 recent exchanges out of 25 total
+    const result = await reader.readHistory(context, { limit: 20, mode: 'recent_exchanges' });
+    expect(result).not.toBeNull();
+    // 20 exchanges = 40 items (20 user + 20 agent), deduplicated paired user messages
+    expect(result?.items).toHaveLength(40);
+    expect(result?.items[0].text).toBe('question 6');
+    expect(result?.items[0].role).toBe('user');
+    expect(result?.items.at(-1)?.text).toBe('answer 25');
+    expect(result?.items.at(-1)?.role).toBe('agent');
+    expect(result?.hasMore).toBe(false);
+
+    // Incremental forward poll with the returned cursor returns 0 items
+    const pollForward = await reader.readHistory(context, { limit: 20, cursor: result?.cursor });
+    expect(pollForward?.items).toHaveLength(0);
+  });
+
+  it('counts 100 exchanges all with identical prompt "continue" as distinct exchanges, and latest 2 returns exchanges 99-100', async () => {
+    const file = path.join(tempDir, 'rollout-repeated-continue-100.jsonl');
+    const records = [];
+    for (let i = 1; i <= 100; i++) {
+      records.push({
+        type: 'event_msg',
+        payload: { type: 'task_started', turn_id: `turn-${i}` },
+      });
+      records.push({
+        type: 'event_msg',
+        payload: { type: 'user_message', message: 'continue' },
+      });
+      records.push({
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: 'continue' },
+      });
+      records.push({
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: `answer ${i}` },
+      });
+      records.push({
+        type: 'event_msg',
+        payload: { type: 'task_complete', turn_id: `turn-${i}` },
+      });
+    }
+    fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+    const context = {
+      sessionId: 'sess-continue-100',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      resolvedTranscriptPath: file,
+    };
+
+    const result = await reader.readHistory(context, { limit: 2, mode: 'recent_exchanges' });
+    expect(result).not.toBeNull();
+    // 2 exchanges = 4 items (user 99, agent 99, user 100, agent 100)
+    expect(result?.items).toHaveLength(4);
+    expect(result?.items[0].role).toBe('user');
+    expect(result?.items[0].text).toBe('continue');
+    expect(result?.items[1].role).toBe('agent');
+    expect(result?.items[1].text).toBe('answer 99');
+    expect(result?.items[2].role).toBe('user');
+    expect(result?.items[2].text).toBe('continue');
+    expect(result?.items[3].role).toBe('agent');
+    expect(result?.items[3].text).toBe('answer 100');
+    expect(result?.hasMore).toBe(false);
+
+    // Incremental forward poll returns 0 items
+    const poll = await reader.readHistory(context, { limit: 2, cursor: result?.cursor });
+    expect(poll?.items).toHaveLength(0);
+  });
+
+  it('counts 100 exchanges with "continue" when only response_item user messages exist, and latest 2 returns exchanges 99-100', async () => {
+    const file = path.join(tempDir, 'rollout-response-only-100.jsonl');
+    const records = [];
+    for (let i = 1; i <= 100; i++) {
+      records.push({
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: 'continue' },
+      });
+      records.push({
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: `answer ${i}` },
+      });
+    }
+    fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+    const context = {
+      sessionId: 'sess-response-100',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      resolvedTranscriptPath: file,
+    };
+
+    const result = await reader.readHistory(context, { limit: 2, mode: 'recent_exchanges' });
+    expect(result).not.toBeNull();
+    expect(result?.items).toHaveLength(4);
+    expect(result?.items[0].text).toBe('continue');
+    expect(result?.items[1].text).toBe('answer 99');
+    expect(result?.items[2].text).toBe('continue');
+    expect(result?.items[3].text).toBe('answer 100');
+  });
+
+  it('handles long initial context and long final response across 25 exchanges, returning exchanges 24-25', async () => {
+    const file = path.join(tempDir, 'rollout-long-context-final.jsonl');
+    const records = [];
+
+    // Long initial context (> 64 KiB)
+    const longContext = 'Initial system instructions and project context '.repeat(2000); // ~96 KiB
+    records.push({
+      type: 'session_meta',
+      payload: { session_id: 'codex-sess-long-ctx', context: longContext },
+    });
+
+    // 25 exchanges
+    for (let i = 1; i <= 25; i++) {
+      records.push({
+        type: 'event_msg',
+        payload: { type: 'task_started', turn_id: `turn-${i}` },
+      });
+      records.push({
+        type: 'event_msg',
+        payload: { type: 'user_message', message: `prompt ${i}` },
+      });
+      records.push({
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: `prompt ${i}` },
+      });
+      if (i < 25) {
+        records.push({
+          type: 'response_item',
+          payload: { type: 'message', role: 'assistant', content: `response ${i}` },
+        });
+      } else {
+        // Final response is long (> 64 KiB)
+        const longResponse = 'final response text chunk '.repeat(3000); // ~78 KiB
+        records.push({
+          type: 'response_item',
+          payload: { type: 'message', role: 'assistant', content: longResponse },
+        });
+      }
+      records.push({
+        type: 'event_msg',
+        payload: { type: 'task_complete', turn_id: `turn-${i}` },
+      });
+    }
+
+    fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+    const context = {
+      sessionId: 'sess-long-context',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      resolvedTranscriptPath: file,
+    };
+
+    const result = await reader.readHistory(context, { limit: 2, mode: 'recent_exchanges' });
+    expect(result).not.toBeNull();
+    // 2 exchanges = 4 items (user 24, agent 24, user 25, agent 25)
+    expect(result?.items).toHaveLength(4);
+    expect(result?.items[0].role).toBe('user');
+    expect(result?.items[0].text).toBe('prompt 24');
+    expect(result?.items[1].role).toBe('agent');
+    expect(result?.items[1].text).toBe('response 24');
+    expect(result?.items[2].role).toBe('user');
+    expect(result?.items[2].text).toBe('prompt 25');
+    expect(result?.items[3].role).toBe('agent');
+    expect(result?.items[3].text).toContain('final response text chunk');
+  });
+
+  it('yields two user items when a turn is interrupted and the same prompt is repeated in the next turn', async () => {
+    const file = path.join(tempDir, 'rollout-interrupted-turn.jsonl');
+    const records = [
+      // Turn 1: started, user prompt "run tests", then interrupted (turn_aborted, no assistant response)
+      {
+        type: 'event_msg',
+        payload: { type: 'task_started', turn_id: 'turn-1' },
+      },
+      {
+        type: 'event_msg',
+        payload: { type: 'user_message', message: 'run tests' },
+      },
+      {
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: 'run tests' },
+      },
+      {
+        type: 'event_msg',
+        payload: { type: 'turn_aborted', turn_id: 'turn-1' },
+      },
+      // Turn 2: started, same user prompt "run tests", completed normally
+      {
+        type: 'event_msg',
+        payload: { type: 'task_started', turn_id: 'turn-2' },
+      },
+      {
+        type: 'event_msg',
+        payload: { type: 'user_message', message: 'run tests' },
+      },
+      {
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: 'run tests' },
+      },
+      {
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: 'Tests completed successfully.' },
+      },
+      {
+        type: 'event_msg',
+        payload: { type: 'task_complete', turn_id: 'turn-2' },
+      },
+    ];
+
+    fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+    const context = {
+      sessionId: 'sess-interrupted',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      resolvedTranscriptPath: file,
+    };
+
+    const result = await reader.readHistory(context);
+    expect(result).not.toBeNull();
+    // Items: user 1 ("run tests"), user 2 ("run tests"), agent 2 ("Tests completed successfully.")
+    expect(result?.items).toHaveLength(3);
+    expect(result?.items[0].role).toBe('user');
+    expect(result?.items[0].text).toBe('run tests');
+    expect(result?.items[0].turnId).toBe('turn-1');
+    expect(result?.items[1].role).toBe('user');
+    expect(result?.items[1].text).toBe('run tests');
+    expect(result?.items[1].turnId).toBe('turn-2');
+    expect(result?.items[2].role).toBe('agent');
+    expect(result?.items[2].text).toBe('Tests completed successfully.');
+    expect(result?.items[2].turnId).toBe('turn-2');
+  });
+
+  it('reads only the tail when requesting latest 2 exchanges from a 20+ MB response_item-only rollout', async () => {
+    const file = path.join(tempDir, 'rollout-response-only-20mb.jsonl');
+
+    // 10,000 exchanges with 2 KiB response each -> ~21.7 MB
+    const fdWrite = fs.openSync(file, 'w');
+    const dummyPayload = 'z'.repeat(2000);
+    for (let i = 1; i <= 10000; i++) {
+      const u = JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: `query-${i}` } }) + '\n';
+      const a = JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: dummyPayload } }) + '\n';
+      fs.writeSync(fdWrite, Buffer.from(u, 'utf8'));
+      fs.writeSync(fdWrite, Buffer.from(a, 'utf8'));
+    }
+    fs.closeSync(fdWrite);
+
+    const stat = fs.statSync(file);
+    expect(stat.size).toBeGreaterThan(20 * 1024 * 1024);
+
+    const context = {
+      sessionId: 'sess-large-response-only',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      resolvedTranscriptPath: file,
+    };
+
+    let totalBytesRead = 0;
+    const originalReadSync = fs.readSync;
+    fs.readSync = function (this: any, ...args: any[]) {
+      const bytes = (originalReadSync as any).apply(this, args);
+      if (typeof bytes === 'number' && bytes > 0) {
+        totalBytesRead += bytes;
+      }
+      return bytes;
+    } as any;
+    syncBuiltinESMExports();
+
+    try {
+      const result = await reader.readHistory(context, { limit: 2, mode: 'recent_exchanges' });
+      expect(result).not.toBeNull();
+      // Latest 2 exchanges: queries 9999 and 10000
+      expect(result?.items).toHaveLength(4);
+      expect(result?.items[0].text).toBe('query-9999');
+      expect(result?.items[2].text).toBe('query-10000');
+
+      // Crucial assertion: bytes read is far below the 20+ MB file size (reads only the tail chunks)
+      expect(totalBytesRead).toBeLessThan(512 * 1024);
+    } finally {
+      fs.readSync = originalReadSync;
+      syncBuiltinESMExports();
+    }
   });
 });

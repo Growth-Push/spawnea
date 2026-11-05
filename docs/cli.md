@@ -143,6 +143,26 @@ spawnea skill prompt
 spawnea skill prompt --json
 ```
 
+### `spawnea hash-key [options] [key]`
+Generates an Argon2id password hash for configuring authentication in the private mobile HTTP API (`config.yaml`). Operates completely offline without requiring a running Spawnea instance or daemon connection. Keys must be at least 32 characters long.
+
+Piping the key via standard input is recommended to avoid writing secrets to shell history or process tables.
+
+Options:
+- `--key <secret>`: Plaintext secret key to hash (minimum 32 characters)
+- `--json`: Output machine-readable JSON containing `{ "hash": "$argon2id$..." }`
+
+```bash
+# Piped via stdin (recommended):
+printf '%s' "$MOBILE_SECRET_KEY" | spawnea hash-key
+
+# Passing key as argument:
+spawnea hash-key "your-32-plus-char-mobile-key-here"
+
+# JSON output for scripting:
+printf '%s' "$MOBILE_SECRET_KEY" | spawnea hash-key --json
+```
+
 ## Global Options
 
 - `--profile <name>`: Target an isolated named Spawnea profile (or set `SPAWNEA_PROFILE=<name>`).

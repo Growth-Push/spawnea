@@ -11,6 +11,7 @@ import {
   showCatalog,
   generateCompletion,
   showSkillPrompt,
+  hashKeyCommand,
 } from './commands.js';
 
 function printHelp(): void {
@@ -65,6 +66,9 @@ COMMANDS:
     --session <id>              Target session ID (required)
     "<prompt>"                  Prompt text to submit
     [--timeout <sec>]           Max seconds to wait (default: 300)
+
+  hash-key [<key>]              Generate an Argon2id hash for mobile API configuration
+    [--key <key>]               Secret key to hash (or read via stdin)
 
   skill prompt                  Output markdown instructions for AI agents
 
@@ -153,7 +157,47 @@ function parseTimeoutSeconds(val: unknown): number | undefined {
   return parsed;
 }
 
-export async function runCli(argv: string[]): Promise<void> {
+export interface RunCliOptions {
+  stdin?: NodeJS.ReadableStream & { isTTY?: boolean };
+}
+
+export async function readStdin(
+  stream: NodeJS.ReadableStream & { isTTY?: boolean } = process.stdin
+): Promise<string> {
+  if (stream.isTTY) {
+    throw new Error('spawnea hash-key requires a key to hash. Pass the key as an argument, --key flag, or via stdin.');
+  }
+  return new Promise((resolve, reject) => {
+    let data = '';
+    const onData = (chunk: Buffer | string) => {
+      data += chunk;
+    };
+    const onEnd = () => {
+      stream.removeListener('data', onData);
+      stream.removeListener('error', onError);
+      const trimmed = data.trim();
+      if (!trimmed) {
+        reject(new Error('spawnea hash-key requires a key to hash. Pass the key as an argument, --key flag, or via stdin.'));
+      } else {
+        resolve(trimmed);
+      }
+    };
+    const onError = (err: unknown) => {
+      stream.removeListener('data', onData);
+      stream.removeListener('end', onEnd);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+
+    if (typeof (stream as any).setEncoding === 'function') {
+      (stream as any).setEncoding('utf8');
+    }
+    stream.on('data', onData);
+    stream.once('end', onEnd);
+    stream.once('error', onError);
+  });
+}
+
+export async function runCli(argv: string[], options: RunCliOptions = {}): Promise<void> {
   const parsed = parseArgs(argv);
   const isJson = Boolean(parsed.flags.json);
 
@@ -183,6 +227,16 @@ export async function runCli(argv: string[]): Promise<void> {
   // Handle offline skill command without requiring active app
   if (parsed.command === 'skill' && (parsed.subcommand === 'prompt' || !parsed.subcommand)) {
     showSkillPrompt({ json: isJson, profile });
+    return;
+  }
+
+  // Handle offline hash-key command without requiring active app
+  if (parsed.command === 'hash-key') {
+    let key = parsed.subcommand || parsed.positional[0] || (typeof parsed.flags.key === 'string' ? parsed.flags.key : undefined);
+    if (!key) {
+      key = await readStdin(options.stdin ?? process.stdin);
+    }
+    await hashKeyCommand(key, { json: isJson });
     return;
   }
 

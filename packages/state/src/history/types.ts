@@ -9,6 +9,7 @@ export interface HarnessHistoryContext {
   panePid?: number;
   resolvedTranscriptPath?: string;
   tailLines?: string[];
+  captureSuccess?: boolean;
   homeDir?: string;
 }
 
