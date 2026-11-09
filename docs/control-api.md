@@ -210,6 +210,12 @@ Integration still requires a local base branch and all existing integration guar
 When a managed worktree directory is already missing on disk, close with discard
 completes safely without failing on missing paths, whereas stash is rejected.
 
+### Git locks and incomplete finalization
+
+Before stash, discard, or worktree removal, Spawnea checks the target worktree's Git administrative directory for locks, including when its working directory is missing. A lock or inconclusive inspection blocks cleanup. Spawnea never removes locks or infers staleness from age, size, or process visibility. An operator must separately authorize and verify manual recovery, then retry the same finalization. A verified clean worktree (including ignored files) skips reset and clean; dirty worktrees retain the selected stash/discard policy.
+
+Runtime status `done` does not mean finalization succeeded. The API's `active` field indicates UI selection (`activeSessionId`), not whether the runtime is running or stopped. On cleanup failure the session remains recoverable; callers must treat the close error or failed finalization request as failure, not the runtime status or UI selection as success. Finalization succeeds only after worktree cleanup and session-record removal. Close retains the task branch. The modal's sharing policy is informational; only the Main-process ownership check establishes a sharing block.
+
 ## Plain shell harness
 
 An explicit plain shell can be configured as a harness in `config.yaml`:
