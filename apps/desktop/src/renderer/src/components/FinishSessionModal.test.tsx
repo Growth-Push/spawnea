@@ -74,6 +74,43 @@ describe('FinishSessionModal (Task 6.2.1)', () => {
     expect(onFinish).toHaveBeenCalledTimes(2);
   });
 
+  it('offers lock backup and release after a Git lock block and retries close with it', async () => {
+    const onFinish = vi.fn()
+      .mockRejectedValueOnce(new Error("Error invoking remote method 'sessions:finish': Error: [git-lock-blocked] Worktree finalization blocked; finalization is not complete."))
+      .mockResolvedValueOnce(true);
+    const onClose = vi.fn();
+    render(<FinishSessionModal isOpen session={mockWorktreeSession} onClose={onClose} onFinish={onFinish} />);
+    fireEvent.click(screen.getByText('Close Worktree (Discard Changes, Keep Task Branch)'));
+    fireEvent.click(screen.getByTestId('finish-close-confirm-checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close Worktree' }));
+    await screen.findByText('Git lock files are blocking this close');
+    expect(screen.queryByText(/\[git-lock-blocked\]/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Back Up Locks, Unlock & Close' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onFinish).toHaveBeenLastCalledWith('sess-worktree-1', 'close', { stashChanges: false, releaseGitLocks: true });
+  });
+
+  it('hides lock release when the selected action is no longer close', async () => {
+    const onFinish = vi.fn().mockRejectedValueOnce(new Error('[git-lock-blocked] Worktree finalization blocked.'));
+    render(<FinishSessionModal isOpen session={mockWorktreeSession} onClose={vi.fn()} onFinish={onFinish} />);
+    fireEvent.click(screen.getByText('Close Worktree (Discard Changes, Keep Task Branch)'));
+    fireEvent.click(screen.getByTestId('finish-close-confirm-checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close Worktree' }));
+    await screen.findByText('Git lock files are blocking this close');
+    fireEvent.click(screen.getByText(/Integrate into/));
+    expect(screen.queryByRole('button', { name: 'Back Up Locks, Unlock & Close' })).toBeNull();
+  });
+
+  it('does not offer lock release for other failures', async () => {
+    const onFinish = vi.fn().mockRejectedValueOnce(new Error('Integration conflicts: a.txt'));
+    render(<FinishSessionModal isOpen session={mockWorktreeSession} onClose={vi.fn()} onFinish={onFinish} />);
+    fireEvent.click(screen.getByText('Close Worktree (Discard Changes, Keep Task Branch)'));
+    fireEvent.click(screen.getByTestId('finish-close-confirm-checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close Worktree' }));
+    await screen.findByText(/Integration conflicts/);
+    expect(screen.queryByText('Git lock files are blocking this close')).toBeNull();
+  });
+
   it('submits integrate action by default', async () => {
     const onFinish = vi.fn().mockResolvedValue(undefined);
     const onClose = vi.fn();
