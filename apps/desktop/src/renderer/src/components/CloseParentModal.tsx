@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import type { Session, ParentCloseAction } from '@spawnea/domain';
+import { GIT_LOCK_BLOCKED_MARKER } from '@spawnea/domain';
 import { AlertTriangle, X, ArrowUpRight, Trash2 } from 'lucide-react';
 
 interface CloseParentModalProps {
@@ -14,7 +15,7 @@ interface CloseParentModalProps {
   error?: string | null;
   retryAction?: ParentCloseAction;
   onClose: () => void;
-  onConfirm: (action: ParentCloseAction) => void;
+  onConfirm: (action: ParentCloseAction, options?: { releaseGitLocks?: boolean }) => void;
 }
 
 export function isPossiblyDirtyChild(
@@ -46,6 +47,8 @@ export function CloseParentModal({
   onClose,
   onConfirm,
 }: CloseParentModalProps): React.JSX.Element | null {
+  const lockBlocked = Boolean(error?.includes(GIT_LOCK_BLOCKED_MARKER)) && retryAction !== 'leave-children';
+  const displayError = error ? error.replace(GIT_LOCK_BLOCKED_MARKER, '').replace(/\s{2,}/g, ' ').trim() : error;
   const modalRef = React.useRef<HTMLDivElement>(null);
   const onCloseRef = React.useRef(onClose);
   onCloseRef.current = onClose;
@@ -222,7 +225,21 @@ export function CloseParentModal({
 
           {error && (
             <div role="alert" className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 space-y-2">
-              <p className="leading-snug">{error}</p>
+              <p className="leading-snug">{displayError}</p>
+              {lockBlocked && (
+                <div className="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-100 space-y-1">
+                  <p className="font-semibold text-amber-300">Git lock files are blocking a child worktree close</p>
+                  <p>
+                    A Git lock usually remains after an interrupted Git command. Removing it while another Git command
+                    is still running in that worktree can corrupt that command&apos;s work. Make sure nothing else is using it.
+                  </p>
+                  <p>
+                    Spawnea stops each child. For managed worktrees being closed, it moves the lock files to
+                    <code className="mx-1">.git/spawnea-lock-backups/</code>
+                    in the repository. Preserved mismatched worktrees are not unlocked. Task branches are kept.
+                  </p>
+                </div>
+              )}
               <div className="flex justify-end gap-2">
                 {/checked out on|not recorded branch|mismatch/i.test(error) && (
                   <button
@@ -233,6 +250,17 @@ export function CloseParentModal({
                     className="px-3 py-1 rounded bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/40 text-xs text-amber-100 font-medium transition-colors cursor-pointer disabled:opacity-50"
                   >
                     Close & Preserve Worktree
+                  </button>
+                )}
+                {lockBlocked && (
+                  <button
+                    type="button"
+                    disabled={isLoading}
+                    onClick={() => onConfirm(retryAction, { releaseGitLocks: true })}
+                    data-testid="parent-close-release-locks-button"
+                    className="px-3 py-1 rounded bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/40 text-xs text-amber-100 font-medium transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    Back Up Locks, Unlock &amp; Retry
                   </button>
                 )}
                 <button

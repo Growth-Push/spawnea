@@ -3362,6 +3362,43 @@ up 1 day, 5 hours
       expect(await repos.sessions.findById(child.id)).toBeNull();
     });
 
+    it('releases a blocked child worktree lock during close-all only when confirmed', async () => {
+      await enableManagedWorktrees();
+      const parent = await sessionManager.createSession({
+        serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude', task: 'Parent with locked child',
+      });
+      const child = await sessionManager.createChildSession({
+        parentSessionId: parent.id, task: 'Locked child', workspace: 'new-worktree',
+      });
+      let locked = true;
+      mockHost.customRules.unshift(
+        {
+          pattern: 'spawnea-lock-backups',
+          response: () => {
+            locked = false;
+            return { stdout: '/repo/.git/spawnea-lock-backups/child-x\nindex.lock\n', stderr: '', exitCode: 0 };
+          },
+        },
+        {
+          pattern: 'common=$(git',
+          response: (command: string) => {
+            const blocked = locked && command.includes(child.worktreePath!);
+            return { stdout: blocked ? '' : 'CLEAR', stderr: '', exitCode: blocked ? 1 : 0 };
+          },
+        },
+      );
+
+      await expect(sessionManager.deleteSession(parent.id, 'close-all')).rejects.toThrow('[git-lock-blocked]');
+      expect(await repos.sessions.findById(child.id)).not.toBeNull();
+      expect(mockHost.executedCommands.some(({ command }) => command.includes('spawnea-lock-backups'))).toBe(false);
+
+      await expect(sessionManager.deleteSession(parent.id, 'close-all', { releaseGitLocks: true })).resolves.toBe(true);
+      expect(mockHost.executedCommands.some(({ command }) => command.includes('spawnea-lock-backups'))).toBe(true);
+      expect(await repos.sessions.findById(parent.id)).toBeNull();
+      expect(await repos.sessions.findById(child.id)).toBeNull();
+    });
+
     it('keeps independent children when integrate preflight fails', async () => {
       await enableManagedWorktrees();
       const parent = await sessionManager.createSession({

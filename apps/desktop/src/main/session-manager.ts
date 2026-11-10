@@ -1510,7 +1510,8 @@ export class SessionManager {
    */
   private async reconcileChildrenForParentRemoval(
     parentId: string,
-    childAction: ParentCloseAction = 'leave-children'
+    childAction: ParentCloseAction = 'leave-children',
+    options: { releaseGitLocks?: boolean } = {}
   ): Promise<void> {
     const children = await this.repos.sessions.findByParentId(parentId);
     if (children.length === 0) {
@@ -1545,9 +1546,14 @@ export class SessionManager {
                 `Managed worktree for child '${childLabel}' has uncommitted changes. Ordinary dirty siblings require explicit finalization (stash or discard) before parent closure.`
               );
             }
-            await this.finishSession(child.id, 'close', { stashChanges: false, preserveWorktree: shouldPreserve, requireCleanAfterStop: !shouldPreserve }, 'ui');
+            await this.finishSession(child.id, 'close', {
+              stashChanges: false,
+              preserveWorktree: shouldPreserve,
+              requireCleanAfterStop: !shouldPreserve,
+              releaseGitLocks: options.releaseGitLocks === true && !shouldPreserve,
+            }, 'ui');
           } else {
-            await this.deleteSession(child.id, childAction);
+            await this.deleteSession(child.id, childAction, options);
           }
           if (await this.repos.sessions.findById(child.id)) {
             throw new Error('Persistence failure: child session remains in the database');
@@ -1686,7 +1692,8 @@ export class SessionManager {
 
   async deleteSession(
     sessionId: string,
-    childAction: ParentCloseAction = 'leave-children'
+    childAction: ParentCloseAction = 'leave-children',
+    options: { releaseGitLocks?: boolean } = {}
   ): Promise<boolean> {
     this.logger.info('Deleting session', { sessionId, childAction });
     const releaseRemoval = await this.beginSessionRemoval(sessionId);
@@ -1699,7 +1706,7 @@ export class SessionManager {
       if (current) await this.stopSession(sessionId);
 
       // Resolve child relationships before parent deletion
-      await this.reconcileChildrenForParentRemoval(sessionId, childAction);
+      await this.reconcileChildrenForParentRemoval(sessionId, childAction, options);
 
       try {
         const session = await this.repos.sessions.findById(sessionId);

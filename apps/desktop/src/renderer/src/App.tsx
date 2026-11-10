@@ -952,7 +952,7 @@ export function App(): React.JSX.Element {
   const executeDeleteSession = async (
     sessionId: string,
     childAction: ParentCloseAction = 'leave-children',
-    options?: { skipDirtyChildCheck?: boolean; modal?: boolean; preserveError?: boolean }
+    options?: { skipDirtyChildCheck?: boolean; modal?: boolean; preserveError?: boolean; releaseGitLocks?: boolean }
   ) => {
     if (inFlightDelete.current.has(sessionId) || inFlightResurrectRef.current.has(sessionId)) return false;
     inFlightDelete.current.add(sessionId);
@@ -981,7 +981,9 @@ export function App(): React.JSX.Element {
 
       if (window.spawneaApi?.deleteSession) {
         const result = (childAction === 'close-all' || childAction === 'close-all-preserve-mismatched')
-          ? await window.spawneaApi.deleteSession(sessionId, childAction)
+          ? options?.releaseGitLocks
+            ? await window.spawneaApi.deleteSession(sessionId, childAction, { releaseGitLocks: true })
+            : await window.spawneaApi.deleteSession(sessionId, childAction)
           : await window.spawneaApi.deleteSession(sessionId);
         if (result === false || (typeof result === 'object' && result !== null && 'success' in result && !(result as any).success)) {
           throw new Error('Persistence failure: backend did not confirm session deletion.');
@@ -1145,11 +1147,18 @@ export function App(): React.JSX.Element {
     setGitBranchMismatchBySessionId({});
   }, [parentSessionToClose]);
 
-  const handleConfirmCloseParentModal = useCallback(async (action: ParentCloseAction) => {
+  const handleConfirmCloseParentModal = useCallback(async (
+    action: ParentCloseAction,
+    confirmOptions?: { releaseGitLocks?: boolean }
+  ) => {
     const parent = parentSessionToClose;
     if (parent && !inFlightDelete.current.has(parent.id)) {
       setParentCloseAction(action);
-      if (await executeDeleteSession(parent.id, action, { modal: true })) {
+      if (await executeDeleteSession(parent.id, action, {
+        modal: true,
+        // The operator already confirmed this close; the lock retry goes straight to the backend.
+        ...(confirmOptions?.releaseGitLocks ? { releaseGitLocks: true, skipDirtyChildCheck: true } : {}),
+      })) {
         setParentSessionToClose(null);
       }
     }
