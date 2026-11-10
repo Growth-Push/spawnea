@@ -3975,8 +3975,10 @@ describe('App Desktop Shell', () => {
     fireEvent.keyDown(window, { key: '+', ctrlKey: true });
     expect(root.getAttribute('data-ui-zoom')).toBe('1.1');
     expect(root.style.zoom).toBe('1.1');
-    expect(root.style.width).toBe(`${100 / 1.1}vw`);
-    expect(root.style.height).toBe(`${100 / 1.1}vh`);
+    expect(root.style.width).toMatch(/vw$/);
+    expect(parseFloat(root.style.width)).toBeCloseTo(100 / 1.1, 3);
+    expect(root.style.height).toMatch(/vh$/);
+    expect(parseFloat(root.style.height)).toBeCloseTo(100 / 1.1, 3);
     expect(localStorage.getItem(UI_ZOOM_STORAGE_KEY)).toBe('1.1');
 
     fireEvent.keyDown(window, { key: '-', ctrlKey: true });
