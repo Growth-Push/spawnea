@@ -137,7 +137,17 @@ export interface FinishSessionOptions {
   stashChanges?: boolean;
   /** Explicitly preserve worktree directory, branches, and all files when closing a mismatched session. */
   preserveWorktree?: boolean;
+  /**
+   * Operator-confirmed recovery for a close blocked by Git lock files. After the
+   * runtime is stopped, Spawnea moves the worktree's lock files into a backup
+   * directory in the repository's Git common directory, then continues the close.
+   * Only honored for close requests from the desktop UI.
+   */
+  releaseGitLocks?: boolean;
 }
+
+/** Marker included in finalization errors caused by Git lock files. */
+export const GIT_LOCK_BLOCKED_MARKER = '[git-lock-blocked]';
 
 export type ManagedWorktreeInspectionState = 'active' | 'integrated' | 'mismatch' | 'missing' | 'unavailable';
 
@@ -153,6 +163,8 @@ export interface FinishSessionResult {
   action: FinishSessionAction;
   removed: boolean;
   workspacePreserved?: boolean;
+  /** Directory holding the backed-up lock files when releaseGitLocks moved any. */
+  lockBackupPath?: string;
 }
 
 export interface IpcChannels {

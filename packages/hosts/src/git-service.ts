@@ -12,7 +12,7 @@ import type {
   ManagedWorktreeInspection,
   Logger,
 } from '@spawnea/domain';
-import { createLogger, isExactRepositoryRelativePath } from '@spawnea/domain';
+import { createLogger, GIT_LOCK_BLOCKED_MARKER, isExactRepositoryRelativePath } from '@spawnea/domain';
 import { posix } from 'node:path';
 
 export interface ManagedWorktreeResult {
@@ -392,8 +392,46 @@ export class GitService {
       { cwd: repositoryPath, timeoutMs: GitService.statusTimeoutMs }
     ).catch(() => null);
     if (!result || result.exitCode !== 0 || result.stdout !== 'CLEAR') {
-      throw new Error(`Worktree finalization blocked for '${worktreePath}': a Git lock exists or lock inspection is inconclusive. Runtime may already be stopped; finalization is not complete. Verify and recover the lock manually with separate authorization, then retry. Spawnea never removes locks or determines staleness.`);
+      throw new Error(`${GIT_LOCK_BLOCKED_MARKER} Worktree finalization blocked for '${worktreePath}': a Git lock exists or lock inspection is inconclusive; finalization is not complete. Make sure no Git command is running in this worktree, then retry with lock release: Spawnea backs up and removes the lock files before closing.`);
     }
+  }
+
+  /**
+   * Operator-confirmed lock release. Moves every `*.lock` file from the linked
+   * worktree's Git administrative directory into
+   * `<git-common-dir>/spawnea-lock-backups/<worktree>-<timestamp>/`, preserving
+   * relative paths. Moving within the common directory keeps the backup after
+   * the worktree registration is removed.
+   */
+  async backupAndReleaseWorktreeLocks(
+    host: HostAdapter,
+    worktreePath: string,
+    now: Date = new Date()
+  ): Promise<{ backupPath: string; locks: string[] } | null> {
+    const stamp = now.toISOString().replace(/[:.]/g, '-');
+    const result = await host.execute(
+      `dir=$(git rev-parse --absolute-git-dir) || exit 1; ` +
+      // Portable before Git 2.31: --git-common-dir may be relative to the cwd.
+      `common=$(git rev-parse --git-common-dir) || exit 1; common=$(CDPATH= cd -P "$common" && pwd -P) || exit 1; ` +
+      // Only linked worktrees: never touch the primary repository's locks.
+      `[ "$(CDPATH= cd -P "$dir" && pwd -P)" != "$common" ] || exit 2; ` +
+      `locks=$(cd "$dir" && find . -type f -name '*.lock' -print) || exit 1; ` +
+      `[ -n "$locks" ] || exit 0; ` +
+      `backup="$common/spawnea-lock-backups/\${dir##*/}-${stamp}"; ` +
+      `printf '%s\\n' "$backup"; ` +
+      `printf '%s\\n' "$locks" | while IFS= read -r rel; do rel=\${rel#./}; ` +
+      `mkdir -p "$backup/$(dirname "$rel")" && mv -- "$dir/$rel" "$backup/$rel" || exit 1; ` +
+      `printf '%s\\n' "$rel"; done`,
+      { cwd: worktreePath, timeoutMs: GitService.statusTimeoutMs }
+    );
+    if (result.exitCode !== 0) {
+      const details = result.stderr.trim() || `exit code ${result.exitCode}`;
+      throw new Error(`Could not back up and release Git locks for '${worktreePath}': ${details}`);
+    }
+    const [backupPath, ...locks] = result.stdout.split('\n').filter((line) => line.length > 0);
+    if (!backupPath) return null;
+    this.logger.warn('Released Git lock files after operator confirmation', { worktreePath, backupPath, locks });
+    return { backupPath, locks };
   }
 
   async removeManagedWorktree(

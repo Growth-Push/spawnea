@@ -2017,6 +2017,7 @@ export class SessionManager {
       }
 
       if (action === 'close') {
+        let lockBackupPath: string | undefined;
         if (!worktreeAlreadyRemoved) {
           // 1. Verify identity, but allow the explicit close flow to handle local changes.
           const inspection = await this.gitService.inspectManagedWorktree(host, identity);
@@ -2052,6 +2053,13 @@ export class SessionManager {
 
             // 2. Verify termination before changing any files.
             await this.stopSession(sessionId);
+
+            // Operator-confirmed lock recovery: the runtime is stopped, so its own Git
+            // processes are gone. Locks are backed up, never deleted outright.
+            if (options.releaseGitLocks && origin === 'ui') {
+              const released = await this.gitService.backupAndReleaseWorktreeLocks(host, identity.worktreePath);
+              lockBackupPath = released?.backupPath;
+            }
 
             // Agent-validated and implicit parent closes must not discard unconfirmed changes:
             // with the runtime stopped, require a verified clean worktree so late writes or an unreadable status cannot be lost.
@@ -2138,6 +2146,7 @@ export class SessionManager {
           action: 'close',
           removed: true,
           workspacePreserved: options.preserveWorktree ? true : undefined,
+          ...(lockBackupPath ? { lockBackupPath } : {}),
         };
       }
 
