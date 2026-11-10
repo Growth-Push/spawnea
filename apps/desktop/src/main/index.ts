@@ -611,8 +611,11 @@ function registerIpcHandlers(
     action: import('@spawnea/domain').FinishSessionAction,
     options?: import('@spawnea/domain').FinishSessionOptions
   ) => {
+    if (options?.recoveryPlanId) throw new Error('Use the confirmed recovery flow.');
     return sessManager.finishSession(sessionId, action, options);
   });
+
+  ipcMain.handle('sessions:closeWorktree', async (_event, request: import('@spawnea/domain').CloseWorktreeRequest) => sessManager.closeWorktree(request));
 
   ipcMain.handle('sessions:inspectWorktree', async (_event, sessionId: string) => {
     return sessManager.inspectManagedWorktree(sessionId);
@@ -1124,6 +1127,7 @@ app.whenReady().then(async () => {
     contextStore = new SessionContextStore({ storeDir: sessionsDir, logger });
     ptyBroker = new PtyBroker(logger.child('pty'));
     sessionManager = new SessionManager({
+      recoveryBackupRoot: join(app.getPath('userData'), 'worktree-recovery'),
       repositories,
       catalogManager,
       contextStore,

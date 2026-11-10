@@ -24,6 +24,8 @@ import type {
   FinishSessionOptions,
   FinishSessionResult,
   FinishSessionOrigin,
+  CloseWorktreeRequest,
+  CloseWorktreeResponse,
   ManagedWorktreeInspection,
   Logger,
   CatalogSsh,
@@ -60,6 +62,7 @@ import {
   PromptSubmissionError,
   fetchHostSystemInfo,
   GitService,
+  WorktreeLockBlockedError,
   HostHealthChecker,
   OnePasswordResolver,
   type ManagedWorktreeIdentity,
@@ -71,6 +74,13 @@ import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
 import { sanitizeProfileName } from './product-paths.js';
 import { HarnessLaunchRegistry } from './harness-launch-registry.js';
+import { WorktreeLockRecovery, type RecoveryPlan } from './worktree-lock-recovery.js';
+
+class SessionLockBlocked extends Error {
+  constructor(readonly sessionId: string, readonly blockage: WorktreeLockBlockedError) {
+    super(blockage.message);
+  }
+}
 
 function normalizeWorktreePathForComparison(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -86,6 +96,7 @@ export interface AttachedSessionInfo {
 }
 
 export interface SessionManagerOptions {
+  recoveryBackupRoot?: string;
   repositories: Repositories;
   catalogManager: CatalogManager;
   contextStore: SessionContextStore;
@@ -99,6 +110,10 @@ export interface SessionManagerOptions {
 }
 
 export class SessionManager {
+  private readonly recovery = new WorktreeLockRecovery();
+  private readonly recoveryPlans = new Map<string, { sessionId: string; plan: RecoveryPlan }>();
+  private readonly recoveryBackupRoot?: string;
+  private readonly recoveryBackups = new Map<string, string>();
   readonly historyService: SessionHistoryService;
   private readonly repos: Repositories;
   private readonly catalogManager: CatalogManager;
@@ -135,6 +150,7 @@ export class SessionManager {
   private readonly attachedSessions: Map<string, AttachedSessionInfo> = new Map();
 
   constructor(options: SessionManagerOptions) {
+    this.recoveryBackupRoot = options.recoveryBackupRoot;
     this.repos = options.repositories;
     this.catalogManager = options.catalogManager;
     this.contextStore = options.contextStore;
@@ -1884,6 +1900,46 @@ export class SessionManager {
   /**
    * Finishes an isolated task worktree session (Integrate, Ignore, or Close) (Task 6.2.1).
    */
+  async closeWorktree(request: CloseWorktreeRequest): Promise<CloseWorktreeResponse> {
+    try {
+      if (!request || typeof request.sessionId !== 'string' || !['finish', 'delete'].includes(request.kind)) throw new Error('Invalid close request.');
+      if (request.options?.recoveryPlanId && request.confirmUnknownOwnerRecovery !== true) throw new Error('Specific unknown-owner recovery confirmation is required.');
+      if (request.kind === 'delete') {
+        if (request.options?.recoveryPlanId) throw new Error('Recover the affected child before resuming parent removal.');
+        return { ok: true, removed: await this.deleteSession(request.sessionId, request.childAction) };
+      }
+      const result = await this.finishSession(request.sessionId, 'close', request.options);
+      return { ok: true, removed: result.removed };
+    } catch (error) {
+      let cause: unknown = error;
+      while (cause instanceof Error && !(cause instanceof SessionLockBlocked) && cause.cause) cause = cause.cause;
+      const blocked = cause instanceof SessionLockBlocked ? cause : null;
+      const sessionId = blocked?.sessionId || request.sessionId;
+      let message = error instanceof Error ? error.message : 'Finalization failed.';
+      let recoveryPlanId: string | undefined;
+      let lockPath: string | undefined;
+      if (blocked) {
+        try {
+          const session = await this.repos.sessions.findById(sessionId);
+          const host = session && await this.getHostAdapter(session.serverId);
+          if (!session?.branch || !(host instanceof LocalHostAdapter) || !this.recoveryBackupRoot) throw new Error('Integrated recovery is unavailable on this host.');
+          const plan = await this.recovery.prepare({ sessionId, repositoryPath: blocked.blockage.repositoryPath, worktreePath: blocked.blockage.worktreePath, branch: session.branch });
+          for (const [key, value] of this.recoveryPlans) if (value.sessionId === sessionId) this.recoveryPlans.delete(key);
+          this.recoveryPlans.set(plan.id, { sessionId, plan });
+          recoveryPlanId = plan.id;
+          lockPath = plan.lock;
+          if (plan.partialVisibility) message += ' Some readable non-Git processes have inaccessible descriptors. Lock ownership remains unknown; confirmation accepts this limited visibility, not orphanhood.';
+        } catch (inspectionError) {
+          message += ` ${inspectionError instanceof Error ? inspectionError.message : 'Recovery inspection failed.'}`;
+        }
+      }
+      let receipt;
+      try { receipt = this.recoveryBackupRoot && await this.recovery.findReceipt(this.recoveryBackupRoot, sessionId); }
+      catch (receiptError) { message += ` Recovery receipt inspection failed: ${receiptError instanceof Error ? receiptError.message : 'unknown error'}.`; }
+      return { ok: false, sessionId, message, lockBlocked: Boolean(blocked), recoveryPlanId, lockPath, backupPath: receipt ? receipt.backupPath : this.recoveryBackups.get(sessionId), quarantinePath: receipt ? receipt.quarantinePath : undefined };
+    }
+  }
+
   async finishSession(
     sessionId: string,
     action: FinishSessionAction,
@@ -1894,6 +1950,7 @@ export class SessionManager {
     if (origin === 'agent-validated' && action !== 'close') {
       throw new Error("The 'agent-validated' finalization origin is only valid for close requests");
     }
+    if (options.recoveryPlanId && origin !== 'ui') throw new Error('Recovery requires trusted UI confirmation.');
     const session = await this.repos.sessions.findById(sessionId);
     if (!session) {
       throw new Error(`Session with ID '${sessionId}' not found`);
@@ -2079,6 +2136,14 @@ export class SessionManager {
               }
             }
 
+            if (options.recoveryPlanId) {
+              const prepared = this.recoveryPlans.get(options.recoveryPlanId);
+              this.recoveryPlans.delete(options.recoveryPlanId);
+              if (!prepared || prepared.sessionId !== sessionId || !this.recoveryBackupRoot || !(host instanceof LocalHostAdapter) || prepared.plan.target.worktreePath !== identity.worktreePath || prepared.plan.target.repositoryPath !== identity.repositoryPath || prepared.plan.target.branch !== identity.branch) throw new Error('Recovery authorization changed; inspect and confirm again.');
+              const backup = await this.recovery.recover(prepared.plan, this.recoveryBackupRoot);
+              this.recoveryBackups.set(sessionId, backup);
+            }
+
             // 3. Preserve or discard local changes before removing the worktree.
             if (options.stashChanges) {
               await this.gitService.stashManagedWorktreeChanges(host, identity);
@@ -2142,6 +2207,9 @@ export class SessionManager {
       }
 
       throw new Error(`Unsupported finalization action: ${action}`);
+    } catch (error) {
+      if (error instanceof WorktreeLockBlockedError) throw new SessionLockBlocked(sessionId, error);
+      throw error;
     } finally {
       try {
         releaseWorktree();

@@ -16,6 +16,7 @@ import type {
   GitStatusResult,
   FinishSessionAction,
   FinishSessionOptions,
+  CloseWorktreeResponse,
   AddProjectToCatalogInput,
   ControlFinalizationRequest,
 } from '@spawnea/domain';
@@ -31,6 +32,7 @@ import { AdoptSessionModal } from './components/AdoptSessionModal';
 import { StopSessionModal } from './components/StopSessionModal';
 import { UnadoptSessionModal } from './components/UnadoptSessionModal';
 import { FinishSessionModal } from './components/FinishSessionModal';
+import { LockRecoveryModal } from './components/LockRecoveryModal';
 import { StateFeedbackModal } from './components/StateFeedbackModal';
 import { CatalogErrorBanner } from './components/CatalogErrorBanner';
 import { StateRulesErrorBanner } from './components/StateRulesErrorBanner';
@@ -868,6 +870,8 @@ export function App(): React.JSX.Element {
     }
   };
 
+  const [lockBlock, setLockBlock] = useState<{ blocked: Extract<CloseWorktreeResponse, { ok: false }>; options?: FinishSessionOptions } | null>(null);
+
   const isPossiblyDirty = (c: Session): boolean =>
     isPossiblyDirtyChild(c, gitDirtyBySessionId, gitUnavailableBySessionId, gitMissingBySessionId);
 
@@ -882,8 +886,20 @@ export function App(): React.JSX.Element {
     }
 
     if (window.spawneaApi?.finishSession) {
-      const result = await window.spawneaApi.finishSession(sessionId, action, options);
+      const result = action === 'close' && window.spawneaApi.closeWorktree
+        ? await window.spawneaApi.closeWorktree({ sessionId, kind: 'finish', options, confirmUnknownOwnerRecovery: Boolean(options?.recoveryPlanId) })
+        : await window.spawneaApi.finishSession(sessionId, action, options);
+      if ('ok' in result && !result.ok) {
+        if (result.lockBlocked || result.backupPath || result.quarantinePath) { setLockBlock({ blocked: result, options }); return false; }
+        throw new Error(result.message);
+      }
       if (result.removed) {
+        setLockBlock(null);
+        if (window.spawneaApi.listSessions) {
+          const fresh = await window.spawneaApi.listSessions();
+          sessionsRef.current = fresh;
+          setSessions(fresh);
+        }
         setSessions((prev) =>
           prev
             .filter((s) => s.id !== sessionId)
@@ -925,8 +941,7 @@ export function App(): React.JSX.Element {
           } else {
             setPendingCloseAllParentId(null);
             setSessionToFinish(null);
-            await executeDeleteSession(parentId, actionToResume, { skipDirtyChildCheck: true });
-            return true;
+            return await executeDeleteSession(parentId, actionToResume, { skipDirtyChildCheck: true });
           }
         }
       } else {
@@ -980,9 +995,25 @@ export function App(): React.JSX.Element {
       }
 
       if (window.spawneaApi?.deleteSession) {
-        const result = (childAction === 'close-all' || childAction === 'close-all-preserve-mismatched')
+        const result = window.spawneaApi.closeWorktree
+          ? await window.spawneaApi.closeWorktree({ sessionId, kind: 'delete', childAction })
+          : (childAction === 'close-all' || childAction === 'close-all-preserve-mismatched')
           ? await window.spawneaApi.deleteSession(sessionId, childAction)
           : await window.spawneaApi.deleteSession(sessionId);
+        if (typeof result === 'object' && 'ok' in result && !result.ok) {
+          if (result.lockBlocked || result.backupPath || result.quarantinePath) {
+            const fresh = await window.spawneaApi.listSessions();
+            sessionsRef.current = fresh;
+            setSessions(fresh);
+            setPendingCloseAllParentId(sessionId);
+            setParentSessionToClose(null);
+            setPendingCloseAllAction(childAction);
+            setSessionToFinish(fresh.find((child) => child.id === result.sessionId) || null);
+            setLockBlock({ blocked: result, options: { stashChanges: false } });
+            return false;
+          }
+          throw new Error(result.message);
+        }
         if (result === false || (typeof result === 'object' && result !== null && 'success' in result && !(result as any).success)) {
           throw new Error('Persistence failure: backend did not confirm session deletion.');
         }
@@ -1829,7 +1860,7 @@ export function App(): React.JSX.Element {
 
       {/* Finish / Integrate Managed Worktree Session Modal (Task 6.2.1) */}
       <FinishSessionModal
-        isOpen={sessionToFinish !== null}
+        isOpen={sessionToFinish !== null && !lockBlock}
         uiZoom={uiZoom}
         session={sessionToFinish}
         onClose={() => {
@@ -1848,6 +1879,14 @@ export function App(): React.JSX.Element {
         onClose={handleCloseCreateChildModal}
         onSubmit={handleSubmitCreateChildSession}
       />
+
+      {lockBlock && <LockRecoveryModal key={lockBlock.blocked.recoveryPlanId || lockBlock.blocked.sessionId} blocked={lockBlock.blocked} onCancel={() => { setLockBlock(null); setSessionToFinish(null); setPendingCloseAllParentId(null); setParentSessionToClose(null); }} onRecover={async () => {
+        try {
+          await handleFinishSession(lockBlock.blocked.sessionId, 'close', { ...lockBlock.options, recoveryPlanId: lockBlock.blocked.recoveryPlanId });
+        } catch (error) {
+          setLockBlock({ ...lockBlock, blocked: { ...lockBlock.blocked, recoveryPlanId: undefined, message: error instanceof Error ? error.message : 'Recovery failed; finalization is not complete.' } });
+        }
+      }} />}
 
       {/* Close Parent Session Modal */}
       {deleteError && (

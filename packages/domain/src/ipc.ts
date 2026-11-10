@@ -133,6 +133,8 @@ export type FinishSessionAction = 'integrate' | 'ignore' | 'close';
 export type FinishSessionOrigin = 'ui' | 'agent-validated';
 
 export interface FinishSessionOptions {
+  /** Trusted UI recovery plan; never an authorization supplied by an agent. */
+  recoveryPlanId?: string;
   /** Preserve dirty worktree contents in a named Git stash before closing. */
   stashChanges?: boolean;
   /** Explicitly preserve worktree directory, branches, and all files when closing a mismatched session. */
@@ -155,7 +157,20 @@ export interface FinishSessionResult {
   workspacePreserved?: boolean;
 }
 
+export interface CloseWorktreeRequest {
+  sessionId: string;
+  kind: 'finish' | 'delete';
+  childAction?: ParentCloseAction;
+  options?: FinishSessionOptions;
+  confirmUnknownOwnerRecovery?: boolean;
+}
+
+export type CloseWorktreeResponse =
+  | { ok: true; removed: boolean }
+  | { ok: false; sessionId: string; message: string; lockBlocked: boolean; recoveryPlanId?: string; lockPath?: string; backupPath?: string; quarantinePath?: string };
+
 export interface IpcChannels {
+  'sessions:closeWorktree': (request: CloseWorktreeRequest) => Promise<CloseWorktreeResponse>;
   'github:links': (sessionId: string) => Promise<Array<{ sessionId: string; url: string; kind: 'repository' | 'issue' | 'pull'; source: 'task' | 'prompt' | 'output'; createdAt: Date }>>;
   // Operational Catalog
   'catalog:get': () => Promise<CatalogState>;

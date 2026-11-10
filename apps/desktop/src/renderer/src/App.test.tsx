@@ -143,6 +143,7 @@ const mockSessions: Session[] = [
 
 function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Window['spawneaApi'] {
   return {
+    closeWorktree: undefined as unknown as Window['spawneaApi']['closeWorktree'],
     quitForReleaseSmoke: vi.fn().mockResolvedValue(true),
     beginDashboardHistory: vi.fn().mockResolvedValue(undefined),
     recordDashboardObservation: vi.fn().mockResolvedValue(undefined),
@@ -2966,7 +2967,8 @@ describe('App Desktop Shell', () => {
     };
 
     const api = createMockSpawneaApi();
-    api.listSessions = vi.fn().mockResolvedValue([parent, dirtyChild1, dirtyChild2]);
+    let remainingSessions = [parent, dirtyChild1, dirtyChild2];
+    api.listSessions = vi.fn().mockImplementation(async () => remainingSessions);
     api.getGitStatus = vi.fn().mockImplementation((id: string) => {
       const isDirty = id === 'child-1' || id === 'child-2';
       return Promise.resolve({
@@ -2987,7 +2989,10 @@ describe('App Desktop Shell', () => {
       commitsAhead: 0,
       targetBranch: 'main',
     });
-    api.finishSession = vi.fn().mockResolvedValue({ success: true, removed: true });
+    api.finishSession = vi.fn().mockImplementation(async (id: string) => {
+      remainingSessions = remainingSessions.filter((session) => session.id !== id);
+      return { success: true, removed: true };
+    });
     api.deleteSession = vi.fn().mockResolvedValue({ success: true });
     window.spawneaApi = api;
 
@@ -3372,6 +3377,82 @@ describe('App Desktop Shell', () => {
       expect(api.finishSession).toHaveBeenCalledWith('child-dirty', 'close', expect.anything());
       expect(api.deleteSession).toHaveBeenCalledWith('parent-1', 'close-all-preserve-mismatched');
     });
+  });
+
+  it('resumes parent close after a dirty child and confirmed locked sibling without replay', async () => {
+    const parent: Session = { ...mockSessions[0], id: 'mixed-parent', parentSessionId: undefined, status: 'done' };
+    const dirty: Session = { ...parent, id: 'mixed-dirty', name: 'First Dirty Child', parentSessionId: parent.id, managedWorktree: true, worktreePath: '/fixture/dirty' };
+    const locked: Session = { ...dirty, id: 'mixed-locked', name: 'Next Locked Child', worktreePath: '/fixture/locked' };
+    let remaining = [parent, dirty, locked];
+    const api = createMockSpawneaApi();
+    api.listSessions = vi.fn().mockImplementation(async () => remaining);
+    api.getGitStatus = vi.fn().mockImplementation(async (id: string) => ({ isGitRepo: true, branch: parent.branch, isClean: id !== dirty.id, totalChanges: id === dirty.id ? 1 : 0, staged: [], unstaged: id === dirty.id ? ['tracked'] : [], untracked: [], ahead: 0, behind: 0 }));
+    api.inspectWorktree = vi.fn().mockResolvedValue({ canFastForward: true, hasUncommittedChanges: true, commitsAhead: 0, targetBranch: 'main' });
+    api.finishSession = vi.fn().mockImplementation(async (id: string) => {
+      remaining = remaining.filter((session) => session.id !== id);
+      return { success: true, removed: true };
+    });
+    api.closeWorktree = vi.fn()
+      .mockResolvedValueOnce({ ok: false, sessionId: locked.id, message: 'Locked sibling requires confirmation', lockBlocked: true, recoveryPlanId: 'mixed-plan' })
+      .mockImplementationOnce(async () => {
+        remaining = remaining.filter((session) => session.id !== locked.id);
+        return { ok: true, removed: true };
+      })
+      .mockImplementationOnce(async () => {
+        remaining = remaining.filter((session) => session.id !== parent.id);
+        return { ok: true, removed: true };
+      });
+    window.spawneaApi = api;
+    render(<App />);
+    await waitFor(() => expect(api.getGitStatus).toHaveBeenCalledWith(locked.id));
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+    fireEvent.click(screen.getByTestId('parent-close-all-button'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Integrate & Clean Up/i })).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: /Integrate & Clean Up/i }));
+    await waitFor(() => expect(screen.getByText('Locked sibling requires confirmation')).toBeDefined());
+    expect(api.finishSession).toHaveBeenCalledTimes(1);
+    expect(api.finishSession).toHaveBeenCalledWith(dirty.id, 'integrate', undefined);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Back up, recover and close' }));
+    await waitFor(() => expect(api.closeWorktree).toHaveBeenCalledTimes(3));
+    expect(api.closeWorktree).toHaveBeenNthCalledWith(1, { sessionId: parent.id, kind: 'delete', childAction: 'close-all' });
+    expect(api.closeWorktree).toHaveBeenNthCalledWith(2, expect.objectContaining({ sessionId: locked.id, kind: 'finish', confirmUnknownOwnerRecovery: true }));
+    expect(api.closeWorktree).toHaveBeenNthCalledWith(3, { sessionId: parent.id, kind: 'delete', childAction: 'close-all' });
+    await waitFor(() => expect(screen.queryByText('Worktree finalization blocked')).toBeNull());
+    expect(remaining).toEqual([]);
+    expect(api.finishSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains structured receipt paths after confirmed recovery fails during finalization', async () => {
+    const parent: Session = { ...mockSessions[0], id: 'receipt-parent', parentSessionId: undefined, status: 'done' };
+    const child: Session = { ...parent, id: 'receipt-child', name: 'Receipt Child', parentSessionId: parent.id, managedWorktree: true, worktreePath: '/fixture/child' };
+    const api = createMockSpawneaApi();
+    api.listSessions = vi.fn().mockResolvedValue([parent, child]);
+    api.getGitStatus = vi.fn().mockResolvedValue({ isGitRepo: true, branch: child.branch, isClean: false, totalChanges: 1, staged: [], unstaged: ['tracked'], untracked: [], ahead: 0, behind: 0 });
+    api.inspectWorktree = vi.fn().mockResolvedValue({ state: 'active', currentBranch: child.branch, isClean: false });
+    api.closeWorktree = vi.fn()
+      .mockResolvedValueOnce({ ok: false, sessionId: child.id, message: 'Unknown owner', lockBlocked: true, recoveryPlanId: 'receipt-plan' })
+      .mockResolvedValueOnce({ ok: false, sessionId: child.id, message: 'Cleanup failed after quarantine', lockBlocked: false, backupPath: '/fixture/retained-backup', quarantinePath: '/fixture/retained-quarantine/index.lock' });
+    window.spawneaApi = api;
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Active Sessions (1)')).toBeDefined());
+    fireEvent.click(screen.getByTestId('session-delete-button'));
+    await waitFor(() => expect(screen.getByTestId('close-parent-modal')).toBeDefined());
+    fireEvent.click(screen.getByTestId('parent-close-all-button'));
+    await waitFor(() => expect(screen.getByText('Finish Worktree Session')).toBeDefined());
+    fireEvent.click(screen.getByText(/Close Worktree/));
+    fireEvent.click(screen.getByTestId('finish-close-confirm-checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: /Close Worktree/i }));
+    await waitFor(() => expect(screen.getByText('Unknown owner')).toBeDefined());
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Back up, recover and close' }));
+    await waitFor(() => expect(screen.getByText('Cleanup failed after quarantine')).toBeDefined());
+    expect(screen.getByText('/fixture/retained-backup')).toBeDefined();
+    expect(screen.getByText('/fixture/retained-quarantine/index.lock')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Back up, recover and close' })).toBeNull();
+    expect(api.closeWorktree).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: child.id, kind: 'finish', confirmUnknownOwnerRecovery: true }));
+    expect(api.deleteSession).not.toHaveBeenCalled();
   });
 
   it('prevents repeated clicks while parent deletion is in flight', async () => {

@@ -114,6 +114,7 @@ export const api = {
   deleteAgent: (id: string): Promise<void> => ipcRenderer.invoke('agents:delete', id),
 
   // Session Lifecycle
+  closeWorktree: (request: import('@spawnea/domain').CloseWorktreeRequest): Promise<import('@spawnea/domain').CloseWorktreeResponse> => ipcRenderer.invoke('sessions:closeWorktree', request),
   listSessions: (): Promise<Session[]> => ipcRenderer.invoke('sessions:list'),
   reconcileSessions: (): Promise<Session[]> => ipcRenderer.invoke('sessions:reconcile'),
   createSession: (input: CreateSessionInput): Promise<Session> => ipcRenderer.invoke('sessions:create', input),

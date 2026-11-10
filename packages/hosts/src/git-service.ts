@@ -15,6 +15,12 @@ import type {
 import { createLogger, isExactRepositoryRelativePath } from '@spawnea/domain';
 import { posix } from 'node:path';
 
+export class WorktreeLockBlockedError extends Error {
+  constructor(readonly repositoryPath: string, readonly worktreePath: string) {
+    super(`Worktree finalization blocked for '${worktreePath}': a Git lock exists or lock inspection is inconclusive. Runtime may already be stopped; finalization is not complete.`);
+  }
+}
+
 export interface ManagedWorktreeResult {
   repositoryPath: string;
   worktreePath: string;
@@ -365,7 +371,7 @@ export class GitService {
     return absent.exitCode === 0;
   }
 
-  /** Never infer that a Git lock is stale. Recovery belongs to the operator. */
+  /** Never infer that a Git lock is stale. */
   async verifyWorktreeLocksAbsent(host: HostAdapter, repositoryPath: string, worktreePath: string): Promise<void> {
     const result = await host.execute(
       `common=$(git rev-parse --git-common-dir) || exit 1; ` +
@@ -392,7 +398,7 @@ export class GitService {
       { cwd: repositoryPath, timeoutMs: GitService.statusTimeoutMs }
     ).catch(() => null);
     if (!result || result.exitCode !== 0 || result.stdout !== 'CLEAR') {
-      throw new Error(`Worktree finalization blocked for '${worktreePath}': a Git lock exists or lock inspection is inconclusive. Runtime may already be stopped; finalization is not complete. Verify and recover the lock manually with separate authorization, then retry. Spawnea never removes locks or determines staleness.`);
+      throw new WorktreeLockBlockedError(repositoryPath, worktreePath);
     }
   }
 
