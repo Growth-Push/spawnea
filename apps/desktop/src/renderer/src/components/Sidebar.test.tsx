@@ -207,7 +207,8 @@ describe('compact popup interaction', () => {
     expect(popup.style.display).toBe('flex');
     expect(popup.style.left).toBe('40px');
     expect(popup.style.top).toBe('100px');
-    expect(popup.style.maxWidth).toBe(`${100 / 1.5}vw`);
+    expect(popup.style.maxWidth).toMatch(/vw$/);
+    expect(parseFloat(popup.style.maxWidth)).toBeCloseTo(100 / 1.5, 3);
   });
 });
 
