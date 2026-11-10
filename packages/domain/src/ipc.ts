@@ -228,7 +228,8 @@ export interface IpcChannels {
     options?: FinishSessionOptions
   ) => Promise<FinishSessionResult>;
   'sessions:inspectWorktree': (sessionId: string) => Promise<ManagedWorktreeInspection>;
-  'sessions:delete': (sessionId: string, childAction?: ParentCloseAction) => Promise<boolean>;
+  /** `releaseGitLocks` applies the operator-confirmed lock backup/release to managed-worktree children closed by close-all. */
+  'sessions:delete': (sessionId: string, childAction?: ParentCloseAction, options?: { releaseGitLocks?: boolean }) => Promise<boolean>;
   'sessions:forgetLocal': (sessionId: string) => Promise<boolean>;
   'sessions:sendPrompt': (sessionId: string, prompt: string) => Promise<{ delivered: boolean; deliveryMethod: 'pty' | 'tmux' }>;
   'sessions:saveLayout': (sessionId: string) => Promise<import('./index.js').SessionTopologySnapshot>;

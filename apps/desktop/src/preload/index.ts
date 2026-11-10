@@ -134,8 +134,8 @@ export const api = {
   ): Promise<FinishSessionResult> => ipcRenderer.invoke('sessions:finish', sessionId, action, options),
   inspectWorktree: (sessionId: string): Promise<ManagedWorktreeInspection> =>
     ipcRenderer.invoke('sessions:inspectWorktree', sessionId),
-  deleteSession: (sessionId: string, childAction?: ParentCloseAction): Promise<boolean> =>
-    ipcRenderer.invoke('sessions:delete', sessionId, childAction),
+  deleteSession: (sessionId: string, childAction?: ParentCloseAction, options?: { releaseGitLocks?: boolean }): Promise<boolean> =>
+    ipcRenderer.invoke('sessions:delete', sessionId, childAction, options),
   forgetSessionLocally: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('sessions:forgetLocal', sessionId),
   sendPrompt: (sessionId: string, prompt: string): Promise<{ delivered: boolean; deliveryMethod: 'pty' | 'tmux' }> =>

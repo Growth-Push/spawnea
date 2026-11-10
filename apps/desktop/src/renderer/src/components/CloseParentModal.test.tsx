@@ -278,4 +278,37 @@ describe('CloseParentModal', () => {
     fireEvent.click(preserveAction);
     expect(onConfirm).toHaveBeenCalledWith('close-all-preserve-mismatched');
   });
+
+  it('offers lock backup and release when a child close is blocked by a Git lock', () => {
+    const onConfirm = vi.fn();
+    render(
+      <CloseParentModal
+        isOpen
+        parentSession={mockParent}
+        childrenSessions={mockChildren}
+        error="Could not close session (child-finalization): Child-finalization failed: [git-lock-blocked] Worktree finalization blocked."
+        retryAction="close-all"
+        onClose={vi.fn()}
+        onConfirm={onConfirm}
+      />
+    );
+    expect(screen.queryByText(/\[git-lock-blocked\]/)).toBeNull();
+    expect(screen.getByText('Git lock files are blocking a child worktree close')).toBeDefined();
+    fireEvent.click(screen.getByTestId('parent-close-release-locks-button'));
+    expect(onConfirm).toHaveBeenCalledWith('close-all', { releaseGitLocks: true });
+  });
+
+  it('does not offer lock release for unrelated errors', () => {
+    render(
+      <CloseParentModal
+        isOpen
+        parentSession={mockParent}
+        childrenSessions={mockChildren}
+        error="Child-finalization failed: Persistence failure"
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    );
+    expect(screen.queryByTestId('parent-close-release-locks-button')).toBeNull();
+  });
 });

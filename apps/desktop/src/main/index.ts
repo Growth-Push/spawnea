@@ -618,7 +618,7 @@ function registerIpcHandlers(
     return sessManager.inspectManagedWorktree(sessionId);
   });
 
-  ipcMain.handle('sessions:delete', async (_event, sessionId: string, childAction?: unknown) => {
+  ipcMain.handle('sessions:delete', async (_event, sessionId: string, childAction?: unknown, options?: unknown) => {
     if (
       childAction !== undefined &&
       childAction !== 'close-all' &&
@@ -627,7 +627,9 @@ function registerIpcHandlers(
     ) {
       throw new Error(`Unsupported parent close action: ${String(childAction)}`);
     }
-    return sessManager.deleteSession(sessionId, childAction);
+    const releaseGitLocks =
+      typeof options === 'object' && options !== null && (options as { releaseGitLocks?: unknown }).releaseGitLocks === true;
+    return sessManager.deleteSession(sessionId, childAction, { releaseGitLocks });
   });
 
   ipcMain.handle('sessions:forgetLocal', async (_event, sessionId: string) => {
