@@ -2524,6 +2524,44 @@ up 1 day, 5 hours
       expect(mockHost.executedCommands.slice(start).some(({ command }) => command.startsWith('git branch -d'))).toBe(false);
     });
 
+    it('backs up and releases Git locks only after stop, for confirmed UI closes', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude', task: 'Lock release', baseBranch: 'main',
+      });
+      let locked = true;
+      mockHost.customRules.unshift(
+        {
+          pattern: 'spawnea-lock-backups',
+          response: () => {
+            locked = false;
+            return { stdout: '/repo/.git/spawnea-lock-backups/task-x\nindex.lock\n', stderr: '', exitCode: 0 };
+          },
+        },
+        {
+          pattern: 'common=$(git',
+          response: () => ({ stdout: locked ? '' : 'CLEAR', stderr: '', exitCode: locked ? 1 : 0 }),
+        },
+      );
+      const start = mockHost.executedCommands.length;
+      await expect(sessionManager.finishSession(session.id, 'close')).rejects.toThrow('[git-lock-blocked]');
+      await expect(sessionManager.finishSession(session.id, 'close', { releaseGitLocks: true }, 'agent-validated'))
+        .rejects.toThrow('[git-lock-blocked]');
+      expect(mockHost.executedCommands.slice(start).some(({ command }) => command.includes('spawnea-lock-backups'))).toBe(false);
+
+      const retryStart = mockHost.executedCommands.length;
+      await expect(sessionManager.finishSession(session.id, 'close', { releaseGitLocks: true })).resolves.toEqual({
+        action: 'close', removed: true, lockBackupPath: '/repo/.git/spawnea-lock-backups/task-x',
+      });
+      const commands = mockHost.executedCommands.slice(retryStart).map(({ command }) => command);
+      const releaseIndex = commands.findIndex((command) => command.includes('spawnea-lock-backups'));
+      expect(releaseIndex).toBeGreaterThan(0);
+      expect(commands.slice(0, releaseIndex).some((command) => command.includes('tmux kill-session'))).toBe(true);
+      expect(commands.some((command) => command.startsWith('git branch -d'))).toBe(false);
+      expect(await repos.sessions.findById(session.id)).toBeNull();
+    });
+
     it('accepts the agent-validated origin only for close requests', async () => {
       await expect(sessionManager.finishSession(
         'missing-session',

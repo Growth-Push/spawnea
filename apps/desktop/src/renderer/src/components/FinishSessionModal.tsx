@@ -5,6 +5,7 @@ import type {
   FinishSessionOptions,
   ManagedWorktreeInspection,
 } from '@spawnea/domain';
+import { GIT_LOCK_BLOCKED_MARKER } from '@spawnea/domain';
 import {
   X,
   GitMerge,
@@ -39,6 +40,7 @@ export function FinishSessionModal({
   const [selectedAction, setSelectedAction] = useState<FinishSessionAction>('integrate');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lockBlocked, setLockBlocked] = useState(false);
   const [stashChanges, setStashChanges] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [inspection, setInspection] = useState<ManagedWorktreeInspection | null>(null);
@@ -52,6 +54,7 @@ export function FinishSessionModal({
     setStashChanges(false);
     setConfirmClose(false);
     setError(null);
+    setLockBlocked(false);
     setInspection(null);
     setInspectedSessionId(null);
     setIsInspecting(false);
@@ -117,6 +120,10 @@ export function FinishSessionModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    await submitFinish(false);
+  };
+
+  const submitFinish = async (releaseGitLocks: boolean) => {
     if (selectedAction === 'ignore') {
       onClose();
       return;
@@ -149,6 +156,7 @@ export function FinishSessionModal({
 
     setIsSubmitting(true);
     setError(null);
+    setLockBlocked(false);
 
     try {
       let shouldClose = true;
@@ -156,6 +164,7 @@ export function FinishSessionModal({
         const res = await onFinish(session.id, selectedAction, {
           stashChanges: isMismatch ? false : stashChanges,
           ...(isMismatch ? { preserveWorktree: true } : {}),
+          ...(releaseGitLocks ? { releaseGitLocks: true } : {}),
         });
         shouldClose = res !== false;
       } else {
@@ -166,7 +175,11 @@ export function FinishSessionModal({
         onClose();
       }
     } catch (err: any) {
-      setError(err?.message || `Failed to ${selectedAction} worktree session`);
+      const message: string = err?.message || `Failed to ${selectedAction} worktree session`;
+      const blockedByLock = message.includes(GIT_LOCK_BLOCKED_MARKER);
+      // Release runs only for close on an existing worktree directory.
+      setLockBlocked(blockedByLock && selectedAction === 'close' && !isMismatch && !isPathMissing);
+      setError(message.replace(GIT_LOCK_BLOCKED_MARKER, '').replace(/\s{2,}/g, ' ').trim());
     } finally {
       setIsSubmitting(false);
     }
@@ -480,6 +493,30 @@ export function FinishSessionModal({
                 <div className="font-semibold text-red-300">Finalization Safety Block:</div>
                 <div>{error}</div>
               </div>
+            </div>
+          )}
+
+          {lockBlocked && selectedAction === 'close' && (
+            <div className="p-3 bg-amber-950/40 border border-amber-800/60 rounded-lg space-y-2 text-xs text-amber-100" role="alert">
+              <div className="font-semibold text-amber-300">Git lock files are blocking this close</div>
+              <p>
+                A Git lock usually remains after an interrupted Git command. Removing it while another Git command
+                is still running in this worktree can corrupt that command&apos;s work. Make sure nothing else is using
+                this worktree before continuing.
+              </p>
+              <p>
+                Spawnea stops the session, moves the lock files to
+                <code className="mx-1 text-amber-200">.git/spawnea-lock-backups/</code>
+                in the repository, then closes the worktree. The task branch is kept.
+              </p>
+              <button
+                type="button"
+                onClick={() => void submitFinish(true)}
+                disabled={isSubmitting}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-50"
+              >
+                Back Up Locks, Unlock &amp; Close
+              </button>
             </div>
           )}
 
