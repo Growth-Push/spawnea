@@ -234,9 +234,9 @@ export function CloseParentModal({
                     is still running in that worktree can corrupt that command&apos;s work. Make sure nothing else is using it.
                   </p>
                   <p>
-                    Spawnea stops each child, moves its lock files to
+                    Spawnea stops each child. For managed worktrees being closed, it moves the lock files to
                     <code className="mx-1">.git/spawnea-lock-backups/</code>
-                    in the repository, then closes it. Task branches are kept.
+                    in the repository. Preserved mismatched worktrees are not unlocked. Task branches are kept.
                   </p>
                 </div>
               )}
