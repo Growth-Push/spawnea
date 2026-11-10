@@ -2500,6 +2500,30 @@ up 1 day, 5 hours
   });
 
   describe('finishSession (Task 6.2.1)', () => {
+    it('retains a stopped session and context after a lock block and completes a recovered retry', async () => {
+      await enableManagedWorktrees();
+      const session = await sessionManager.createSession({
+        serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude', task: 'Recoverable lock block', baseBranch: 'main',
+      });
+      let blocked = true;
+      mockHost.customRules.unshift({
+        pattern: 'common=$(git',
+        response: () => ({ stdout: blocked ? '' : 'CLEAR', stderr: '', exitCode: blocked ? 1 : 0 }),
+      });
+      const start = mockHost.executedCommands.length;
+      await expect(sessionManager.finishSession(session.id, 'close')).rejects.toThrow('finalization is not complete');
+      expect((await repos.sessions.findById(session.id))?.status).toBe('done');
+      expect(await contextStore.load(session.id)).not.toBeNull();
+      expect(mockHost.executedCommands.slice(start).some(({ command }) =>
+        command.startsWith('git reset') || command.startsWith('git clean') || command.startsWith('git worktree remove')
+      )).toBe(false);
+      blocked = false;
+      await expect(sessionManager.finishSession(session.id, 'close')).resolves.toEqual({ action: 'close', removed: true });
+      expect(await repos.sessions.findById(session.id)).toBeNull();
+      expect(mockHost.executedCommands.slice(start).some(({ command }) => command.startsWith('git branch -d'))).toBe(false);
+    });
+
     it('accepts the agent-validated origin only for close requests', async () => {
       await expect(sessionManager.finishSession(
         'missing-session',

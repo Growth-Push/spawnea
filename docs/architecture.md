@@ -642,6 +642,7 @@ all tracked, untracked, and ignored files.
 Implicit parent cleanup of an ordinary child rechecks Git cleanliness after verified runtime termination and aborts if changes appeared or status cannot be read.
 
 A per-session removal guard prevents overlapping removal, unadoption, and new child creation.
+Stash, discard and worktree removal also require a conclusive lock-free inspection of the target Git administrative directory, including retained registrations for missing directories. Locks are never removed or classified as stale by Spawnea. Recovery is manual and separately authorized. Clean close skips reset/clean only after a fresh status including ignored files; dirty close retains its explicit policy. Runtime `done` is not finalization success: cleanup errors retain the session for retry, and only completed resource and record cleanup reports removal. See [Git locks and incomplete finalization](control-api.md#git-locks-and-incomplete-finalization).
 Child creation holds its counter until startup succeeds or rollback finishes;
 removal waits on a per-parent completion signal before inspecting workspace users.
 The wait fails after 30 seconds or is cancelled on shutdown. No cleanup begins on

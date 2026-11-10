@@ -74,8 +74,8 @@ export function ControlFinalizationModal({
           </div>
 
           <p className="text-xs text-slate-400">
-            Close and integration are blocked while another session shares this worktree.
-            Close those sessions first; reparenting does not move their workspace.
+            Safety policy (not a sharing detection): if another session shares this worktree, close and integration are blocked.
+            In that case, close those sessions first; reparenting does not move their workspace.
             Children with independent worktrees remain running as root sessions.
           </p>
 
