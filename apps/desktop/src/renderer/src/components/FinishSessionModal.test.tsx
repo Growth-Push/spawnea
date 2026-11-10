@@ -55,6 +55,23 @@ describe('FinishSessionModal (Task 6.2.1)', () => {
     expect(screen.getByText(/Integrate into/)).toBeDefined();
     expect(screen.getByText('Close Worktree (Discard Changes, Keep Task Branch)')).toBeDefined();
     expect(screen.getByText('Ignore / Keep Working')).toBeDefined();
+    expect(screen.getByText(/Safety policy \(not a sharing detection\)/)).toBeDefined();
+  });
+
+  it('keeps a stopped session open on a lock failure and allows a recovered retry', async () => {
+    const onFinish = vi.fn()
+      .mockRejectedValueOnce(new Error('Runtime may already be stopped; finalization is not complete. Verify and recover the lock manually with separate authorization, then retry.'))
+      .mockResolvedValueOnce(true);
+    const onClose = vi.fn();
+    render(<FinishSessionModal isOpen session={mockWorktreeSession} onClose={onClose} onFinish={onFinish} />);
+    fireEvent.click(screen.getByText('Close Worktree (Discard Changes, Keep Task Branch)'));
+    fireEvent.click(screen.getByTestId('finish-close-confirm-checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close Worktree' }));
+    await screen.findByText(/finalization is not complete/);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close Worktree' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onFinish).toHaveBeenCalledTimes(2);
   });
 
   it('submits integrate action by default', async () => {

@@ -365,11 +365,43 @@ export class GitService {
     return absent.exitCode === 0;
   }
 
+  /** Never infer that a Git lock is stale. Recovery belongs to the operator. */
+  async verifyWorktreeLocksAbsent(host: HostAdapter, repositoryPath: string, worktreePath: string): Promise<void> {
+    const result = await host.execute(
+      `common=$(git rev-parse --git-common-dir) || exit 1; ` +
+      // Resolve existing ancestors physically with the host shell, allowing missing leaves.
+      // Ambiguous symlinks or missing dot-segment ancestors must fail closed.
+      `resolve_path() ( case "$1" in /*) p=$1;; *) p=$PWD/$1;; esac; ` +
+      `if [ -d "$p" ]; then CDPATH= cd -P "$p" && pwd -P; else ` +
+      `[ ! -L "$p" ] || exit 1; leaf=\${p##*/}; case "$leaf" in ''|.|..) exit 1;; esac; ` +
+      `parent=\${p%/*}; resolved=$(resolve_path "\${parent:-/}") || exit 1; printf '%s/%s\\n' "\${resolved%/}" "$leaf"; fi ); ` +
+      `common=$(resolve_path "$common") || exit 1; ` +
+      `target=$(resolve_path ${escapeShellPath(trimTrailingSlashes(worktreePath) + '/.git')}) || exit 1; ` +
+      `check_dir() { [ -d "$1" ] && [ -r "$1" ] && [ -x "$1" ] || return 1; ` +
+      `locks=$(find "$1" -name '*.lock' -print) || return 1; [ -z "$locks" ]; }; ` +
+      `if [ -e "$target" ] || [ -L "$target" ]; then ` +
+      `dir=$(git -C ${escapeShellPath(worktreePath)} rev-parse --absolute-git-dir) || exit 1; check_dir "$dir" || exit 1; ` +
+      `else [ -d "$common" ] && [ -r "$common" ] && [ -x "$common" ] || exit 1; ` +
+      `if [ -e "$common/worktrees" ]; then ` +
+      `[ -r "$common/worktrees" ] && [ -x "$common/worktrees" ] || exit 1; ` +
+      `for dir in "$common"/worktrees/*; do [ -d "$dir" ] || continue; ` +
+      `registered=$(cat "$dir/gitdir") || exit 1; [ -n "$registered" ] || exit 1; ` +
+      `case "$registered" in /*) ;; *) registered=$dir/$registered;; esac; ` +
+      `registered=$(resolve_path "$registered") || exit 1; ` +
+      `if [ "$registered" = "$target" ]; then check_dir "$dir" || exit 1; fi; done; fi; fi; printf 'CLEAR'`,
+      { cwd: repositoryPath, timeoutMs: GitService.statusTimeoutMs }
+    ).catch(() => null);
+    if (!result || result.exitCode !== 0 || result.stdout !== 'CLEAR') {
+      throw new Error(`Worktree finalization blocked for '${worktreePath}': a Git lock exists or lock inspection is inconclusive. Runtime may already be stopped; finalization is not complete. Verify and recover the lock manually with separate authorization, then retry. Spawnea never removes locks or determines staleness.`);
+    }
+  }
+
   async removeManagedWorktree(
     host: HostAdapter,
     repositoryPath: string,
     worktreePath: string
   ): Promise<boolean> {
+    await this.verifyWorktreeLocksAbsent(host, repositoryPath, worktreePath);
     const escaped = escapeShellPath(worktreePath);
     const result = await host.execute(
       `git worktree remove -- ${escaped}`,
@@ -398,6 +430,7 @@ export class GitService {
     host: HostAdapter,
     identity: ManagedWorktreeIdentity
   ): Promise<void> {
+    await this.verifyWorktreeLocksAbsent(host, identity.repositoryPath, identity.worktreePath);
     const message = `Spawnea worktree: ${identity.branch}`;
     const result = await host.execute(
       `git stash push --all --message ${escapeShellPath(message)}`,
@@ -421,6 +454,14 @@ export class GitService {
     host: HostAdapter,
     identity: ManagedWorktreeIdentity
   ): Promise<void> {
+    await this.verifyWorktreeLocksAbsent(host, identity.repositoryPath, identity.worktreePath);
+    const before = await host.execute('git status --porcelain=v1 --ignored --untracked-files=all', {
+      cwd: identity.worktreePath,
+    });
+    if (before.exitCode !== 0) {
+      throw new Error('Could not inspect managed worktree changes; finalization is not complete. Retry after manual inspection.');
+    }
+    if (before.stdout.length === 0) return;
     const reset = await host.execute('git reset --hard HEAD', { cwd: identity.worktreePath });
     if (reset.exitCode !== 0) {
       const details = reset.stderr.trim() || reset.stdout.trim() || `exit code ${reset.exitCode}`;

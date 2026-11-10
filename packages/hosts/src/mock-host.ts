@@ -119,6 +119,9 @@ export class MockHostAdapter implements HostAdapter {
     }
 
     // Default built-in mock behaviors for common commands
+    if (command.startsWith('common=$(git rev-parse --git-common-dir)')) {
+      return { stdout: 'CLEAR', stderr: '', exitCode: 0 };
+    }
     if (command.startsWith('test -d ') || command.includes('test -d ')) {
       const match = command.match(/test -d\s+(?:'([^']+)'|"([^"]+)"|(\S+))/);
       const dirPath = match ? (match[1] || match[2] || match[3]) : '';
