@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtemp, writeFile, readFile, rm, stat, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -187,8 +187,9 @@ describe('operator-confirmed lock release with real Git', () => {
       await expect(f.service.discardManagedWorktreeChanges(f.host, f.identity)).rejects.toThrow('[git-lock-blocked]');
 
       const released = await f.service.backupAndReleaseWorktreeLocks(f.host, f.identity.worktreePath, new Date('2026-11-10T12:00:00.000Z'));
-      const backupPath = join(f.root, '.git', 'spawnea-lock-backups', 'child-2026-11-10T12-00-00-000Z');
-      expect(released).toEqual({ backupPath, locks: ['index.lock'] });
+      expect(released?.locks).toEqual(['index.lock']);
+      const backupPath = released!.backupPath;
+      expect(backupPath.startsWith(join(f.root, '.git', 'spawnea-lock-backups', 'child-2026-11-10T12-00-00-000Z-'))).toBe(true);
       expect(await readFile(join(backupPath, 'index.lock'), 'utf8')).toBe('held');
       await expect(stat(f.lock)).rejects.toThrow();
 
@@ -206,6 +207,18 @@ describe('operator-confirmed lock release with real Git', () => {
     try {
       await expect(f.service.backupAndReleaseWorktreeLocks(f.host, f.identity.worktreePath)).resolves.toBeNull();
       await expect(stat(join(f.root, '.git', 'spawnea-lock-backups'))).rejects.toThrow();
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves every lock in place when a non-regular *.lock entry exists', async () => {
+    const f = await fixture();
+    try {
+      await writeFile(f.lock, 'held');
+      await mkdir(join(f.root, '.git', 'worktrees', 'child', 'odd.lock'));
+      await expect(f.service.backupAndReleaseWorktreeLocks(f.host, f.identity.worktreePath)).rejects.toThrow('need manual handling');
+      expect(await readFile(f.lock, 'utf8')).toBe('held');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
