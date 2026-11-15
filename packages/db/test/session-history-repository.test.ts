@@ -634,4 +634,80 @@ describe('SqliteSessionHistoryRepository', () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('preserves changedAt TTL when marking active turns interrupted and expires at original day-7 boundary', async () => {
+    const repo = new SqliteSessionHistoryRepository(conn.db);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const t0 = 10_000_000;
+
+    await repo.saveTurn({
+      id: 'turn-day0-active',
+      sessionId: 'sess-1',
+      harness: 'codex',
+      prompt: 'day 0 prompt',
+      output: 'day 0 output',
+      outputGeneration: 1,
+      baseOffset: 0,
+      version: 1,
+      status: 'working',
+      observedWorking: true,
+      outputChanges: 1,
+      promptDelimiterPairs: 1,
+      createdAt: t0,
+      changedAt: t0,
+    });
+    await repo.saveTurn({
+      id: 'turn-already-expired',
+      sessionId: 'sess-1',
+      harness: 'codex',
+      prompt: 'stale active',
+      output: 'stale output',
+      outputGeneration: 1,
+      baseOffset: 0,
+      version: 1,
+      status: 'needs_input',
+      observedWorking: true,
+      outputChanges: 1,
+      promptDelimiterPairs: 1,
+      createdAt: t0,
+      changedAt: t0,
+    });
+
+    // Restart at day 6: turn-day0-active survives and transitions to interrupted, keeping changedAt = t0
+    const day6 = t0 + 6 * dayMs;
+    const interruptedCount = await repo.markActiveTurnsInterrupted(day6);
+    expect(interruptedCount).toBe(2);
+
+    const archivedAtDay6 = await repo.findTurnById('turn-day0-active', day6);
+    expect(archivedAtDay6?.status).toBe('interrupted');
+    expect(archivedAtDay6?.interrupted).toBe(true);
+    expect(archivedAtDay6?.outputGeneration).toBe(2);
+    expect(archivedAtDay6?.changedAt).toBe(t0);
+
+    // At day 7 + 1s (only 1 day after restart, >7 days since t0), turn must expire cleanly
+    const pastDay7 = t0 + 7 * dayMs + 1_000;
+    const pruned = await repo.pruneExpiredAndExcess(pastDay7);
+    expect(pruned.deletedTurns).toBe(2);
+    expect(await repo.findTurnById('turn-day0-active', pastDay7)).toBeNull();
+
+    // Restart after an active turn is already older than 7 days: pruned rather than extended
+    await repo.saveTurn({
+      id: 'turn-expired-before-restart',
+      sessionId: 'sess-2',
+      harness: 'codex',
+      prompt: 'old active',
+      output: 'old output',
+      outputGeneration: 1,
+      baseOffset: 0,
+      version: 1,
+      status: 'unknown',
+      observedWorking: false,
+      outputChanges: 0,
+      promptDelimiterPairs: 1,
+      createdAt: t0,
+      changedAt: t0,
+    });
+    expect(await repo.markActiveTurnsInterrupted(pastDay7)).toBe(0);
+    expect(await repo.findTurnById('turn-expired-before-restart', pastDay7)).toBeNull();
+  });
 });

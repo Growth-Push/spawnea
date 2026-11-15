@@ -472,6 +472,40 @@ describe('MobileApiServer', () => {
       expect(resNotFound.status).toBe(404);
     });
 
+    it('reports truncated: false when live /output returns full >64 KiB payload and truncated: true when persisted snapshot trimmed bytes', async () => {
+      const largeOutput = 'A'.repeat(65_537);
+      await repositories.sessions.save(mockSession('sess-live-large', { status: 'idle' }));
+      await repositories.sessions.save(mockSession('sess-persisted-large', { status: 'disconnected' }));
+      sessionManager.captureSessionTerminal.mockResolvedValueOnce(largeOutput);
+      await repositories.sessionHistory!.upsertSnapshot({
+        sessionId: 'sess-persisted-large',
+        output: largeOutput,
+        items: [],
+      });
+
+      const { baseUrl } = await createAndStartServer();
+
+      const liveRes = await fetch(`${baseUrl}/api/v1/sessions/sess-live-large/output`, {
+        headers: { Authorization: `Bearer ${rawSecretKey}` },
+      });
+      expect(liveRes.status).toBe(200);
+      const liveData = await jsonBody(liveRes);
+      expect(liveData.available).toBe(true);
+      expect(liveData.status).toBe('live');
+      expect(liveData.output).toBe(largeOutput);
+      expect(liveData.truncated).toBe(false);
+
+      const persistedRes = await fetch(`${baseUrl}/api/v1/sessions/sess-persisted-large/output`, {
+        headers: { Authorization: `Bearer ${rawSecretKey}` },
+      });
+      expect(persistedRes.status).toBe(200);
+      const persistedData = await jsonBody(persistedRes);
+      expect(persistedData.available).toBe(false);
+      expect(persistedData.truncated).toBe(true);
+      expect(persistedData.lastOutput.truncated).toBe(true);
+      expect(Buffer.byteLength(persistedData.lastOutput.output, 'utf8')).toBe(65_536);
+    });
+
     it('reports unavailable, never live, if terminal capture fails on an active session', async () => {
       await repositories.sessions.save(mockSession('sess-fail-capture', { status: 'idle' }));
       const customSessionManager = {

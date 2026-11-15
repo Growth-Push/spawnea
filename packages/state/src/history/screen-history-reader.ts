@@ -67,6 +67,149 @@ function parseScreenCursor(cursor?: string): ParsedScreenCursor {
   };
 }
 
+interface GroupedScreenBlock {
+  role: SessionHistoryRole;
+  lines: string[];
+  isStart?: boolean;
+  isEnd?: boolean;
+  endLineIndex: number;
+}
+
+function prepareScreenLines(context: HarnessHistoryContext): string[] {
+  const rawLines = context.tailLines || [];
+  let lines = cleanTailLines(rawLines);
+  const normHarness = normalizeHarnessForScreen(context.harness);
+  if (normHarness === 'codex' || (!normHarness && lines.some((l) => /^\s*›\s*(?:Ask Codex|Ask anything|$)/i.test(l) || /\?\s+for shortcuts/i.test(l)))) {
+    lines = stripCodexComposerTail(lines);
+  }
+  if (normHarness === 'claude' || (!normHarness && lines.some((l) => /^\s*❯\s*Try\s+"/i.test(l) || /⏵⏵\s+auto mode/i.test(l)))) {
+    lines = stripClaudeComposerTail(lines);
+  }
+  return lines;
+}
+
+function formatBlockToItem(
+  sessionId: string,
+  block: GroupedScreenBlock,
+  maxChars: number
+): SessionHistoryItem | null {
+  const joined = block.lines.join('\n').trim();
+  if (!joined) return null;
+
+  const { text, textTruncated } = boundText(joined, maxChars);
+  let turnBoundary: TurnBoundary | undefined = undefined;
+  if (block.isStart && block.isEnd) {
+    turnBoundary = 'single';
+  } else if (block.isStart) {
+    turnBoundary = 'start';
+  } else if (block.isEnd) {
+    turnBoundary = 'end';
+  }
+
+  const blockStartLine = block.endLineIndex - block.lines.length;
+  return {
+    id: `${sessionId}-screen-l${blockStartLine + 1}`,
+    role: block.role,
+    text,
+    source: 'screen',
+    turnBoundary,
+    textTruncated,
+  };
+}
+
+function iterateScreenBlocks(
+  effectiveLines: readonly string[],
+  effectiveStartLine: number,
+  onBlock: (block: GroupedScreenBlock) => boolean | void
+): void {
+  let currentBlock: GroupedScreenBlock | null = null;
+  const emit = (block: GroupedScreenBlock): boolean => onBlock(block) !== false;
+
+  for (let idx = 0; idx < effectiveLines.length; idx++) {
+    const line = effectiveLines[idx]!;
+    const absoluteLineIndex = effectiveStartLine + idx + 1;
+    const promptMatch = line.match(PROMPT_LINE_REGEX);
+    const isMenuChoice = MENU_CHOICE_REGEX.test(line);
+    const isTool = TOOL_LINE_REGEX.test(line);
+    const isCompletion = COMPLETION_LINE_REGEX.test(line);
+
+    if (promptMatch && !isMenuChoice && promptMatch[1]?.trim()) {
+      if (currentBlock && !emit(currentBlock)) return;
+      currentBlock = {
+        role: 'user',
+        lines: [promptMatch[1].trim()],
+        isStart: true,
+        endLineIndex: absoluteLineIndex,
+      };
+      continue;
+    }
+
+    if (isTool) {
+      if (
+        currentBlock &&
+        currentBlock.role === 'tool' &&
+        !line.startsWith('•') &&
+        !line.startsWith('●') &&
+        !/^\s*(?:Ran|Running)\s+\d+\s+/.test(line)
+      ) {
+        currentBlock.lines.push(line);
+        currentBlock.endLineIndex = absoluteLineIndex;
+        continue;
+      }
+      if (currentBlock && !emit(currentBlock)) return;
+      currentBlock = {
+        role: 'tool',
+        lines: [line],
+        endLineIndex: absoluteLineIndex,
+      };
+      continue;
+    }
+
+    if (isCompletion) {
+      if (currentBlock) {
+        currentBlock.isEnd = true;
+        currentBlock.lines.push(line);
+        currentBlock.endLineIndex = absoluteLineIndex;
+        if (!emit(currentBlock)) return;
+        currentBlock = null;
+      } else if (!emit({
+        role: 'agent',
+        lines: [line],
+        isEnd: true,
+        endLineIndex: absoluteLineIndex,
+      })) {
+        return;
+      }
+      continue;
+    }
+
+    // Neither prompt, tool, nor completion: check if this is an indented continuation
+    const isIndented = /^\s+/.test(line);
+    if (currentBlock && isIndented && (currentBlock.role === 'user' || currentBlock.role === 'tool')) {
+      currentBlock.lines.push(currentBlock.role === 'user' ? line.trim() : line);
+      currentBlock.endLineIndex = absoluteLineIndex;
+      continue;
+    }
+
+    if (currentBlock && currentBlock.role === 'agent') {
+      currentBlock.lines.push(line);
+      currentBlock.endLineIndex = absoluteLineIndex;
+      continue;
+    }
+
+    // Un-indented line after user prompt or tool output starts an agent block
+    if (currentBlock && !emit(currentBlock)) return;
+    currentBlock = {
+      role: 'agent',
+      lines: [line],
+      endLineIndex: absoluteLineIndex,
+    };
+  }
+  if (currentBlock) {
+    emit(currentBlock);
+  }
+}
+
 export class ScreenHistoryReader implements HarnessHistoryReader {
   readonly harnessId = 'screen';
 
@@ -74,19 +217,51 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
     return true;
   }
 
+  /**
+   * Extracts up to `maxItems` newest parsed screen items from the tail in bounded memory
+   * without scanning forward through paginated slices.
+   */
+  async readLatestItems(
+    context: HarnessHistoryContext,
+    maxItems: number = DEFAULT_LIMIT,
+    maxItemChars: number = DEFAULT_MAX_ITEM_CHARS
+  ): Promise<{ items: SessionHistoryItem[]; truncated: boolean }> {
+    const lines = prepareScreenLines(context);
+    if (lines.length === 0) {
+      return { items: [], truncated: false };
+    }
+
+    const limit = Math.max(0, Math.trunc(maxItems));
+    const tail: SessionHistoryItem[] = [];
+    let truncated = false;
+
+    iterateScreenBlocks(lines, 0, (block) => {
+      const item = formatBlockToItem(context.sessionId, block, maxItemChars);
+      if (!item) return;
+      if (limit === 0) {
+        truncated = true;
+        return false;
+      }
+      if (tail.length >= limit) {
+        truncated = true;
+      }
+      tail.push(item);
+      if (tail.length >= limit * 2) {
+        tail.splice(0, tail.length - limit);
+      }
+    });
+
+    return {
+      items: limit === 0 ? [] : tail.slice(-limit),
+      truncated,
+    };
+  }
+
   async readHistory(
     context: HarnessHistoryContext,
     query?: SessionHistoryQuery
   ): Promise<SessionHistoryResult> {
-    const rawLines = context.tailLines || [];
-    let lines = cleanTailLines(rawLines);
-    const normHarness = normalizeHarnessForScreen(context.harness);
-    if (normHarness === 'codex' || (!normHarness && lines.some((l) => /^\s*›\s*(?:Ask Codex|Ask anything|$)/i.test(l) || /\?\s+for shortcuts/i.test(l)))) {
-      lines = stripCodexComposerTail(lines);
-    }
-    if (normHarness === 'claude' || (!normHarness && lines.some((l) => /^\s*❯\s*Try\s+"/i.test(l) || /⏵⏵\s+auto mode/i.test(l)))) {
-      lines = stripClaudeComposerTail(lines);
-    }
+    const lines = prepareScreenLines(context);
 
     const captureSuccess = context.captureSuccess ?? true;
     const parsed = parseScreenCursor(query?.cursor);
@@ -188,136 +363,22 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
       ? Math.min(Math.max((query?.recentExchanges || query?.limit || 20) * 5, DEFAULT_LIMIT), MAX_PAGE_ITEMS_RECENT)
       : (query?.limit || DEFAULT_LIMIT);
 
-    interface GroupedBlock {
-      role: SessionHistoryRole;
-      lines: string[];
-      isStart?: boolean;
-      isEnd?: boolean;
-      endLineIndex: number;
-    }
-
-    const blocks: GroupedBlock[] = [];
-    let currentBlock: GroupedBlock | null = null;
-
-    for (let idx = 0; idx < effectiveLines.length; idx++) {
-      const line = effectiveLines[idx];
-      const absoluteLineIndex = effectiveStartLine + idx + 1;
-      const promptMatch = line.match(PROMPT_LINE_REGEX);
-      const isMenuChoice = MENU_CHOICE_REGEX.test(line);
-      const isTool = TOOL_LINE_REGEX.test(line);
-      const isCompletion = COMPLETION_LINE_REGEX.test(line);
-
-      if (promptMatch && !isMenuChoice && promptMatch[1]?.trim()) {
-        if (currentBlock) blocks.push(currentBlock);
-        currentBlock = {
-          role: 'user',
-          lines: [promptMatch[1].trim()],
-          isStart: true,
-          endLineIndex: absoluteLineIndex,
-        };
-        continue;
-      }
-
-      if (isTool) {
-        if (
-          currentBlock &&
-          currentBlock.role === 'tool' &&
-          !line.startsWith('•') &&
-          !line.startsWith('●') &&
-          !/^\s*(?:Ran|Running)\s+\d+\s+/.test(line)
-        ) {
-          currentBlock.lines.push(line);
-          currentBlock.endLineIndex = absoluteLineIndex;
-          continue;
-        }
-        if (currentBlock) blocks.push(currentBlock);
-        currentBlock = {
-          role: 'tool',
-          lines: [line],
-          endLineIndex: absoluteLineIndex,
-        };
-        continue;
-      }
-
-      if (isCompletion) {
-        if (currentBlock) {
-          currentBlock.isEnd = true;
-          currentBlock.lines.push(line);
-          currentBlock.endLineIndex = absoluteLineIndex;
-          blocks.push(currentBlock);
-          currentBlock = null;
-        } else {
-          blocks.push({
-            role: 'agent',
-            lines: [line],
-            isEnd: true,
-            endLineIndex: absoluteLineIndex,
-          });
-        }
-        continue;
-      }
-
-      // Neither prompt, tool, nor completion: check if this is an indented continuation
-      const isIndented = /^\s+/.test(line);
-      if (currentBlock && isIndented && (currentBlock.role === 'user' || currentBlock.role === 'tool')) {
-        currentBlock.lines.push(currentBlock.role === 'user' ? line.trim() : line);
-        currentBlock.endLineIndex = absoluteLineIndex;
-        continue;
-      }
-
-      if (currentBlock && currentBlock.role === 'agent') {
-        currentBlock.lines.push(line);
-        currentBlock.endLineIndex = absoluteLineIndex;
-        continue;
-      }
-
-      // Un-indented line after user prompt or tool output starts an agent block
-      if (currentBlock) blocks.push(currentBlock);
-      currentBlock = {
-        role: 'agent',
-        lines: [line],
-        endLineIndex: absoluteLineIndex,
-      };
-    }
-    if (currentBlock) {
-      blocks.push(currentBlock);
-    }
-
     const items: SessionHistoryItem[] = [];
     let nextCursorLine = lines.length;
     let hasMore = false;
 
-    for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i];
-      const joined = block.lines.join('\n').trim();
-      if (!joined) continue;
+    iterateScreenBlocks(effectiveLines, effectiveStartLine, (block) => {
+      const item = formatBlockToItem(context.sessionId, block, maxChars);
+      if (!item) return;
 
       if (items.length >= limit) {
         hasMore = true;
         nextCursorLine = block.endLineIndex - block.lines.length;
-        break;
+        return false;
       }
 
-      const { text, textTruncated } = boundText(joined, maxChars);
-      let turnBoundary: TurnBoundary | undefined = undefined;
-      if (block.isStart && block.isEnd) {
-        turnBoundary = 'single';
-      } else if (block.isStart) {
-        turnBoundary = 'start';
-      } else if (block.isEnd) {
-        turnBoundary = 'end';
-      }
-
-      const blockStartLine = block.endLineIndex - block.lines.length;
-      items.push({
-        id: `${context.sessionId}-screen-l${blockStartLine + 1}`,
-        role: block.role,
-        text,
-        source: 'screen',
-        turnBoundary,
-        textTruncated,
-      });
-    }
+      items.push(item);
+    });
 
     return {
       sessionId: context.sessionId,

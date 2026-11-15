@@ -89,6 +89,37 @@ describe('persistSessionScreenSnapshot', () => {
     expect(texts).not.toContain('Question 1');
   });
 
+  it('retains the newest 50 items ending with Answer 50 when 50 exchanges exceed 4,000 blocks', async () => {
+    const tailLines: string[] = [];
+    for (let i = 1; i <= 50; i += 1) {
+      tailLines.push(`❯ Question ${i}`);
+      for (let step = 1; step <= 100; step += 1) {
+        tailLines.push(`• Ran step ${step}-${i}`);
+      }
+      tailLines.push(`Answer ${i}`);
+    }
+
+    await persistSessionScreenSnapshot({
+      repositories,
+      logger,
+      sessionId: 'sess-multi-page',
+      harness: 'claude',
+      tailLines,
+      captureSuccess: true,
+      capturedAt: 60_000,
+    });
+
+    const snapshot = await repositories.sessionHistory?.findSnapshotBySessionId('sess-multi-page', 60_100);
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.items).toHaveLength(MAX_SNAPSHOT_HISTORY_ITEMS);
+    expect(snapshot?.historyTruncated).toBe(true);
+
+    const texts = snapshot?.items.map((item) => item.text) ?? [];
+    expect(texts[texts.length - 1]).toBe('Answer 50');
+    expect(texts).not.toContain('Answer 40');
+    expect(texts).not.toContain('Question 1');
+  });
+
   it('does not refresh capturedAt or keep an expired snapshot alive when capture failed or was empty', async () => {
     const dayMs = 24 * 60 * 60 * 1000;
     const t0 = 1_000_000;

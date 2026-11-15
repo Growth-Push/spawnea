@@ -526,6 +526,24 @@ describe('Spawnea control operations contract', () => {
     });
   });
 
+  it('maps Invalid maxBytes turn read failures to invalid_request', async () => {
+    const getTurn = vi.fn().mockRejectedValue(
+      new Error('Invalid maxBytes (1): must be at least 4 bytes to read the next UTF-8 character without truncation'),
+    );
+    const operations = createControlOperations({ getTurn } as unknown as AgentControlService);
+    const res = await operations.call('spawnea_get_turn', {
+      turnId: '00000000-0000-4000-8000-000000000001',
+      maxBytes: 1,
+      outputMode: 'raw',
+    });
+    expect(res).toMatchObject({
+      ok: false,
+      error: {
+        code: 'invalid_request',
+      },
+    });
+  });
+
   it('discovers AGY and Shell harnesses and returns selected harness on child creation via the control API', async () => {
     const mockState = {
       apiVersion: 'v1' as const,

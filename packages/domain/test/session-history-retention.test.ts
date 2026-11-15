@@ -53,4 +53,21 @@ describe('session history retention helpers', () => {
       expect(result.truncated).toBe(result.byteLength < utf8ByteLength(text));
     }
   });
+
+  it('preserves leading U+FEFF BOM characters during head and tail byte truncation', () => {
+    const tailInput = 'x\uFEFFabc';
+    const tailResult = truncateUtf8Tail(tailInput, 6);
+    expect(tailResult.text).toBe('\uFEFFabc');
+    expect(tailResult.byteLength).toBe(6);
+    expect(utf8ByteLength(tailResult.text)).toBe(6);
+    expect(tailResult.droppedBytes).toBe(1);
+    expect(tailResult.truncated).toBe(true);
+
+    const headInput = '\uFEFFabc';
+    const headResult = truncateUtf8Head(headInput, 4);
+    expect(headResult.text).toBe('\uFEFFa');
+    expect(headResult.byteLength).toBe(4);
+    expect(utf8ByteLength(headResult.text)).toBe(4);
+    expect(headResult.truncated).toBe(true);
+  });
 });

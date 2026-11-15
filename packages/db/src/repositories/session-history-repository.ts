@@ -121,12 +121,13 @@ function boundSnapshotItems(
   inputItems: readonly SessionHistoryItem[] | undefined,
   maxItems: number,
   maxBytes: number,
+  initialTruncated = false,
 ): { items: SessionHistoryItem[]; historyTruncated: boolean } {
   if (!inputItems || inputItems.length === 0) {
-    return { items: [], historyTruncated: false };
+    return { items: [], historyTruncated: initialTruncated };
   }
 
-  let historyTruncated = inputItems.length > maxItems;
+  let historyTruncated = initialTruncated || inputItems.length > maxItems;
   let items: SessionHistoryItem[] = inputItems.slice(-maxItems).map((item) => {
     const trimmed = truncateUtf8Head(item.text, Math.max(256, Math.floor(maxBytes / 2)));
     if (trimmed.truncated) historyTruncated = true;
@@ -207,6 +208,7 @@ export class SqliteSessionHistoryRepository implements SessionHistoryRepository 
       input.items,
       this.limits.maxSnapshotItems,
       this.limits.maxSnapshotBytes,
+      Boolean(input.historyTruncated),
     );
     const itemsJson = JSON.stringify(items);
 
@@ -415,7 +417,8 @@ export class SqliteSessionHistoryRepository implements SessionHistoryRepository 
             interrupted: true,
             outputGeneration: mapped.outputGeneration + 1,
             version: mapped.version + 1,
-            changedAt: nowMs,
+            // Preserve the last observation timestamp so restart archival never extends retention TTL.
+            changedAt: mapped.changedAt,
           };
           const payloadBytes = serializeTurnPayloadBytes(updated);
           tx.run(sql`
@@ -424,7 +427,7 @@ export class SqliteSessionHistoryRepository implements SessionHistoryRepository 
                 interrupted = 1,
                 output_generation = ${updated.outputGeneration},
                 version = ${updated.version},
-                changed_at = ${nowMs},
+                changed_at = ${updated.changedAt},
                 payload_bytes = ${payloadBytes}
             WHERE id = ${row.id}
           `);

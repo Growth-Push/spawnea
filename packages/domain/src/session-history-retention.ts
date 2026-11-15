@@ -1,5 +1,5 @@
 const utf8Encoder = new TextEncoder();
-const utf8Decoder = new TextDecoder();
+const utf8Decoder = new TextDecoder('utf-8', { ignoreBOM: true });
 
 /** Seven-day retention window for persisted session snapshots, turns, and request metadata. */
 export const SESSION_HISTORY_RETENTION_DAYS = 7;

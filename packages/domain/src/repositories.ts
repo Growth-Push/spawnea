@@ -77,6 +77,7 @@ export interface SaveSessionSnapshotInput {
   output: string;
   source?: SessionHistorySource;
   items?: SessionHistoryItem[];
+  historyTruncated?: boolean;
   capturedAt?: number;
   updatedAt?: number;
 }

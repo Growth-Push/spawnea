@@ -399,4 +399,33 @@ describe('ScreenHistoryReader', () => {
     expect(expired.cursorStatus).toBe('expired');
     expect(expired.cursorExpired).toBe(true);
   });
+
+  it('readLatestItems retains the newest bounded items across >4,000 blocks without paginated drain caps', async () => {
+    const tailLines: string[] = [];
+    for (let i = 1; i <= 50; i += 1) {
+      tailLines.push(`❯ Question ${i}`);
+      for (let step = 1; step <= 100; step += 1) {
+        tailLines.push(`• Ran step ${step}-${i}`);
+      }
+      tailLines.push(`Answer ${i}`);
+    }
+
+    const latest = await reader.readLatestItems(
+      {
+        sessionId: 'sess-large-tail',
+        harness: 'claude',
+        worktreePath: '/ws',
+        isLocal: false,
+        tailLines,
+        captureSuccess: true,
+      },
+      50,
+    );
+
+    expect(latest.truncated).toBe(true);
+    expect(latest.items).toHaveLength(50);
+    expect(latest.items[latest.items.length - 1]?.text).toBe('Answer 50');
+    expect(latest.items.some((item) => item.text === 'Answer 40')).toBe(false);
+    expect(latest.items.some((item) => item.text === 'Question 1')).toBe(false);
+  });
 });

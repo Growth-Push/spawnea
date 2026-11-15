@@ -4,9 +4,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Repositories } from '@spawnea/db';
 import {
   DEFAULT_MOBILE_API_PORT,
-  MAX_SNAPSHOT_OUTPUT_BYTES,
   SPAWNEA_CONTROL_API_VERSION,
-  utf8ByteLength,
   type CatalogApiConfig,
   type Logger,
   type PersistedSessionSnapshot,
@@ -601,7 +599,7 @@ export class MobileApiServer {
       stale: false,
       stored: false,
       updatedAt: nowIso,
-      truncated: utf8ByteLength(output ?? '') > MAX_SNAPSHOT_OUTPUT_BYTES,
+      truncated: false,
     });
   }
 

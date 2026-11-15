@@ -176,7 +176,9 @@ additional unread output pages remain after the returned cursor, false at EOF),
 additive `retainedTruncated` (true when persisted retention caps such as the
 `256 KiB` turn output limit trimmed earlier bytes), `cursorExpired`,
 `cursorStatus` (`initial`, `valid`, `eof`, `expired`, `invalid`, `mismatched`,
-`restarted`), `archived`, and `interrupted`. `waitMs` is bounded to 30 seconds
+`restarted`), `archived`, and `interrupted`. If `maxBytes` is smaller than the
+next UTF-8 character at the current cursor, `spawnea_get_turn` fails with
+`invalid_request` instead of returning an empty page. `waitMs` is bounded to 30 seconds
 and wakes on output or when the turn reaches `needs_input`, `completed`,
 `failed`, or `interrupted`. A turn completes on a
 response delimiter, an `idle` state rule, process exit, or a screen that stayed
@@ -191,7 +193,7 @@ status) locally in cleartext SQLite without continuously recording PTY streams (
 persisted turn output comes from rendered terminal text and can contain
 sensitive user data readable by the local OS user and authorized callers. On Desktop restart, previously active persisted turns
 (`working`, `needs_input`, `unknown`) transition to `interrupted`, increment
-`outputGeneration`, and remain read-only (`archived: true`, never auto-completed
+`outputGeneration`, preserve the prior retention timestamp (`changedAt`), and remain read-only (`archived: true`, never auto-completed
 or auto-resumed); owning-session authorization is validated before returning any
 persisted turn, while live replay deduplication caches and `Agent Context`
 call records remain strictly volatile and are lost when Spawnea restarts.

@@ -221,6 +221,9 @@ export class SessionSupervisor {
             );
             tailLines = detailed.lines;
             captureSucceeded = detailed.success && paneExists;
+            if (detailed.error) {
+              hostReachable = false;
+            }
           } else {
             tailLines = await this.tmuxManager.capturePaneTail(
               host,
@@ -284,6 +287,9 @@ export class SessionSupervisor {
         tailLines: snapshotLines,
         captureSuccess: true,
       });
+      if (generation !== this.pollingGeneration) {
+        return result;
+      }
     }
 
     // Auto-detect candidate output artifacts from terminal tail lines

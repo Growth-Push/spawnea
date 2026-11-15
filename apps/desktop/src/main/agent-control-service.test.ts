@@ -2484,6 +2484,205 @@ describe('AgentControlService', () => {
         // Only the explicit sendPrompt calls above occurred (no retries from failed capture refreshes)
         expect(sendPromptSpy.mock.calls.length).toBe(callsBefore + 4);
       });
+
+      it('rejects getTurn maxBytes smaller than the next UTF-8 character in raw and compact modes and preserves BOM cursors', async () => {
+        let captureOutput = 'Codex ready\n';
+        const emojiMgr = {
+          ...sessionManager,
+          sendPrompt: vi.fn(async () => ({ delivered: true, deliveryMethod: 'tmux' })),
+          captureSessionTerminal: vi.fn(async () => captureOutput),
+        };
+        const emojiService = new AgentControlService({
+          repositories,
+          sessionManager: emojiMgr as unknown as SessionManager,
+          logger: createLogger('test:control-utf8-maxbytes'),
+        });
+
+        await repositories.sessions.save(session('existing', { status: 'idle' }));
+        const sent = await emojiService.sendPrompt({ target: 'existing', prompt: 'Emit emoji and BOM' });
+
+        // First page starts with 4-byte 🚀, followed by \uFEFF + 'done'
+        captureOutput = 'Codex ready\n🚀\uFEFFdone\nWorked for 1s · done\n';
+        for (const maxBytes of [1, 2, 3] as const) {
+          await expect(
+            emojiService.getTurn({ turnId: sent.turnId, maxBytes, outputMode: 'raw' }),
+          ).rejects.toThrow(/invalid maxbytes/i);
+          await expect(
+            emojiService.getTurn({ turnId: sent.turnId, maxBytes, outputMode: 'compact' }),
+          ).rejects.toThrow(/invalid maxbytes/i);
+        }
+        await expect(
+          emojiService.getTurn({ turnId: sent.turnId, maxBytes: 0, outputMode: 'raw' }),
+        ).rejects.toThrow(/invalid maxbytes/i);
+
+        // Reading with >= 4 bytes succeeds, advances cursor cleanly, and preserves \uFEFF
+        const page1 = await emojiService.getTurn({ turnId: sent.turnId, maxBytes: 4, outputMode: 'raw' });
+        expect(page1.output).toBe('🚀');
+        expect(page1.truncated).toBe(true);
+
+        const page2 = await emojiService.getTurn({
+          turnId: sent.turnId,
+          cursor: page1.cursor,
+          maxBytes: 7,
+          outputMode: 'raw',
+        });
+        expect(page2.output).toBe('\uFEFFdone');
+        expect(page2.truncated).toBe(true);
+
+        // Smaller than 3-byte BOM at page2 boundary also fails rather than looping
+        await expect(
+          emojiService.getTurn({ turnId: sent.turnId, cursor: page1.cursor, maxBytes: 2, outputMode: 'raw' }),
+        ).rejects.toThrow(/invalid maxbytes/i);
+
+        const rest = await emojiService.getTurn({
+          turnId: sent.turnId,
+          cursor: page2.cursor,
+          maxBytes: 1_024,
+          outputMode: 'raw',
+        });
+        expect(rest.output).toBe('\nWorked for 1s · done\n');
+        expect(rest.truncated).toBe(false);
+        expect(rest.status).toBe('completed');
+      });
+
+      it('retries failed final saveTurn writes in background without polling or resend and flushes cleanly on dispose', async () => {
+        vi.useFakeTimers();
+        try {
+          let captureOutput = 'Codex ready\n';
+          const sendSpy = vi.fn(async () => ({ delivered: true, deliveryMethod: 'tmux' }));
+          const captureSpy = vi.fn(async () => captureOutput);
+          const customMgr = {
+            ...sessionManager,
+            sendPrompt: sendSpy,
+            captureSessionTerminal: captureSpy,
+          };
+
+          const retryService = new AgentControlService({
+            repositories,
+            sessionManager: customMgr as unknown as SessionManager,
+            logger: createLogger('test:control-persist-retry'),
+          });
+
+          await repositories.sessions.save(session('existing', { status: 'idle' }));
+          const sent = await retryService.sendPrompt({ target: 'existing', prompt: 'Finish cleanly' });
+
+          // Transient failure specifically on the final/terminal completed persistence
+          const historyRepo = repositories.sessionHistory!;
+          const saveSpy = vi.spyOn(historyRepo, 'saveTurn');
+          saveSpy.mockRejectedValueOnce(new Error('transient sqlite busy on completion'));
+
+          captureOutput = 'Codex ready\nFinal completed answer\nWorked for 1s · done\n';
+          const completed = await retryService.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+          expect(completed.status).toBe('completed');
+          expect(completed.output).toContain('Final completed answer');
+
+          // DB still has earlier status before retry fires
+          const beforeRetry = await historyRepo.findTurnById(sent.turnId);
+          expect(beforeRetry?.status).toBe('working');
+
+          const captureCallsAtCompletion = captureSpy.mock.calls.length;
+          const sendCallsAtCompletion = sendSpy.mock.calls.length;
+
+          // Advance timers WITHOUT calling getTurn: background retry persists retained final state
+          await vi.advanceTimersByTimeAsync(150);
+
+          const afterRetry = await historyRepo.findTurnById(sent.turnId);
+          expect(afterRetry?.status).toBe('completed');
+          expect(afterRetry?.output).toContain('Final completed answer');
+          expect(captureSpy.mock.calls.length).toBe(captureCallsAtCompletion);
+          expect(sendSpy.mock.calls.length).toBe(sendCallsAtCompletion);
+
+          // Simulate restart: reopened AgentControlService reads the recovered completed turn
+          const restarted = new AgentControlService({
+            repositories,
+            sessionManager: customMgr as unknown as SessionManager,
+            logger: createLogger('test:control-persist-restart'),
+          });
+          const reloaded = await restarted.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+          expect(reloaded.status).toBe('completed');
+          expect(reloaded.archived).toBe(true);
+          expect(reloaded.output).toContain('Final completed answer');
+
+          // Newer revision supersedes stale pending retry without overwriting newer version
+          saveSpy.mockRejectedValueOnce(new Error('fail v2 write'));
+          await repositories.sessions.save(session('existing', { status: 'idle' }));
+          captureOutput = 'Codex ready\n';
+          const sent2 = await retryService.sendPrompt({ target: 'existing', prompt: 'Supersede test' });
+          captureOutput = 'Codex ready\nNewer completed answer\nWorked for 1s · done\n';
+          await retryService.getTurn({ turnId: sent2.turnId, outputMode: 'raw' });
+          const saved2 = await historyRepo.findTurnById(sent2.turnId);
+          expect(saved2?.status).toBe('completed');
+          expect(saved2?.output).toContain('Newer completed answer');
+
+          // Permanent saveTurn failures stop after bounded retries instead of looping forever
+          const permSaveSpy = vi.spyOn(historyRepo, 'saveTurn');
+          permSaveSpy.mockRejectedValue(new Error('permanent storage failure'));
+          await repositories.sessions.save(session('existing', { status: 'idle' }));
+          captureOutput = 'Codex ready\n';
+          const sentPerm = await retryService.sendPrompt({ target: 'existing', prompt: 'Permanent failure test' });
+          const callsRightAfterSend = permSaveSpy.mock.calls.length;
+          await vi.advanceTimersByTimeAsync(120_000);
+          const callsAfterBoundedRetries = permSaveSpy.mock.calls.length;
+          expect(callsAfterBoundedRetries).toBeGreaterThan(callsRightAfterSend);
+          expect(callsAfterBoundedRetries).toBeLessThanOrEqual(callsRightAfterSend + 8);
+          await vi.advanceTimersByTimeAsync(120_000);
+          expect(permSaveSpy.mock.calls.length).toBe(callsAfterBoundedRetries);
+          expect(sentPerm.turnId).toBeTruthy();
+          permSaveSpy.mockRestore();
+
+          // dispose() drains pending failed write BEFORE database closes and blocks post-dispose writes
+          const localDb = createDatabase({ path: ':memory:', migrate: true });
+          const localRepos = createRepositories(localDb.db);
+          await localRepos.servers.save({
+            id: 'host-1',
+            name: 'Local host',
+            host: 'user:secret@example.test',
+            sshPort: 22,
+            enabled: true,
+          });
+          await localRepos.projects.save({
+            id: 'project-1',
+            serverId: 'host-1',
+            name: 'Spawnea',
+            rootPath: '/repo',
+            baseBranch: 'main',
+          });
+          await localRepos.agents.save({ id: 'agent-1', name: 'Codex', harness: 'codex', command: 'codex' });
+          await localRepos.sessions.save(session('existing', { status: 'idle' }));
+
+          let disposeCapture = 'Codex ready\n';
+          const disposeService = new AgentControlService({
+            repositories: localRepos,
+            sessionManager: {
+              ...sessionManager,
+              sendPrompt: vi.fn(async () => ({ delivered: true, deliveryMethod: 'tmux' })),
+              captureSessionTerminal: vi.fn(async () => disposeCapture),
+            } as unknown as SessionManager,
+            logger: createLogger('test:control-dispose-flush'),
+          });
+
+          const sent3 = await disposeService.sendPrompt({ target: 'existing', prompt: 'Flush before close' });
+          const localSaveSpy = vi.spyOn(localRepos.sessionHistory!, 'saveTurn');
+          localSaveSpy.mockRejectedValueOnce(new Error('transient fail before shutdown'));
+          disposeCapture = 'Codex ready\nFlushed before db close\nWorked for 1s · done\n';
+          await disposeService.getTurn({ turnId: sent3.turnId, outputMode: 'raw' });
+          expect((await localRepos.sessionHistory!.findTurnById(sent3.turnId))?.status).toBe('working');
+
+          await disposeService.dispose();
+          const flushed = await localRepos.sessionHistory!.findTurnById(sent3.turnId);
+          expect(flushed?.status).toBe('completed');
+          expect(flushed?.output).toContain('Flushed before db close');
+
+          const callsAfterDispose = localSaveSpy.mock.calls.length;
+          localDb.close();
+          await vi.advanceTimersByTimeAsync(30_000);
+          expect(localSaveSpy.mock.calls.length).toBe(callsAfterDispose);
+
+          await retryService.dispose();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
     });
   });
 });

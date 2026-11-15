@@ -169,6 +169,14 @@ async function shutdownApplication(): Promise<void> {
         logger.error('Error disposing session manager', { error: err });
       }
     }
+    if (agentControlService) {
+      try {
+        await agentControlService.dispose();
+      } catch (err) {
+        logger.error('Error disposing agent control service', { error: err });
+      }
+      agentControlService = null;
+    }
     if (dbConnection) {
       try {
         dbConnection.close();

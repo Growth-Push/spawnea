@@ -50,6 +50,7 @@ import {
   type Logger,
   type OperationalCatalog,
   type PersistedControlTurn,
+  type SaveControlTurnInput,
   type SaveTurnRequestInput,
   type Server,
   type Session,
@@ -114,6 +115,15 @@ const MAX_RETAINED_TURN_BYTES = MAX_PERSISTED_TURN_OUTPUT_BYTES;
 const DEFAULT_TURN_READ_BYTES = 32_768;
 const MAX_TURN_READ_BYTES = 131_072;
 const MAX_TURN_WAIT_MS = 30_000;
+const TURN_PERSIST_RETRY_BASE_MS = 100;
+const TURN_PERSIST_RETRY_MAX_MS = 5_000;
+const MAX_TURN_PERSIST_RETRIES = 8;
+
+interface PendingTurnWrite {
+  input: SaveControlTurnInput;
+  attempts: number;
+  nextRetryAtMs: number;
+}
 /**
  * A turn whose status comes from the quiet fallback (no rule matched) is
  * completed only after it produced output and the evaluated window stayed
@@ -203,6 +213,8 @@ export class AgentControlService {
   private readonly childResults = new Map<string, CachedChildResult>();
   private readonly childRequestsInFlight = new Map<string, { fingerprint: string; promise: Promise<ControlCreateChildSessionResult> }>();
   private readonly turns = new Map<string, TrackedTurn>();
+  private readonly pendingTurnWrites = new Map<string, PendingTurnWrite>();
+  private readonly turnPersistLocks = new Map<string, Promise<void>>();
   private readonly promptRequestIds = new Map<string, string>();
   private readonly openTurnBySession = new Map<string, string>();
   private readonly promptLocks = new Map<string, Promise<void>>();
@@ -210,6 +222,10 @@ export class AgentControlService {
   private readonly finalizationOwners = new Map<string, string>();
   private readonly stateDetector: StateDetector;
   private restorePromise: Promise<void> | null = null;
+  private persistRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistRetryLoopPromise: Promise<void> | null = null;
+  private disposed = false;
+  private disposingPromise: Promise<void> | null = null;
   private uiState: ControlUiState = { activeSessionId: null, activeTab: 'terminal' };
 
   constructor(options: AgentControlServiceOptions) {
@@ -1166,37 +1182,205 @@ export class AgentControlService {
     await this.restorePromise;
   }
 
-  private async persistTurn(turn: TrackedTurn): Promise<void> {
+  /**
+   * Flushes any pending failed turn writes right away without polling or recapture.
+   */
+  async flushPendingTurnPersistence(): Promise<void> {
+    if (this.disposed) {
+      await this.disposingPromise;
+      return;
+    }
+    if (this.persistRetryTimer !== null) {
+      clearTimeout(this.persistRetryTimer);
+      this.persistRetryTimer = null;
+    }
+    await this.runPendingTurnPersistPass(false, false);
+  }
+
+  /**
+   * Stops background turn-persistence retries, drains any in-flight write, and
+   * performs one final best-effort flush before the database closes.
+   */
+  async dispose(): Promise<void> {
+    if (this.disposingPromise) return this.disposingPromise;
+    this.disposingPromise = (async () => {
+      this.disposed = true;
+      if (this.persistRetryTimer !== null) {
+        clearTimeout(this.persistRetryTimer);
+        this.persistRetryTimer = null;
+      }
+      if (this.persistRetryLoopPromise) {
+        await this.persistRetryLoopPromise.catch(() => undefined);
+      }
+      await Promise.allSettled(Array.from(this.turnPersistLocks.values()));
+      if (this.pendingTurnWrites.size > 0 && this.repos.sessionHistory) {
+        await this.runPendingTurnPersistPass(false, true);
+        this.pendingTurnWrites.clear();
+      }
+      await Promise.allSettled(Array.from(this.turnPersistLocks.values()));
+    })();
+    return this.disposingPromise;
+  }
+
+  private snapshotTurnForPersistence(turn: TrackedTurn): SaveControlTurnInput {
+    return {
+      id: turn.id,
+      sessionId: turn.sessionId,
+      harness: turn.harness,
+      prompt: turn.prompt,
+      output: turn.output,
+      outputGeneration: turn.outputGeneration,
+      baseOffset: turn.baseOffset,
+      version: turn.version,
+      status: turn.status,
+      observedWorking: turn.observedWorking,
+      outputChanges: turn.outputChanges,
+      promptDelimiterPairs: turn.promptDelimiterPairs,
+      submissionUncertain: turn.submissionUncertain,
+      interrupted: turn.interrupted || turn.status === 'interrupted',
+      truncated: turn.truncated,
+      createdAt: turn.createdAtMs,
+      changedAt: Date.parse(turn.changedAt) || Date.now(),
+    };
+  }
+
+  private serializeTurnWrite<T>(turnId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.turnPersistLocks.get(turnId) ?? Promise.resolve();
+    const run = previous.then(fn, fn);
+    const settled = run.then(() => undefined, () => undefined);
+    this.turnPersistLocks.set(turnId, settled);
+    void settled.then(() => {
+      if (this.turnPersistLocks.get(turnId) === settled) {
+        this.turnPersistLocks.delete(turnId);
+      }
+    });
+    return run;
+  }
+
+  private computeRetryDelayMs(attempts: number): number {
+    return Math.min(TURN_PERSIST_RETRY_BASE_MS * (2 ** Math.max(0, attempts - 1)), TURN_PERSIST_RETRY_MAX_MS);
+  }
+
+  private scheduleTurnPersistRetry(): void {
+    if (this.disposed || this.persistRetryTimer !== null || this.pendingTurnWrites.size === 0) {
+      return;
+    }
+    const now = Date.now();
+    let earliestAt = Infinity;
+    for (const entry of this.pendingTurnWrites.values()) {
+      if (entry.nextRetryAtMs < earliestAt) {
+        earliestAt = entry.nextRetryAtMs;
+      }
+    }
+    if (!Number.isFinite(earliestAt)) return;
+    const delayMs = Math.max(0, earliestAt - now);
+    this.persistRetryTimer = setTimeout(() => {
+      this.persistRetryTimer = null;
+      void this.runPendingTurnPersistPass(true, false);
+    }, delayMs);
+    this.persistRetryTimer.unref?.();
+  }
+
+  private async runPendingTurnPersistPass(dueOnly: boolean, allowDuringDispose: boolean): Promise<void> {
+    if (this.persistRetryLoopPromise) {
+      await this.persistRetryLoopPromise.catch(() => undefined);
+      if (dueOnly || (this.disposed && !allowDuringDispose)) {
+        return;
+      }
+    }
+
+    const historyRepo = this.repos.sessionHistory;
+    if (!historyRepo || this.pendingTurnWrites.size === 0) {
+      return;
+    }
+
+    const pass = (async () => {
+      const turnIds = Array.from(this.pendingTurnWrites.keys());
+      for (const turnId of turnIds) {
+        if (this.disposed && !allowDuringDispose) break;
+        const entry = this.pendingTurnWrites.get(turnId);
+        if (!entry) continue;
+        if (dueOnly && entry.nextRetryAtMs > Date.now()) continue;
+        await this.writeTurnEntry(turnId, entry.input.version, allowDuringDispose);
+      }
+    })();
+
+    this.persistRetryLoopPromise = pass;
+    try {
+      await pass;
+    } finally {
+      if (this.persistRetryLoopPromise === pass) {
+        this.persistRetryLoopPromise = null;
+      }
+      if (!this.disposed && this.pendingTurnWrites.size > 0) {
+        this.scheduleTurnPersistRetry();
+      }
+    }
+  }
+
+  private async writeTurnEntry(
+    turnId: string,
+    targetVersion: number,
+    allowDuringDispose: boolean,
+  ): Promise<void> {
     const historyRepo = this.repos.sessionHistory;
     if (!historyRepo) return;
-    try {
-      const persisted = await historyRepo.saveTurn({
-        id: turn.id,
-        sessionId: turn.sessionId,
-        harness: turn.harness,
-        prompt: turn.prompt,
-        output: turn.output,
-        outputGeneration: turn.outputGeneration,
-        baseOffset: turn.baseOffset,
-        version: turn.version,
-        status: turn.status,
-        observedWorking: turn.observedWorking,
-        outputChanges: turn.outputChanges,
-        promptDelimiterPairs: turn.promptDelimiterPairs,
-        submissionUncertain: turn.submissionUncertain,
-        interrupted: turn.interrupted || turn.status === 'interrupted',
-        truncated: turn.truncated,
-        createdAt: turn.createdAtMs,
-        changedAt: Date.parse(turn.changedAt) || Date.now(),
-      });
-      turn.truncated = persisted.truncated;
-    } catch (error) {
-      this.logger.warn('Failed to persist control turn state', {
-        turnId: turn.id,
-        sessionId: turn.sessionId,
-        error: errorMessage(error),
+
+    await this.serializeTurnWrite(turnId, async () => {
+      if (this.disposed && !allowDuringDispose) return;
+      const pending = this.pendingTurnWrites.get(turnId);
+      if (!pending || pending.input.version > targetVersion) {
+        return;
+      }
+
+      const inputToPersist = pending.input;
+      try {
+        const persisted = await historyRepo.saveTurn(inputToPersist);
+        const tracked = this.turns.get(turnId);
+        if (tracked && tracked.version === persisted.version) {
+          tracked.truncated = persisted.truncated;
+        }
+        const currentPending = this.pendingTurnWrites.get(turnId);
+        if (currentPending && currentPending.input.version === inputToPersist.version) {
+          this.pendingTurnWrites.delete(turnId);
+        }
+      } catch (error) {
+        const currentPending = this.pendingTurnWrites.get(turnId);
+        if (currentPending && currentPending.input.version === inputToPersist.version) {
+          currentPending.attempts += 1;
+          if (currentPending.attempts >= MAX_TURN_PERSIST_RETRIES || allowDuringDispose) {
+            this.pendingTurnWrites.delete(turnId);
+            this.logger.error('Abandoned control turn persistence after exhausting retries', error, {
+              turnId,
+              sessionId: inputToPersist.sessionId,
+              attempts: currentPending.attempts,
+            });
+          } else {
+            currentPending.nextRetryAtMs = Date.now() + this.computeRetryDelayMs(currentPending.attempts);
+            this.scheduleTurnPersistRetry();
+          }
+        }
+        this.logger.warn('Failed to persist control turn state', {
+          turnId,
+          sessionId: inputToPersist.sessionId,
+          error: errorMessage(error),
+        });
+      }
+    });
+  }
+
+  private async persistTurn(turn: TrackedTurn): Promise<void> {
+    if (this.disposed || !this.repos.sessionHistory) return;
+    const input = this.snapshotTurnForPersistence(turn);
+    const existing = this.pendingTurnWrites.get(turn.id);
+    if (!existing || input.version >= existing.input.version) {
+      this.pendingTurnWrites.set(turn.id, {
+        input,
+        attempts: 0,
+        nextRetryAtMs: 0,
       });
     }
+    await this.writeTurnEntry(turn.id, input.version, false);
   }
 
   private async persistTurnRequest(input: SaveTurnRequestInput): Promise<void> {
@@ -1353,7 +1537,9 @@ export class AgentControlService {
         if (oldest) this.promptRequestIds.delete(oldest);
       }
       if (this.turns.size > 200) {
-        const evictable = Array.from(this.turns.values()).find((candidate) => !this.openTurnBySession.has(candidate.sessionId));
+        const evictable = Array.from(this.turns.values()).find(
+          (candidate) => !this.openTurnBySession.has(candidate.sessionId) && !this.pendingTurnWrites.has(candidate.id),
+        );
         if (evictable) this.turns.delete(evictable.id);
       }
       await this.persistTurn(turn);
@@ -1734,6 +1920,9 @@ export class AgentControlService {
   }
 
   private readTurn(turn: TrackedTurn, request: ControlGetTurnRequest, archived = false): ControlGetTurnResult {
+    if (request.maxBytes !== undefined && (!Number.isFinite(request.maxBytes) || request.maxBytes < 1)) {
+      throw new Error(`Invalid maxBytes (${String(request.maxBytes)}): must be at least 1 byte`);
+    }
     const retainedEnd = turn.baseOffset + utf8ByteLength(turn.output);
     const cursor = this.cursorOffset(turn, request.cursor, retainedEnd);
     const relativeOffset = Math.max(0, cursor.offset - turn.baseOffset);
@@ -1743,10 +1932,17 @@ export class AgentControlService {
       request.afterVersion !== undefined &&
       turn.version <= request.afterVersion &&
       available.length === 0;
-    const maxBytes = Math.min(request.maxBytes ?? DEFAULT_TURN_READ_BYTES, MAX_TURN_READ_BYTES);
+    const maxBytes = Math.min(Math.trunc(request.maxBytes ?? DEFAULT_TURN_READ_BYTES), MAX_TURN_READ_BYTES);
     let chunkLength = Math.min(available.length, maxBytes);
     while (chunkLength > 0 && chunkLength < available.length && (available[chunkLength]! & 0xc0) === 0x80) {
       chunkLength -= 1;
+    }
+    if (available.length > 0 && chunkLength === 0) {
+      const firstByte = available[0]!;
+      const minCharBytes = firstByte >= 0xf0 ? 4 : firstByte >= 0xe0 ? 3 : firstByte >= 0xc0 ? 2 : 1;
+      throw new Error(
+        `Invalid maxBytes (${maxBytes}): must be at least ${minCharBytes} bytes to read the next UTF-8 character without truncation`
+      );
     }
     const chunk = available.subarray(0, chunkLength);
     const nextOffset =
