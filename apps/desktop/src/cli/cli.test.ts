@@ -539,6 +539,51 @@ describe('Spawnea Control CLI', () => {
       expect(result.output).toBe('chunk-1 chunk-2 ');
     });
 
+    it('drains retained-truncated multi-page completed turn cleanly when final page has truncated=false and retainedTruncated=true', async () => {
+      let drainedCalls = 0;
+      const mockClient = {
+        callTool: vi.fn().mockImplementation(async (name) => {
+          if (name === 'spawnea_get_turn') {
+            drainedCalls++;
+            return {
+              turnId: 'turn-retained-truncated',
+              status: 'completed',
+              cursor: `turn-retained-truncated:1:${drainedCalls * 100}`,
+              truncated: drainedCalls < 2,
+              retainedTruncated: true,
+              output: `page-${drainedCalls} `,
+            };
+          }
+          return {};
+        }),
+      } as unknown as ControlCliClient;
+
+      const result = await pollTurn(mockClient, 'turn-retained-truncated', 5);
+      expect(drainedCalls).toBe(2);
+      expect(result.status).toBe('completed');
+      expect(result.output).toBe('page-1 page-2 ');
+      expect(result.rawTurn.retainedTruncated).toBe(true);
+    });
+
+    it('treats interrupted turns as terminal and returns interrupted status without timing out', async () => {
+      const mockClient = {
+        callTool: vi.fn().mockResolvedValue({
+          turnId: 'turn-interrupted',
+          status: 'interrupted',
+          cursor: 'turn-interrupted:2:12',
+          truncated: false,
+          archived: true,
+          interrupted: true,
+          output: 'partial output',
+        }),
+      } as unknown as ControlCliClient;
+
+      const result = await pollTurn(mockClient, 'turn-interrupted', 5);
+      expect(result.status).toBe('interrupted');
+      expect(result.output).toBe('partial output');
+      expect(result.rawTurn.archived).toBe(true);
+    });
+
     it('fails when a terminal response arrives after the deadline', async () => {
       const mockClient = {
         callTool: vi.fn().mockImplementation(async () => {
@@ -598,6 +643,145 @@ describe('Spawnea Control CLI', () => {
       expect(process.exitCode).toBe(1);
       expect(error).toHaveBeenCalledWith(expect.stringContaining('Prompt delivery could not be confirmed'));
       process.exitCode = prevExitCode;
+    });
+
+    it('sets process.exitCode = 1 and preserves output/fields on interrupted waitTurn in JSON and text modes', async () => {
+      const interruptedPayload = {
+        turnId: 'turn-wait-int',
+        sessionId: 'sess-test',
+        status: 'interrupted',
+        version: 3,
+        cursor: 'turn-wait-int:2:14',
+        truncated: false,
+        archived: true,
+        interrupted: true,
+        output: 'partial answer',
+      };
+      const mockClient = {
+        callTool: vi.fn().mockResolvedValue(interruptedPayload),
+      } as unknown as ControlCliClient;
+
+      const prevExitCode = process.exitCode;
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        process.exitCode = undefined;
+        await waitTurn(mockClient, { turn: 'turn-wait-int', timeout: 5, json: true });
+        expect(process.exitCode).toBe(1);
+        const parsed = JSON.parse(String(log.mock.calls[0]?.[0]));
+        expect(parsed).toMatchObject({
+          turnId: 'turn-wait-int',
+          status: 'interrupted',
+          archived: true,
+          interrupted: true,
+          output: 'partial answer',
+        });
+        expect(error).not.toHaveBeenCalled();
+
+        log.mockClear();
+        error.mockClear();
+        process.exitCode = undefined;
+        await waitTurn(mockClient, { turn: 'turn-wait-int', timeout: 5, json: false });
+        expect(process.exitCode).toBe(1);
+        expect(log).toHaveBeenCalledWith('Turn turn-wait-int interrupted:');
+        expect(log).toHaveBeenCalledWith('partial answer');
+        expect(error).toHaveBeenCalledWith(expect.stringMatching(/interrupted/i));
+        expect(String(error.mock.calls[0]?.[0])).not.toMatch(/failed/i);
+
+        log.mockClear();
+        error.mockClear();
+        process.exitCode = undefined;
+        (mockClient.callTool as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+          turnId: 'turn-wait-ok',
+          status: 'completed',
+          archived: false,
+          interrupted: false,
+          output: 'done answer',
+        });
+        await waitTurn(mockClient, { turn: 'turn-wait-ok', timeout: 5, json: true });
+        expect(process.exitCode).toBeUndefined();
+      } finally {
+        process.exitCode = prevExitCode;
+      }
+    });
+
+    it('sets process.exitCode = 1 without resending and preserves output on interrupted sendAndWaitPrompt in JSON and text modes', async () => {
+      const mockClient = {
+        callTool: vi.fn().mockImplementation(async (name) => {
+          if (name === 'spawnea_send_prompt') {
+            return {
+              delivered: true,
+              status: 'working',
+              sessionId: 'sess-test',
+              turnId: 'turn-saw-int',
+              version: 1,
+            };
+          }
+          return {
+            turnId: 'turn-saw-int',
+            sessionId: 'sess-test',
+            status: 'interrupted',
+            version: 2,
+            cursor: 'turn-saw-int:2:16',
+            truncated: false,
+            archived: true,
+            interrupted: true,
+            output: 'retained partial',
+          };
+        }),
+      } as unknown as ControlCliClient;
+
+      const prevExitCode = process.exitCode;
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        process.exitCode = undefined;
+        await sendAndWaitPrompt(mockClient, { session: 'sess-test', prompt: 'run task', timeout: 5, json: true });
+        expect(process.exitCode).toBe(1);
+        const sendCalls = (mockClient.callTool as ReturnType<typeof vi.fn>).mock.calls.filter(
+          (call) => call[0] === 'spawnea_send_prompt'
+        );
+        expect(sendCalls).toHaveLength(1);
+        const parsed = JSON.parse(String(log.mock.calls[0]?.[0]));
+        expect(parsed).toMatchObject({
+          turnId: 'turn-saw-int',
+          status: 'interrupted',
+          archived: true,
+          interrupted: true,
+          output: 'retained partial',
+        });
+        expect(error).not.toHaveBeenCalled();
+
+        log.mockClear();
+        error.mockClear();
+        (mockClient.callTool as ReturnType<typeof vi.fn>).mockClear();
+        process.exitCode = undefined;
+        await sendAndWaitPrompt(mockClient, { session: 'sess-test', prompt: 'run task', timeout: 5, json: false });
+        expect(process.exitCode).toBe(1);
+        const sendCallsText = (mockClient.callTool as ReturnType<typeof vi.fn>).mock.calls.filter(
+          (call) => call[0] === 'spawnea_send_prompt'
+        );
+        expect(sendCallsText).toHaveLength(1);
+        expect(log).toHaveBeenCalledWith('retained partial');
+        expect(error).toHaveBeenCalledWith(expect.stringMatching(/interrupted/i));
+        expect(String(error.mock.calls[0]?.[0])).not.toMatch(/failed/i);
+
+        log.mockClear();
+        error.mockClear();
+        (mockClient.callTool as ReturnType<typeof vi.fn>).mockImplementation(async (name) => {
+          if (name === 'spawnea_send_prompt') {
+            return { delivered: true, status: 'working', sessionId: 'sess-test', turnId: 'turn-saw-ok', version: 1 };
+          }
+          return { turnId: 'turn-saw-ok', status: 'completed', archived: false, interrupted: false, output: 'ok' };
+        });
+        process.exitCode = undefined;
+        await sendAndWaitPrompt(mockClient, { session: 'sess-test', prompt: 'run ok', timeout: 5, json: true });
+        expect(process.exitCode).toBeUndefined();
+      } finally {
+        process.exitCode = prevExitCode;
+      }
     });
 
     it('fails fast when desktop app is not running', async () => {

@@ -162,6 +162,73 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    name: '0013_session_history_persistence',
+    sql: `
+      CREATE TABLE IF NOT EXISTS session_output_snapshots (
+        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        output TEXT NOT NULL,
+        truncated INTEGER NOT NULL DEFAULT 0,
+        snapshot_generation TEXT NOT NULL DEFAULT '',
+        version INTEGER NOT NULL DEFAULT 1,
+        source TEXT NOT NULL DEFAULT 'screen',
+        history_items_json TEXT NOT NULL DEFAULT '[]',
+        history_truncated INTEGER NOT NULL DEFAULT 0,
+        payload_bytes INTEGER NOT NULL DEFAULT 0,
+        captured_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_session_output_snapshots_updated_at
+        ON session_output_snapshots(updated_at);
+
+      CREATE TABLE IF NOT EXISTS session_turns (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        harness TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        output TEXT NOT NULL,
+        output_generation INTEGER NOT NULL DEFAULT 1,
+        base_offset INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL,
+        observed_working INTEGER NOT NULL DEFAULT 0,
+        output_changes INTEGER NOT NULL DEFAULT 0,
+        prompt_delimiter_pairs INTEGER NOT NULL DEFAULT 0,
+        submission_uncertain INTEGER NOT NULL DEFAULT 0,
+        interrupted INTEGER NOT NULL DEFAULT 0,
+        truncated INTEGER NOT NULL DEFAULT 0,
+        payload_bytes INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        changed_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_session_turns_session_changed
+        ON session_turns(session_id, changed_at DESC, created_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_session_turns_changed_at
+        ON session_turns(changed_at);
+
+      CREATE TABLE IF NOT EXISTS session_turn_requests (
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        client_request_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL REFERENCES session_turns(id) ON DELETE CASCADE,
+        fingerprint_hash TEXT NOT NULL,
+        delivered INTEGER NOT NULL DEFAULT 0,
+        delivery_method TEXT NOT NULL,
+        delivery_status TEXT NOT NULL,
+        accepted_at INTEGER NOT NULL,
+        payload_bytes INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (session_id, client_request_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_session_turn_requests_turn_id
+        ON session_turn_requests(turn_id);
+
+      CREATE INDEX IF NOT EXISTS idx_session_turn_requests_accepted_at
+        ON session_turn_requests(accepted_at);
+    `,
+  },
 ];
 
 export function runMigrations(sqlite: Database.Database, migrations: Migration[] = MIGRATIONS): {

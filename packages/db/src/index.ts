@@ -1,6 +1,7 @@
 export * from './schema.js';
 export * from './migrations.js';
 export * from './connection.js';
+export * from './storage-privacy.js';
 export * from './mappers.js';
 export * from './repositories/index.js';
 

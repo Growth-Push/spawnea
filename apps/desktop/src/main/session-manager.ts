@@ -37,6 +37,7 @@ import type {
 } from '@spawnea/domain';
 import { parseGitHubLink, normalizeHarnessExecutable } from '@spawnea/domain';
 import { retainSessionLinks } from './session-links.js';
+import { persistSessionScreenSnapshot } from './session-history-snapshot.js';
 import {
   createCatalogProjectPathLocator,
   createCatalogWorktreePathLocator,
@@ -1322,10 +1323,11 @@ export class SessionManager {
 
   /** Captures bounded terminal context without changing the pane or its history. */
   async captureSessionTerminal(sessionId: string, lines = 2_000): Promise<string> {
-    const session = await this.repos.sessions.findById(sessionId);
-    if (!session) throw new Error(`Session '${sessionId}' not found`);
-    const host = await this.getHostAdapter(session.serverId);
-    return (await this.tmuxManager.capturePaneTail(host, session.tmuxSessionName, lines)).join('\n');
+    const detailed = await this.captureSessionTerminalDetailed(sessionId, lines);
+    if (!detailed.success) {
+      throw new Error(`Failed to capture terminal output for session '${sessionId}'`);
+    }
+    return detailed.output;
   }
 
   /** Captures bounded terminal context and indicates whether tmux capture succeeded. */
@@ -1337,7 +1339,28 @@ export class SessionManager {
     if (!session) throw new Error(`Session '${sessionId}' not found`);
     const host = await this.getHostAdapter(session.serverId);
     const result = await this.tmuxManager.capturePaneTailDetailed(host, session.tmuxSessionName, lines);
-    return { success: result.success, output: result.lines.join('\n') };
+    const output = result.lines.join('\n');
+    if (result.success) {
+      let harness: string | undefined;
+      if (session.agentId) {
+        try {
+          const agent = await this.repos.agents.findById(session.agentId);
+          harness = agent?.harness || agent?.command;
+        } catch {
+          // Best effort harness resolution for snapshot parsing
+        }
+      }
+      await persistSessionScreenSnapshot({
+        repositories: this.repos,
+        logger: this.logger,
+        sessionId: session.id,
+        harness,
+        tailLines: result.lines,
+        rawOutput: output,
+        captureSuccess: true,
+      });
+    }
+    return { success: result.success, output };
   }
 
   /** Updates the operator-facing name without changing task or runtime identity. */
@@ -2752,6 +2775,16 @@ export class SessionManager {
       );
       if (historyResult.source === 'screen') {
         historyResult.captureSuccess = captureSuccess;
+        if (captureSuccess) {
+          await persistSessionScreenSnapshot({
+            repositories: this.repos,
+            logger: this.logger,
+            sessionId: session.id,
+            harness,
+            tailLines,
+            captureSuccess: true,
+          });
+        }
       }
       return historyResult;
     } finally {

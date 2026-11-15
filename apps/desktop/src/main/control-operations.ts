@@ -38,7 +38,7 @@ export function classifyControlError(error: unknown): { code: ControlErrorCode; 
         ? 'conflict'
         : normalized.includes('did not become ready') || normalized.includes('not available for prompt delivery')
           ? 'needs_human'
-          : normalized.includes('cannot be empty') || normalized.includes('must be 120 characters or fewer') || normalized.includes('does not support explicit model selection')
+          : normalized.includes('cannot be empty') || normalized.includes('must be 120 characters or fewer') || normalized.includes('does not support explicit model selection') || normalized.includes('invalid maxbytes')
             ? 'invalid_request'
             : 'operation_failed';
   return { code, message };

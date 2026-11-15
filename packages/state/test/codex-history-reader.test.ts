@@ -1059,4 +1059,94 @@ describe('CodexHistoryReader', () => {
       syncBuiltinESMExports();
     }
   });
+
+  it('reports explicit cursorStatus and cursorExpired across initial, valid, eof, invalid, mismatched, and expired states', async () => {
+    const fileA = path.join(tempDir, 'rollout-cursor-a.jsonl');
+    const fileB = path.join(tempDir, 'rollout-cursor-b.jsonl');
+    const recordsA = [
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: 't1' } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: 'Codex prompt 1' } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', content: 'Codex answer 1' } },
+      { type: 'event_msg', payload: { type: 'task_complete', turn_id: 't1' } },
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: 't2' } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: 'Codex prompt 2' } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', content: 'Codex answer 2' } },
+      { type: 'event_msg', payload: { type: 'task_complete', turn_id: 't2' } },
+    ];
+    fs.writeFileSync(fileA, recordsA.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    fs.writeFileSync(
+      fileB,
+      [
+        { type: 'response_item', payload: { type: 'message', role: 'user', content: 'Rollout B prompt' } },
+        { type: 'response_item', payload: { type: 'message', role: 'assistant', content: 'Rollout B answer' } },
+      ]
+        .map((r) => JSON.stringify(r))
+        .join('\n') + '\n'
+    );
+
+    const contextA = {
+      sessionId: 'sess-codex-cursor',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      resolvedTranscriptPath: fileA,
+    };
+
+    // Initial -> valid -> eof
+    const initial = await reader.readHistory(contextA, { limit: 2 });
+    expect(initial?.cursorStatus).toBe('initial');
+    expect(initial?.cursorExpired).toBe(false);
+    expect(initial?.hasMore).toBe(true);
+
+    const page2 = await reader.readHistory(contextA, { limit: 10, cursor: initial?.cursor });
+    expect(page2?.cursorStatus).toBe('valid');
+    expect(page2?.cursorExpired).toBe(false);
+    expect(page2?.hasMore).toBe(false);
+    expect(page2?.items).toHaveLength(2);
+
+    const atEof = await reader.readHistory(contextA, { limit: 10, cursor: page2?.cursor });
+    expect(atEof?.cursorStatus).toBe('eof');
+    expect(atEof?.cursorExpired).toBe(false);
+    expect(atEof?.items).toEqual([]);
+
+    // Malformed -> invalid
+    for (const badCursor of ['broken-cursor', 'offset:abc', 'offset:12:extra:tag']) {
+      const malformed = await reader.readHistory(contextA, { limit: 10, cursor: badCursor });
+      expect(malformed?.cursorStatus).toBe('invalid');
+      expect(malformed?.cursorExpired).toBe(true);
+      expect(malformed?.items).toHaveLength(4);
+      expect(malformed?.items[0]?.text).toBe('Codex prompt 1');
+    }
+
+    // Offset past EOF -> expired
+    const expired = await reader.readHistory(contextA, { limit: 10, cursor: 'offset:9999999' });
+    expect(expired?.cursorStatus).toBe('expired');
+    expect(expired?.cursorExpired).toBe(true);
+    expect(expired?.items).toHaveLength(4);
+
+    // Switched filename -> mismatched
+    const switched = await reader.readHistory(
+      { ...contextA, resolvedTranscriptPath: fileB },
+      { limit: 10, cursor: page2?.cursor }
+    );
+    expect(switched?.cursorStatus).toBe('mismatched');
+    expect(switched?.cursorExpired).toBe(true);
+    expect(switched?.items[0]?.text).toBe('Rollout B prompt');
+
+    // Replaced under same filename -> mismatched
+    fs.writeFileSync(
+      fileA,
+      [
+        { type: 'session_meta', payload: { session_id: 'codex-new-gen' } },
+        { type: 'response_item', payload: { type: 'message', role: 'user', content: 'New generation prompt' } },
+        { type: 'response_item', payload: { type: 'message', role: 'assistant', content: 'New generation answer' } },
+      ]
+        .map((r) => JSON.stringify(r))
+        .join('\n') + '\n'
+    );
+    const replaced = await reader.readHistory(contextA, { limit: 10, cursor: page2?.cursor });
+    expect(replaced?.cursorStatus).toBe('mismatched');
+    expect(replaced?.cursorExpired).toBe(true);
+    expect(replaced?.items[0]?.text).toBe('New generation prompt');
+  });
 });

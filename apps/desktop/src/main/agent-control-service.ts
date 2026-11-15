@@ -1,10 +1,14 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Repositories } from '@spawnea/db';
 import {
+  MAX_PERSISTED_TURN_OUTPUT_BYTES,
   SPAWNEA_CONTROL_API_VERSION,
   getRootModelFlag,
   MODEL_ID_PATTERN,
   normalizeHarnessExecutable,
+  truncateUtf8Head,
+  truncateUtf8Tail,
+  utf8ByteLength,
   type ControlBootstrapState,
   type ControlCreateSessionRequest,
   type ControlCreateSessionResult,
@@ -32,6 +36,7 @@ import {
   type ControlSendPromptResult,
   type ControlGetTurnRequest,
   type ControlGetTurnResult,
+  type ControlTurnCursorStatus,
   type ControlTurnStatus,
   type ControlAgentContextCall,
   type ControlAgentContextSnapshot,
@@ -44,6 +49,9 @@ import {
   type Agent,
   type Logger,
   type OperationalCatalog,
+  type PersistedControlTurn,
+  type SaveControlTurnInput,
+  type SaveTurnRequestInput,
   type Server,
   type Session,
   isLoopbackHost,
@@ -89,20 +97,41 @@ interface TrackedTurn {
   baseOffset: number;
   version: number;
   status: Exclude<ControlTurnStatus, 'unchanged'>;
+  createdAtMs: number;
   changedAt: string;
   observedWorking: boolean;
   outputChanges: number;
   promptDelimiterPairs: number;
   submissionUncertain?: boolean;
+  interrupted?: boolean;
+  truncated?: boolean;
+  archived?: boolean;
   /** Digest of the last evaluated status window and when it last changed. */
   windowFingerprint?: string;
   windowStableSinceMs?: number;
 }
 
-const MAX_RETAINED_TURN_BYTES = 262_144;
+const MAX_RETAINED_TURN_BYTES = MAX_PERSISTED_TURN_OUTPUT_BYTES;
 const DEFAULT_TURN_READ_BYTES = 32_768;
 const MAX_TURN_READ_BYTES = 131_072;
 const MAX_TURN_WAIT_MS = 30_000;
+const TURN_PERSIST_RETRY_BASE_MS = 100;
+const TURN_PERSIST_RETRY_MAX_MS = 5_000;
+const MAX_TURN_PERSIST_RETRIES = 8;
+const MAX_PENDING_TURN_REQUESTS = 500;
+const MAX_TRACKED_PERSISTED_TURN_IDS = 1_000;
+
+interface PendingTurnWrite {
+  input: SaveControlTurnInput;
+  attempts: number;
+  nextRetryAtMs: number;
+}
+
+interface PendingTurnRequestWrite {
+  input: SaveTurnRequestInput;
+  attempts: number;
+  nextRetryAtMs: number;
+}
 /**
  * A turn whose status comes from the quiet fallback (no rule matched) is
  * completed only after it produced output and the evaluated window stayed
@@ -192,12 +221,21 @@ export class AgentControlService {
   private readonly childResults = new Map<string, CachedChildResult>();
   private readonly childRequestsInFlight = new Map<string, { fingerprint: string; promise: Promise<ControlCreateChildSessionResult> }>();
   private readonly turns = new Map<string, TrackedTurn>();
+  private readonly pendingTurnWrites = new Map<string, PendingTurnWrite>();
+  private readonly pendingTurnRequestWrites = new Map<string, PendingTurnRequestWrite>();
+  private readonly persistedTurnIds = new Set<string>();
+  private readonly turnPersistLocks = new Map<string, Promise<void>>();
   private readonly promptRequestIds = new Map<string, string>();
   private readonly openTurnBySession = new Map<string, string>();
   private readonly promptLocks = new Map<string, Promise<void>>();
   private readonly contextCalls = new Map<string, ControlAgentContextCall[]>();
   private readonly finalizationOwners = new Map<string, string>();
   private readonly stateDetector: StateDetector;
+  private restorePromise: Promise<void> | null = null;
+  private persistRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistRetryLoopPromise: Promise<void> | null = null;
+  private disposed = false;
+  private disposingPromise: Promise<void> | null = null;
   private uiState: ControlUiState = { activeSessionId: null, activeTab: 'terminal' };
 
   constructor(options: AgentControlServiceOptions) {
@@ -427,9 +465,11 @@ export class AgentControlService {
         return this.sendPrompt({ ...request, target: target.id });
       },
       getTurn: async (request) => {
-        const turn = this.turns.get(request.turnId);
-        if (!turn) throw new Error(`Turn '${request.turnId}' not found`);
-        await resolveInScope(turn.sessionId, allowRootPrompts);
+        await this.restorePersistedHistory();
+        const liveTurn = this.turns.get(request.turnId);
+        const sessionId = liveTurn?.sessionId ?? (await this.repos.sessionHistory?.findTurnById(request.turnId))?.sessionId;
+        if (!sessionId) throw new Error(`Turn '${request.turnId}' not found`);
+        await resolveInScope(sessionId, allowRootPrompts);
         return this.getTurn(request);
       },
       listChildFiles: async (sessionId, subPath) => {
@@ -1132,12 +1172,405 @@ export class AgentControlService {
     return targetSession;
   }
 
+  /**
+   * Transitions any active pre-restart persisted turns to `'interrupted'` once per startup.
+   * Volatile replay/open-turn maps stay separate so persisted request metadata never enforces cross-restart replay rejections.
+   */
+  async restorePersistedHistory(): Promise<void> {
+    const historyRepo = this.repos.sessionHistory;
+    if (!historyRepo) return;
+    if (!this.restorePromise) {
+      this.restorePromise = historyRepo.markActiveTurnsInterrupted().then(
+        () => undefined,
+        (error: unknown) => {
+          this.restorePromise = null;
+          this.logger.error('Failed to mark active persisted turns interrupted on startup', error);
+          throw error;
+        },
+      );
+    }
+    await this.restorePromise;
+  }
+
+  /**
+   * Flushes any pending failed turn writes right away without polling or recapture.
+   */
+  async flushPendingTurnPersistence(): Promise<void> {
+    if (this.disposed) {
+      await this.disposingPromise;
+      return;
+    }
+    if (this.persistRetryTimer !== null) {
+      clearTimeout(this.persistRetryTimer);
+      this.persistRetryTimer = null;
+    }
+    await this.runPendingTurnPersistPass(false, false);
+  }
+
+  /**
+   * Stops background turn-persistence retries, drains any in-flight write, and
+   * performs one final best-effort flush before the database closes.
+   */
+  async dispose(): Promise<void> {
+    if (this.disposingPromise) return this.disposingPromise;
+    this.disposingPromise = (async () => {
+      this.disposed = true;
+      if (this.persistRetryTimer !== null) {
+        clearTimeout(this.persistRetryTimer);
+        this.persistRetryTimer = null;
+      }
+      if (this.persistRetryLoopPromise) {
+        await this.persistRetryLoopPromise.catch(() => undefined);
+      }
+      await Promise.allSettled(Array.from(this.turnPersistLocks.values()));
+      if ((this.pendingTurnWrites.size > 0 || this.pendingTurnRequestWrites.size > 0) && this.repos.sessionHistory) {
+        await this.runPendingTurnPersistPass(false, true);
+        this.pendingTurnWrites.clear();
+        this.pendingTurnRequestWrites.clear();
+      }
+      await Promise.allSettled(Array.from(this.turnPersistLocks.values()));
+    })();
+    return this.disposingPromise;
+  }
+
+  private snapshotTurnForPersistence(turn: TrackedTurn): SaveControlTurnInput {
+    return {
+      id: turn.id,
+      sessionId: turn.sessionId,
+      harness: turn.harness,
+      prompt: turn.prompt,
+      output: turn.output,
+      outputGeneration: turn.outputGeneration,
+      baseOffset: turn.baseOffset,
+      version: turn.version,
+      status: turn.status,
+      observedWorking: turn.observedWorking,
+      outputChanges: turn.outputChanges,
+      promptDelimiterPairs: turn.promptDelimiterPairs,
+      submissionUncertain: turn.submissionUncertain,
+      interrupted: turn.interrupted || turn.status === 'interrupted',
+      truncated: turn.truncated,
+      createdAt: turn.createdAtMs,
+      changedAt: Date.parse(turn.changedAt) || Date.now(),
+    };
+  }
+
+  private serializeTurnWrite<T>(turnId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.turnPersistLocks.get(turnId) ?? Promise.resolve();
+    const run = previous.then(fn, fn);
+    const settled = run.then(() => undefined, () => undefined);
+    this.turnPersistLocks.set(turnId, settled);
+    void settled.then(() => {
+      if (this.turnPersistLocks.get(turnId) === settled) {
+        this.turnPersistLocks.delete(turnId);
+      }
+    });
+    return run;
+  }
+
+  private computeRetryDelayMs(attempts: number): number {
+    return Math.min(TURN_PERSIST_RETRY_BASE_MS * (2 ** Math.max(0, attempts - 1)), TURN_PERSIST_RETRY_MAX_MS);
+  }
+
+  private scheduleTurnPersistRetry(): void {
+    if (this.disposed || this.persistRetryTimer !== null) {
+      return;
+    }
+    const now = Date.now();
+    let earliestAt = Infinity;
+    for (const entry of this.pendingTurnWrites.values()) {
+      if (entry.nextRetryAtMs < earliestAt) {
+        earliestAt = entry.nextRetryAtMs;
+      }
+    }
+    for (const entry of this.pendingTurnRequestWrites.values()) {
+      if (!this.pendingTurnWrites.has(entry.input.turnId) && entry.nextRetryAtMs < earliestAt) {
+        earliestAt = entry.nextRetryAtMs;
+      }
+    }
+    if (!Number.isFinite(earliestAt)) return;
+    const delayMs = Math.max(0, earliestAt - now);
+    this.persistRetryTimer = setTimeout(() => {
+      this.persistRetryTimer = null;
+      void this.runPendingTurnPersistPass(true, false);
+    }, delayMs);
+    this.persistRetryTimer.unref?.();
+  }
+
+  private async runPendingTurnPersistPass(dueOnly: boolean, allowDuringDispose: boolean): Promise<void> {
+    if (this.persistRetryLoopPromise) {
+      await this.persistRetryLoopPromise.catch(() => undefined);
+      if (dueOnly || (this.disposed && !allowDuringDispose)) {
+        return;
+      }
+    }
+
+    const historyRepo = this.repos.sessionHistory;
+    if (!historyRepo || (this.pendingTurnWrites.size === 0 && this.pendingTurnRequestWrites.size === 0)) {
+      return;
+    }
+
+    const pass = (async () => {
+      const turnIds = Array.from(this.pendingTurnWrites.keys());
+      for (const turnId of turnIds) {
+        if (this.disposed && !allowDuringDispose) break;
+        const entry = this.pendingTurnWrites.get(turnId);
+        if (!entry) continue;
+        if (dueOnly && entry.nextRetryAtMs > Date.now()) continue;
+        await this.writeTurnEntry(turnId, entry.input.version, allowDuringDispose);
+      }
+
+      const requestKeys = Array.from(this.pendingTurnRequestWrites.keys());
+      for (const key of requestKeys) {
+        if (this.disposed && !allowDuringDispose) break;
+        const entry = this.pendingTurnRequestWrites.get(key);
+        if (!entry) continue;
+        // Wait until the parent session_turns row write is no longer pending before saving child request metadata.
+        if (this.pendingTurnWrites.has(entry.input.turnId)) continue;
+        if (dueOnly && entry.nextRetryAtMs > Date.now()) continue;
+        await this.writeTurnRequestEntry(key, allowDuringDispose);
+      }
+    })();
+
+    this.persistRetryLoopPromise = pass;
+    try {
+      await pass;
+    } finally {
+      if (this.persistRetryLoopPromise === pass) {
+        this.persistRetryLoopPromise = null;
+      }
+      if (!this.disposed && (this.pendingTurnWrites.size > 0 || this.pendingTurnRequestWrites.size > 0)) {
+        this.scheduleTurnPersistRetry();
+      }
+    }
+  }
+
+  private recordPersistedTurnId(turnId: string): void {
+    this.persistedTurnIds.add(turnId);
+    if (this.persistedTurnIds.size > MAX_TRACKED_PERSISTED_TURN_IDS) {
+      const oldest = this.persistedTurnIds.values().next().value;
+      if (oldest) this.persistedTurnIds.delete(oldest);
+    }
+  }
+
+  private turnRequestKey(input: SaveTurnRequestInput): string {
+    return `${input.sessionId}:${input.clientRequestId}`;
+  }
+
+  private queuePendingTurnRequest(input: SaveTurnRequestInput, failedAttempt: boolean): void {
+    const key = this.turnRequestKey(input);
+    const existing = this.pendingTurnRequestWrites.get(key);
+    if (!existing && this.pendingTurnRequestWrites.size >= MAX_PENDING_TURN_REQUESTS) {
+      const oldestKey = this.pendingTurnRequestWrites.keys().next().value;
+      if (oldestKey) this.pendingTurnRequestWrites.delete(oldestKey);
+    }
+    const attempts = failedAttempt ? (existing?.attempts ?? 0) + 1 : (existing?.attempts ?? 0);
+    if (failedAttempt && attempts >= MAX_TURN_PERSIST_RETRIES) {
+      this.pendingTurnRequestWrites.delete(key);
+      this.logger.error('Abandoned turn request metadata persistence after exhausting retries', new Error('Max retries reached'), {
+        turnId: input.turnId,
+        sessionId: input.sessionId,
+        attempts,
+      });
+      return;
+    }
+    this.pendingTurnRequestWrites.set(key, {
+      input,
+      attempts,
+      nextRetryAtMs: failedAttempt ? Date.now() + this.computeRetryDelayMs(attempts) : 0,
+    });
+    if (failedAttempt) {
+      this.scheduleTurnPersistRetry();
+    }
+  }
+
+  private abandonPendingTurnRequestsForTurn(turnId: string): void {
+    let dropped = 0;
+    for (const [key, entry] of this.pendingTurnRequestWrites.entries()) {
+      if (entry.input.turnId === turnId) {
+        this.pendingTurnRequestWrites.delete(key);
+        dropped += 1;
+      }
+    }
+    if (dropped > 0) {
+      this.logger.warn('Dropped pending turn request metadata after parent turn persistence failed permanently', {
+        turnId,
+        dropped,
+      });
+    }
+  }
+
+  private async writeTurnEntry(
+    turnId: string,
+    targetVersion: number,
+    allowDuringDispose: boolean,
+  ): Promise<boolean> {
+    const historyRepo = this.repos.sessionHistory;
+    if (!historyRepo) return false;
+
+    return this.serializeTurnWrite(turnId, async () => {
+      if (this.disposed && !allowDuringDispose) return false;
+      const pending = this.pendingTurnWrites.get(turnId);
+      if (!pending || pending.input.version > targetVersion) {
+        return false;
+      }
+
+      const inputToPersist = pending.input;
+      try {
+        const persisted = await historyRepo.saveTurn(inputToPersist);
+        this.recordPersistedTurnId(turnId);
+        const tracked = this.turns.get(turnId);
+        if (tracked && tracked.version === persisted.version) {
+          tracked.truncated = persisted.truncated;
+        }
+        const currentPending = this.pendingTurnWrites.get(turnId);
+        if (currentPending && currentPending.input.version === inputToPersist.version) {
+          this.pendingTurnWrites.delete(turnId);
+        }
+        return !this.pendingTurnWrites.has(turnId);
+      } catch (error) {
+        const currentPending = this.pendingTurnWrites.get(turnId);
+        if (currentPending && currentPending.input.version === inputToPersist.version) {
+          currentPending.attempts += 1;
+          if (currentPending.attempts >= MAX_TURN_PERSIST_RETRIES || allowDuringDispose) {
+            this.pendingTurnWrites.delete(turnId);
+            if (!this.persistedTurnIds.has(turnId)) {
+              this.abandonPendingTurnRequestsForTurn(turnId);
+            }
+            this.logger.error('Abandoned control turn persistence after exhausting retries', error, {
+              turnId,
+              sessionId: inputToPersist.sessionId,
+              attempts: currentPending.attempts,
+            });
+          } else {
+            currentPending.nextRetryAtMs = Date.now() + this.computeRetryDelayMs(currentPending.attempts);
+            this.scheduleTurnPersistRetry();
+          }
+        }
+        this.logger.warn('Failed to persist control turn state', {
+          turnId,
+          sessionId: inputToPersist.sessionId,
+          error: errorMessage(error),
+        });
+        return false;
+      }
+    });
+  }
+
+  private async writeTurnRequestEntry(key: string, allowDuringDispose: boolean): Promise<void> {
+    const historyRepo = this.repos.sessionHistory;
+    const entry = this.pendingTurnRequestWrites.get(key);
+    if (!historyRepo || !entry) return;
+
+    await this.serializeTurnWrite(entry.input.turnId, async () => {
+      if (this.disposed && !allowDuringDispose) return;
+      const current = this.pendingTurnRequestWrites.get(key);
+      if (!current || this.pendingTurnWrites.has(current.input.turnId)) return;
+
+      const inputToPersist = current.input;
+      try {
+        await historyRepo.saveTurnRequest(inputToPersist);
+        const latest = this.pendingTurnRequestWrites.get(key);
+        if (latest && latest.input === inputToPersist) {
+          this.pendingTurnRequestWrites.delete(key);
+        }
+      } catch (error) {
+        const latest = this.pendingTurnRequestWrites.get(key);
+        if (latest && latest.input === inputToPersist) {
+          if (allowDuringDispose || latest.attempts + 1 >= MAX_TURN_PERSIST_RETRIES) {
+            this.pendingTurnRequestWrites.delete(key);
+            this.logger.error('Abandoned turn request metadata persistence after exhausting retries', error, {
+              turnId: inputToPersist.turnId,
+              sessionId: inputToPersist.sessionId,
+              attempts: latest.attempts + 1,
+            });
+          } else {
+            this.queuePendingTurnRequest(inputToPersist, true);
+          }
+        }
+        this.logger.warn('Failed to persist turn request metadata', {
+          turnId: inputToPersist.turnId,
+          sessionId: inputToPersist.sessionId,
+          error: errorMessage(error),
+        });
+      }
+    });
+  }
+
+  private async flushPendingTurnRequestsForTurn(turnId: string, allowDuringDispose: boolean): Promise<void> {
+    const matchingKeys: string[] = [];
+    for (const [key, entry] of this.pendingTurnRequestWrites.entries()) {
+      if (entry.input.turnId === turnId) {
+        matchingKeys.push(key);
+      }
+    }
+    for (const key of matchingKeys) {
+      if (this.disposed && !allowDuringDispose) break;
+      await this.writeTurnRequestEntry(key, allowDuringDispose);
+    }
+  }
+
+  private async persistTurn(turn: TrackedTurn): Promise<void> {
+    if (this.disposed || !this.repos.sessionHistory) return;
+    const input = this.snapshotTurnForPersistence(turn);
+    const existing = this.pendingTurnWrites.get(turn.id);
+    if (!existing || input.version >= existing.input.version) {
+      this.pendingTurnWrites.set(turn.id, {
+        input,
+        attempts: 0,
+        nextRetryAtMs: 0,
+      });
+    }
+    const parentPersisted = await this.writeTurnEntry(turn.id, input.version, false);
+    if (parentPersisted) {
+      await this.flushPendingTurnRequestsForTurn(turn.id, false);
+    }
+  }
+
+  private async persistTurnRequest(input: SaveTurnRequestInput): Promise<void> {
+    if (this.disposed || !this.repos.sessionHistory) return;
+    const key = this.turnRequestKey(input);
+    this.queuePendingTurnRequest(input, false);
+    if (this.pendingTurnWrites.has(input.turnId)) {
+      return;
+    }
+    await this.writeTurnRequestEntry(key, false);
+  }
+
+  private persistedToTrackedTurn(persisted: PersistedControlTurn): TrackedTurn {
+    return {
+      id: persisted.id,
+      sessionId: persisted.sessionId,
+      harness: persisted.harness,
+      prompt: persisted.prompt,
+      requestIds: new Map(),
+      initialSnapshot: '',
+      lastSnapshot: '',
+      output: persisted.output,
+      outputGeneration: persisted.outputGeneration,
+      baseOffset: persisted.baseOffset,
+      version: persisted.version,
+      status: persisted.status,
+      createdAtMs: persisted.createdAt,
+      changedAt: new Date(persisted.changedAt).toISOString(),
+      observedWorking: persisted.observedWorking,
+      outputChanges: persisted.outputChanges,
+      promptDelimiterPairs: persisted.promptDelimiterPairs,
+      submissionUncertain: persisted.submissionUncertain,
+      interrupted: persisted.interrupted || persisted.status === 'interrupted',
+      truncated: persisted.truncated,
+      archived: true,
+    };
+  }
+
   private async sendPromptUnlocked(request: ControlSendPromptRequest, resolvedTarget: Session): Promise<ControlSendPromptResult> {
     try {
+      await this.restorePersistedHistory();
       let targetSession = resolvedTarget;
 
       const requestId = request.clientRequestId ?? randomUUID();
       const fingerprint = JSON.stringify({ sessionId: targetSession.id, prompt: request.prompt });
+      const fingerprintHash = createHash('sha256').update(fingerprint).digest('hex');
       const promptCacheKey = `${targetSession.id}:${requestId}`;
       const cachedTurnId = this.promptRequestIds.get(promptCacheKey);
       if (cachedTurnId) {
@@ -1169,7 +1602,8 @@ export class AgentControlService {
         }
       }
       if (!turn) {
-        const now = new Date().toISOString();
+        const createdAtMs = Date.now();
+        const now = new Date(createdAtMs).toISOString();
         const agent = await this.repos.agents.findById(targetSession.agentId);
         turn = {
           id: randomUUID(),
@@ -1184,6 +1618,7 @@ export class AgentControlService {
           baseOffset: 0,
           version: 1,
           status: 'working',
+          createdAtMs,
           changedAt: now,
           observedWorking: false,
           outputChanges: 0,
@@ -1219,13 +1654,14 @@ export class AgentControlService {
       }
       turn.status = turn.submissionUncertain ? 'unknown' : 'working';
       turn.version += 1;
-      turn.changedAt = new Date().toISOString();
+      const acceptedAtMs = Date.now();
+      turn.changedAt = new Date(acceptedAtMs).toISOString();
       const response: ControlSendPromptResult = {
         apiVersion: SPAWNEA_CONTROL_API_VERSION,
         sessionId: targetSession.id,
         delivered: result.delivered,
         deliveryMethod: result.deliveryMethod,
-        acceptedAt: new Date().toISOString(),
+        acceptedAt: new Date(acceptedAtMs).toISOString(),
         turnId: turn.id,
         version: turn.version,
         status: turn.status,
@@ -1241,9 +1677,22 @@ export class AgentControlService {
         if (oldest) this.promptRequestIds.delete(oldest);
       }
       if (this.turns.size > 200) {
-        const evictable = Array.from(this.turns.values()).find((candidate) => !this.openTurnBySession.has(candidate.sessionId));
+        const evictable = Array.from(this.turns.values()).find(
+          (candidate) => !this.openTurnBySession.has(candidate.sessionId) && !this.pendingTurnWrites.has(candidate.id),
+        );
         if (evictable) this.turns.delete(evictable.id);
       }
+      await this.persistTurn(turn);
+      await this.persistTurnRequest({
+        sessionId: targetSession.id,
+        clientRequestId: requestId,
+        turnId: turn.id,
+        fingerprintHash,
+        delivered: result.delivered,
+        deliveryMethod: result.deliveryMethod,
+        deliveryStatus: turn.submissionUncertain ? 'uncertain' : result.delivered ? 'delivered' : 'failed',
+        acceptedAt: acceptedAtMs,
+      });
       return response;
     } catch (error) {
       this.rememberError('send_prompt', error);
@@ -1327,14 +1776,113 @@ export class AgentControlService {
     return contentLines.length > 0;
   }
 
+  private resolveNextTurnStatus(params: {
+    turn: TrackedTurn;
+    effectiveStatus: Session['status'];
+    hasResponseDelimiter: boolean;
+    hasOutput: boolean;
+    ruleIdle: boolean;
+    fallbackIdle: boolean;
+    windowStableMs: number;
+  }): Exclude<ControlTurnStatus, 'unchanged'> {
+    const { turn, effectiveStatus, hasResponseDelimiter, hasOutput, ruleIdle, fallbackIdle, windowStableMs } = params;
+    // A turn ends only on positive evidence: a response delimiter, an idle
+    // rule (including completion markers), process exit, or a stable screen.
+    if (hasResponseDelimiter) {
+      turn.submissionUncertain = false;
+      return 'completed';
+    }
+    if (effectiveStatus === 'error' || effectiveStatus === 'disconnected') {
+      return 'failed';
+    }
+    if (effectiveStatus === 'needs_input') {
+      return 'needs_input';
+    }
+    if (hasOutput && (effectiveStatus === 'done' || ruleIdle)) {
+      turn.submissionUncertain = false;
+      return 'completed';
+    }
+    if (turn.submissionUncertain) {
+      return 'unknown';
+    }
+    if (effectiveStatus === 'working') {
+      return 'working';
+    }
+    if (effectiveStatus === 'done') {
+      return 'completed';
+    }
+    if (ruleIdle) {
+      return turn.observedWorking ? 'completed' : 'unknown';
+    }
+    if (fallbackIdle) {
+      return hasOutput && windowStableMs >= STABLE_SCREEN_COMPLETION_MS ? 'completed' : 'unknown';
+    }
+    return turn.status === 'working' ? 'working' : 'unknown';
+  }
+
   private async refreshTurn(turn: TrackedTurn): Promise<void> {
     // A finished turn must not absorb a later prompt or another turn's output.
     if (turn.status === 'completed' || turn.status === 'failed') return;
-    const [snapshot, session] = await Promise.all([
-      this.sessionManager.captureSessionTerminal(turn.sessionId),
+
+    const detailedCapture = (
+      this.sessionManager as unknown as {
+        captureSessionTerminalDetailed?: (
+          sessionId: string
+        ) => Promise<{ success: boolean; output: string }>;
+      }
+    ).captureSessionTerminalDetailed;
+    const capturePromise: Promise<{ success: boolean; output: string; error?: string }> = (
+      typeof detailedCapture === 'function'
+        ? detailedCapture.call(this.sessionManager, turn.sessionId)
+        : this.sessionManager
+            .captureSessionTerminal(turn.sessionId)
+            .then((output) => ({ success: true, output }))
+    ).catch((error: unknown) => ({
+      success: false,
+      output: '',
+      error: errorMessage(error),
+    }));
+
+    const [captured, session] = await Promise.all([
+      capturePromise,
       this.repos.sessions.findById(turn.sessionId),
     ]);
     if (!session) throw new Error(`Session '${turn.sessionId}' not found`);
+
+    if (!captured.success) {
+      // Capture failures must never erase retained output, yet an authoritative terminal session state
+      // (done/error/disconnected) still finalizes the turn truthfully without empty-snapshot inference.
+      if (session.status === 'error' || session.status === 'disconnected' || session.status === 'done') {
+        const nextStatus = this.resolveNextTurnStatus({
+          turn,
+          effectiveStatus: session.status,
+          hasResponseDelimiter: false,
+          hasOutput: this.hasResponseOutput(turn, turn.output),
+          ruleIdle: false,
+          fallbackIdle: false,
+          windowStableMs: 0,
+        });
+        if (nextStatus !== turn.status) {
+          turn.status = nextStatus;
+          turn.version += 1;
+          turn.changedAt = new Date().toISOString();
+          if (nextStatus === 'completed' || nextStatus === 'failed') {
+            this.openTurnBySession.delete(turn.sessionId);
+          }
+          await this.persistTurn(turn);
+        }
+        return;
+      }
+
+      this.logger.warn('Skipping turn refresh after terminal capture failure', {
+        sessionId: turn.sessionId,
+        turnId: turn.id,
+        error: captured.error ?? 'Terminal capture did not succeed',
+      });
+      return;
+    }
+
+    const snapshot = captured.output;
     const nextOutput = this.terminalOutputSince(turn.initialSnapshot, snapshot);
 
     const tailLines = snapshot ? snapshot.split('\n').slice(-50) : [];
@@ -1373,38 +1921,18 @@ export class AgentControlService {
     const hasResponseDelimiter = delimiterPairs > turn.promptDelimiterPairs;
     const hasOutput = this.hasResponseOutput(turn, nextOutput);
 
-    // A turn ends only on positive evidence: a response delimiter, an idle
-    // rule (including completion markers), process exit, or a stable screen.
-    let nextStatus: Exclude<ControlTurnStatus, 'unchanged'>;
-
-    if (hasResponseDelimiter) {
-      turn.submissionUncertain = false;
-      nextStatus = 'completed';
-    } else if (
-      effectiveStatus === 'error' ||
-      effectiveStatus === 'disconnected'
-    ) {
-      nextStatus = 'failed';
-    } else if (effectiveStatus === 'needs_input') {
-      nextStatus = 'needs_input';
-    } else if (hasOutput && (effectiveStatus === 'done' || ruleIdle)) {
-      turn.submissionUncertain = false;
-      nextStatus = 'completed';
-    } else if (turn.submissionUncertain) {
-      nextStatus = 'unknown';
-    } else if (effectiveStatus === 'working') {
-      nextStatus = 'working';
-    } else if (effectiveStatus === 'done') {
-      nextStatus = 'completed';
-    } else if (ruleIdle) {
-      nextStatus = turn.observedWorking ? 'completed' : 'unknown';
-    } else if (fallbackIdle) {
-      nextStatus = hasOutput && windowStableMs >= STABLE_SCREEN_COMPLETION_MS ? 'completed' : 'unknown';
-    } else {
-      nextStatus = turn.status === 'working' ? 'working' : 'unknown';
-    }
+    const nextStatus = this.resolveNextTurnStatus({
+      turn,
+      effectiveStatus,
+      hasResponseDelimiter,
+      hasOutput,
+      ruleIdle,
+      fallbackIdle,
+      windowStableMs,
+    });
 
     const outputChanged = snapshot !== turn.lastSnapshot;
+    turn.lastSnapshot = snapshot;
     if (outputChanged || nextStatus !== turn.status) {
       if (outputChanged) {
         if (turn.output && !nextOutput.startsWith(turn.output)) {
@@ -1414,11 +1942,11 @@ export class AgentControlService {
         turn.output = nextOutput;
         turn.outputChanges += 1;
       }
-      const byteLength = Buffer.byteLength(turn.output, 'utf8');
-      if (byteLength > MAX_RETAINED_TURN_BYTES) {
-        const excess = byteLength - MAX_RETAINED_TURN_BYTES;
-        turn.output = Buffer.from(turn.output, 'utf8').subarray(excess).toString('utf8');
-        turn.baseOffset += excess;
+      const bounded = truncateUtf8Tail(turn.output, MAX_RETAINED_TURN_BYTES);
+      if (bounded.truncated) {
+        turn.output = bounded.text;
+        turn.baseOffset += bounded.droppedBytes;
+        turn.truncated = true;
       }
       turn.status = nextStatus;
       turn.version += 1;
@@ -1426,66 +1954,141 @@ export class AgentControlService {
       if (nextStatus === 'completed' || nextStatus === 'failed') {
         this.openTurnBySession.delete(turn.sessionId);
       }
+      await this.persistTurn(turn);
     }
-    turn.lastSnapshot = snapshot;
   }
 
-  private cursorOffset(turn: TrackedTurn, cursor?: string): { offset: number; expired: boolean } {
-    if (!cursor) return { offset: turn.baseOffset, expired: turn.baseOffset > 0 };
+  private cursorOffset(
+    turn: TrackedTurn,
+    cursor: string | undefined,
+    retainedEnd: number
+  ): { offset: number; expired: boolean; status: ControlTurnCursorStatus; forceEmpty: boolean } {
+    if (!cursor) {
+      return {
+        offset: turn.baseOffset,
+        expired: turn.baseOffset > 0,
+        status: turn.baseOffset > 0 ? 'expired' : 'initial',
+        forceEmpty: false,
+      };
+    }
+
     const parts = cursor.split(':');
+    if (parts.length !== 2 && parts.length !== 3) {
+      return { offset: retainedEnd, expired: true, status: 'invalid', forceEmpty: true };
+    }
+
+    let turnId: string;
+    let gen: number | null = null;
+    let offset: number;
     if (parts.length === 3) {
-      const [turnId, rawGen, rawOffset] = parts;
-      const gen = Number(rawGen);
-      const offset = Number(rawOffset);
-      if (
-        turnId !== turn.id ||
-        !Number.isSafeInteger(gen) ||
-        !Number.isSafeInteger(offset) ||
-        gen !== turn.outputGeneration ||
-        offset < turn.baseOffset
-      ) {
-        return { offset: turn.baseOffset, expired: true };
+      const [rawTurnId, rawGen, rawOffset] = parts;
+      turnId = rawTurnId!;
+      if (!/^\d+$/.test(rawGen ?? '') || !/^\d+$/.test(rawOffset ?? '')) {
+        return { offset: retainedEnd, expired: true, status: 'invalid', forceEmpty: true };
       }
-      return { offset, expired: false };
+      gen = Number(rawGen);
+      offset = Number(rawOffset);
+      if (!Number.isSafeInteger(gen) || gen < 1 || !Number.isSafeInteger(offset) || offset < 0) {
+        return { offset: retainedEnd, expired: true, status: 'invalid', forceEmpty: true };
+      }
+    } else {
+      const [rawTurnId, rawOffset] = parts;
+      turnId = rawTurnId!;
+      if (!/^\d+$/.test(rawOffset ?? '')) {
+        return { offset: retainedEnd, expired: true, status: 'invalid', forceEmpty: true };
+      }
+      offset = Number(rawOffset);
+      if (!Number.isSafeInteger(offset) || offset < 0) {
+        return { offset: retainedEnd, expired: true, status: 'invalid', forceEmpty: true };
+      }
     }
-    const [turnId, rawOffset] = parts;
-    const offset = Number(rawOffset);
-    if (turnId !== turn.id || !Number.isSafeInteger(offset) || turn.outputGeneration > 1 || offset < turn.baseOffset) {
-      return { offset: turn.baseOffset, expired: true };
+
+    if (turnId !== turn.id) {
+      return { offset: retainedEnd, expired: true, status: 'mismatched', forceEmpty: true };
     }
-    return { offset, expired: false };
+
+    const generationChanged = gen !== null ? gen !== turn.outputGeneration : turn.outputGeneration > 1;
+    if (generationChanged) {
+      return {
+        offset: turn.baseOffset,
+        expired: true,
+        status: turn.status === 'interrupted' ? 'restarted' : 'expired',
+        forceEmpty: false,
+      };
+    }
+
+    if (offset < turn.baseOffset) {
+      return { offset: turn.baseOffset, expired: true, status: 'expired', forceEmpty: false };
+    }
+    if (offset > retainedEnd) {
+      return { offset: retainedEnd, expired: true, status: 'expired', forceEmpty: true };
+    }
+    if (offset === retainedEnd) {
+      return { offset: retainedEnd, expired: false, status: 'eof', forceEmpty: false };
+    }
+    return { offset, expired: false, status: 'valid', forceEmpty: false };
   }
 
   async getTurn(request: ControlGetTurnRequest): Promise<ControlGetTurnResult> {
-    const turn = this.turns.get(request.turnId);
-    if (!turn) throw new Error(`Turn '${request.turnId}' not found`);
+    await this.restorePersistedHistory();
+    const liveTurn = this.turns.get(request.turnId);
+    if (!liveTurn) {
+      const persisted = await this.repos.sessionHistory?.findTurnById(request.turnId);
+      if (!persisted) throw new Error(`Turn '${request.turnId}' not found`);
+      return this.readTurn(this.persistedToTrackedTurn(persisted), request, true);
+    }
+
     const waitMs = Math.min(Math.max(request.waitMs ?? 0, 0), MAX_TURN_WAIT_MS);
     const deadline = Date.now() + waitMs;
     do {
-      await this.refreshTurn(turn);
-      if (request.afterVersion === undefined || turn.version > request.afterVersion || turn.status === 'needs_input' || turn.status === 'completed' || turn.status === 'failed') break;
+      await this.refreshTurn(liveTurn);
+      if (
+        request.afterVersion === undefined ||
+        liveTurn.version > request.afterVersion ||
+        liveTurn.status === 'needs_input' ||
+        liveTurn.status === 'completed' ||
+        liveTurn.status === 'failed' ||
+        liveTurn.status === 'interrupted'
+      ) {
+        break;
+      }
       if (Date.now() >= deadline) break;
       await new Promise((resolve) => setTimeout(resolve, Math.min(750, deadline - Date.now())));
     } while (Date.now() <= deadline);
 
-    return this.readTurn(turn, request);
+    return this.readTurn(liveTurn, request, false);
   }
 
-  private readTurn(turn: TrackedTurn, request: ControlGetTurnRequest): ControlGetTurnResult {
-    const cursor = this.cursorOffset(turn, request.cursor);
-    const retainedEnd = turn.baseOffset + Buffer.byteLength(turn.output, 'utf8');
-    if (cursor.offset > retainedEnd) {
-      cursor.offset = retainedEnd;
-      cursor.expired = true;
+  private readTurn(turn: TrackedTurn, request: ControlGetTurnRequest, archived = false): ControlGetTurnResult {
+    if (request.maxBytes !== undefined && (!Number.isFinite(request.maxBytes) || request.maxBytes < 1)) {
+      throw new Error(`Invalid maxBytes (${String(request.maxBytes)}): must be at least 1 byte`);
     }
+    const retainedEnd = turn.baseOffset + utf8ByteLength(turn.output);
+    const cursor = this.cursorOffset(turn, request.cursor, retainedEnd);
     const relativeOffset = Math.max(0, cursor.offset - turn.baseOffset);
-    const available = Buffer.from(turn.output, 'utf8').subarray(relativeOffset);
-    const unchanged = request.afterVersion !== undefined && turn.version <= request.afterVersion && available.length === 0;
-    const maxBytes = Math.min(request.maxBytes ?? DEFAULT_TURN_READ_BYTES, MAX_TURN_READ_BYTES);
+    const available = cursor.forceEmpty ? Buffer.alloc(0) : Buffer.from(turn.output, 'utf8').subarray(relativeOffset);
+    const unchanged =
+      !cursor.forceEmpty &&
+      request.afterVersion !== undefined &&
+      turn.version <= request.afterVersion &&
+      available.length === 0;
+    const maxBytes = Math.min(Math.trunc(request.maxBytes ?? DEFAULT_TURN_READ_BYTES), MAX_TURN_READ_BYTES);
     let chunkLength = Math.min(available.length, maxBytes);
-    while (chunkLength > 0 && chunkLength < available.length && (available[chunkLength] & 0xc0) === 0x80) chunkLength -= 1;
+    while (chunkLength > 0 && chunkLength < available.length && (available[chunkLength]! & 0xc0) === 0x80) {
+      chunkLength -= 1;
+    }
+    if (available.length > 0 && chunkLength === 0) {
+      const firstByte = available[0]!;
+      const minCharBytes = firstByte >= 0xf0 ? 4 : firstByte >= 0xe0 ? 3 : firstByte >= 0xc0 ? 2 : 1;
+      throw new Error(
+        `Invalid maxBytes (${maxBytes}): must be at least ${minCharBytes} bytes to read the next UTF-8 character without truncation`
+      );
+    }
     const chunk = available.subarray(0, chunkLength);
-    const nextOffset = cursor.offset + chunk.length;
+    const nextOffset =
+      cursor.status === 'invalid' || cursor.status === 'mismatched'
+        ? turn.baseOffset
+        : cursor.offset + chunk.length;
     const rawOutput = chunk.toString('utf8');
     const outputMode = request.outputMode ?? 'compact';
     const compacted = outputMode === 'compact'
@@ -1500,8 +2103,9 @@ export class AgentControlService {
         .replace(/\s*<<<SPAWNEA_RESPONSE_END>>>$/, '')
       : undefined;
     const extracted = delimitedOutput ?? compacted.output;
-    const extractedBytes = Buffer.byteLength(extracted, 'utf8');
-    const output = outputMode === 'compact' ? Buffer.from(extracted, 'utf8').subarray(0, maxBytes).toString('utf8') : compacted.output;
+    const compactBounded = outputMode === 'compact' ? truncateUtf8Head(extracted, maxBytes) : null;
+    const output = compactBounded ? compactBounded.text : compacted.output;
+    const interrupted = Boolean(turn.interrupted || turn.status === 'interrupted');
     return {
       apiVersion: SPAWNEA_CONTROL_API_VERSION,
       turnId: turn.id,
@@ -1509,10 +2113,14 @@ export class AgentControlService {
       status: unchanged ? 'unchanged' : turn.status,
       version: turn.version,
       cursor: `${turn.id}:${turn.outputGeneration}:${nextOffset}`,
-      output: unchanged ? '' : output,
+      output: unchanged || cursor.forceEmpty ? '' : output,
       outputMode,
-      truncated: available.length > maxBytes || extractedBytes > maxBytes,
+      truncated: available.length > maxBytes || Boolean(compactBounded?.truncated),
+      retainedTruncated: Boolean(turn.truncated),
       cursorExpired: cursor.expired,
+      cursorStatus: cursor.status,
+      archived,
+      interrupted,
       extraction: delimited ? 'delimited' : turn.status === 'completed' ? 'best_effort' : 'none',
       confidence: delimited ? 'high' : turn.status === 'completed' ? 'medium' : 'low',
       omitted: compacted.omitted,

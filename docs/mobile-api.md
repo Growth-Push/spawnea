@@ -14,7 +14,7 @@ The mobile API is a **thin HTTP adapter** over Spawnea's internal control servic
 3. **Argon2id Authentication:** The desktop configuration stores **only an Argon2id hash** of the secret key. Requests authenticate with `Authorization: Bearer <key>`. Failed authentication attempts never echo or log the candidate key.
 4. **Invalid Auth Safeguard:** If `api.enabled: true` is set but `key_hash` is missing, empty, or not a valid Argon2id hash, Spawnea **never opens a listener**.
 5. **Polling Only:** The mobile client queries status, output, and history via HTTP polling. No WebSockets, SSE, or background push daemons are used.
-6. **No Custom Persistence:** What does not come from agent files (e.g. live terminal tail or screen-based history) is reported as unavailable after a desktop restart, never as live.
+6. **Honest Live vs. Historical Provenance:** What does not come from live active terminal capture or persistent agent transcript files is reported via legacy `available: false` (`status: "unavailable"`, `output: null`, `items: []`) so existing mobile clients never display stale snapshots as fresh live content. Bounded SQLite snapshots (`64 KiB` output, `50` parsed screen items replaced per observation even when Mobile is disabled, `7`-day retention within a `32 MiB` aggregate payload budget, without continuous PTY transcript recording) are exposed additively via `lastOutput`, `storedItems`, freshness flags (`freshness`, `stale`, `stored`, `updatedAt`, `capturedAt`, `truncated`, `version`), and explicit pagination cursor states (`cursorStatus`, `cursorExpired`). Persisted snapshots are stored locally in unredacted cleartext (readable by the local OS user and authorized callers) and enforce owner-only `0600` permissions on supported POSIX systems before writes (failing closed if unavailable; Windows relies on user profile ACLs).
 7. **Rate & Size Limits:** Requests are bounded to 128 KiB, with dual-tier rate limiting (default 300 authenticated requests per minute, 10 failed authentication attempts per minute).
 
 ---
@@ -164,10 +164,16 @@ All JSON responses include `"apiVersion": "v1"`.
     "sessionId": "sess-123",
     "available": true,
     "status": "live",
-    "output": "...terminal text..."
+    "output": "...terminal text...",
+    "freshness": "live",
+    "stale": false,
+    "stored": false,
+    "updatedAt": "2026-11-15T12:00:00.000Z",
+    "truncated": false
   }
   ```
-- **Response (Disconnected / After Restart):**
+- **Response (Disconnected / Capture Failed / After Restart):**
+  When a bounded snapshot exists in SQLite, `available`, `status`, and `output` keep their unavailable legacy shape while `lastOutput` and additive metadata expose the retained snapshot:
   ```json
   {
     "apiVersion": "v1",
@@ -175,9 +181,25 @@ All JSON responses include `"apiVersion": "v1"`.
     "available": false,
     "status": "unavailable",
     "output": null,
-    "message": "Current terminal output is unavailable because the session is not running."
+    "freshness": "historical",
+    "stale": true,
+    "stored": true,
+    "updatedAt": "2026-11-15T11:58:00.000Z",
+    "capturedAt": "2026-11-15T11:58:00.000Z",
+    "truncated": false,
+    "version": 3,
+    "lastOutput": {
+      "output": "...last retained snapshot...",
+      "updatedAt": "2026-11-15T11:58:00.000Z",
+      "capturedAt": "2026-11-15T11:58:00.000Z",
+      "stale": true,
+      "truncated": false,
+      "version": 3
+    },
+    "message": "Current terminal output is unavailable because the session is not running. Retained historical output is exposed in lastOutput."
   }
   ```
+  If no snapshot is stored, `lastOutput` is `null`, `freshness` is `"unavailable"`, `stale` is `false`, `stored` is `false`, `updatedAt` is `null`, `capturedAt` is `null`, and `version` is `null`.
 
 ### 4. Conversation History
 - **Endpoint:** `GET /api/v1/sessions/:id/history?limit=20`
@@ -185,6 +207,7 @@ All JSON responses include `"apiVersion": "v1"`.
   - `limit` (optional, default 20, max 50)
   - `cursor` (optional, resumption pagination cursor)
 - **Response (Claude/Codex Agent Transcripts):**
+  Persistent transcript responses include `available: true` and `source: "transcript"`. When the session is active, `freshness` is `"live"` and `stale` is `false`; when the session is `disconnected` or `done`, `freshness` is `"historical"` and `stale` is `true` (`stored: false` in both cases because transcripts come from agent transcript files rather than Spawnea's SQLite snapshot cache). Transcript pagination returns explicit `cursorStatus` (`initial`, `valid`, `eof`, `expired`, `invalid`, `mismatched`) and `cursorExpired` when malformed, past-EOF, or file/head-mismatched cursors reset to offset `0`:
   ```json
   {
     "apiVersion": "v1",
@@ -206,10 +229,17 @@ All JSON responses include `"apiVersion": "v1"`.
       }
     ],
     "cursor": "offset:4096",
-    "hasMore": false
+    "hasMore": false,
+    "freshness": "live",
+    "stale": false,
+    "stored": false,
+    "truncated": false,
+    "cursorStatus": "initial",
+    "cursorExpired": false
   }
   ```
-- **Response (Screen-only sessions after restart):**
+- **Response (Screen-only sessions when inactive or capture failed):**
+  Legacy `available: false` and `items: []` remain intact; any retained snapshot items are returned in `storedItems` (with `storedHasMore`, `cursor`, `cursorStatus`, and `cursorExpired` distinguishing `initial`, `valid`, `eof`, `expired`, `invalid`, `mismatched`, and `restarted`). Stored snapshot cursors are opaque tokens bound to the owning session, a non-reused `snapshotGeneration`, and snapshot `version`, so cursors from another session, a stale snapshot version, or a pruned/recreated snapshot row return `mismatched` or `expired` (`cursorExpired: true`) instead of `eof`:
   ```json
   {
     "apiVersion": "v1",
@@ -217,7 +247,27 @@ All JSON responses include `"apiVersion": "v1"`.
     "available": false,
     "source": "screen",
     "items": [],
-    "message": "Session history is unavailable because this session does not have agent transcript files and the terminal is not active."
+    "cursor": "stored:<opaque-token>",
+    "hasMore": false,
+    "freshness": "historical",
+    "stale": true,
+    "stored": true,
+    "updatedAt": "2026-11-15T11:58:00.000Z",
+    "capturedAt": "2026-11-15T11:58:00.000Z",
+    "truncated": false,
+    "version": 2,
+    "storedItems": [
+      {
+        "id": "item-1",
+        "role": "user",
+        "text": "Echo test",
+        "source": "screen"
+      }
+    ],
+    "storedHasMore": false,
+    "cursorStatus": "initial",
+    "cursorExpired": false,
+    "message": "Session history is unavailable because this session does not have agent transcript files and the terminal is not active. Retained historical items are exposed in storedItems."
   }
   ```
 

@@ -1,6 +1,14 @@
 import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { relations } from 'drizzle-orm';
-import type { SessionStatus, SessionCreationSource, ArtifactDirection, SessionTopologySnapshot } from '@spawnea/domain';
+import type {
+  SessionStatus,
+  SessionCreationSource,
+  ArtifactDirection,
+  SessionTopologySnapshot,
+  PersistedControlTurnStatus,
+  TurnRequestDeliveryStatus,
+  SessionHistorySource,
+} from '@spawnea/domain';
 
 export const servers = sqliteTable('servers', {
   id: text('id').primaryKey(),
@@ -90,6 +98,72 @@ export const sessionLinks = sqliteTable('session_links', {
   source: text('source').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 }, (table) => [uniqueIndex('idx_session_links_identity').on(table.sessionId, table.url, table.source)]);
+
+export const sessionOutputSnapshots = sqliteTable(
+  'session_output_snapshots',
+  {
+    sessionId: text('session_id').primaryKey().references(() => sessions.id, { onDelete: 'cascade' }),
+    output: text('output').notNull(),
+    truncated: integer('truncated', { mode: 'boolean' }).notNull().default(false),
+    snapshotGeneration: text('snapshot_generation').notNull().default(''),
+    version: integer('version').notNull().default(1),
+    source: text('source').$type<SessionHistorySource>().notNull().default('screen'),
+    historyItemsJson: text('history_items_json').notNull().default('[]'),
+    historyTruncated: integer('history_truncated', { mode: 'boolean' }).notNull().default(false),
+    payloadBytes: integer('payload_bytes').notNull().default(0),
+    capturedAt: integer('captured_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [index('idx_session_output_snapshots_updated_at').on(table.updatedAt)],
+);
+
+export const sessionTurns = sqliteTable(
+  'session_turns',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+    harness: text('harness').notNull(),
+    prompt: text('prompt').notNull(),
+    output: text('output').notNull(),
+    outputGeneration: integer('output_generation').notNull().default(1),
+    baseOffset: integer('base_offset').notNull().default(0),
+    version: integer('version').notNull().default(1),
+    status: text('status').$type<PersistedControlTurnStatus>().notNull(),
+    observedWorking: integer('observed_working', { mode: 'boolean' }).notNull().default(false),
+    outputChanges: integer('output_changes').notNull().default(0),
+    promptDelimiterPairs: integer('prompt_delimiter_pairs').notNull().default(0),
+    submissionUncertain: integer('submission_uncertain', { mode: 'boolean' }).notNull().default(false),
+    interrupted: integer('interrupted', { mode: 'boolean' }).notNull().default(false),
+    truncated: integer('truncated', { mode: 'boolean' }).notNull().default(false),
+    payloadBytes: integer('payload_bytes').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    changedAt: integer('changed_at').notNull(),
+  },
+  (table) => [
+    index('idx_session_turns_session_changed').on(table.sessionId, table.changedAt, table.createdAt),
+    index('idx_session_turns_changed_at').on(table.changedAt),
+  ],
+);
+
+export const sessionTurnRequests = sqliteTable(
+  'session_turn_requests',
+  {
+    sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+    clientRequestId: text('client_request_id').notNull(),
+    turnId: text('turn_id').notNull().references(() => sessionTurns.id, { onDelete: 'cascade' }),
+    fingerprintHash: text('fingerprint_hash').notNull(),
+    delivered: integer('delivered', { mode: 'boolean' }).notNull().default(false),
+    deliveryMethod: text('delivery_method').$type<'pty' | 'tmux'>().notNull(),
+    deliveryStatus: text('delivery_status').$type<TurnRequestDeliveryStatus>().notNull(),
+    acceptedAt: integer('accepted_at').notNull(),
+    payloadBytes: integer('payload_bytes').notNull().default(0),
+  },
+  (table) => [
+    uniqueIndex('idx_session_turn_requests_pk').on(table.sessionId, table.clientRequestId),
+    index('idx_session_turn_requests_turn_id').on(table.turnId),
+    index('idx_session_turn_requests_accepted_at').on(table.acceptedAt),
+  ],
+);
 
 export const sessionChildAliasCounters = sqliteTable(
   'session_child_alias_counters',
@@ -181,3 +255,6 @@ export type SessionChildAliasCounterRow = typeof sessionChildAliasCounters.$infe
 export type NewSessionChildAliasCounterRow = typeof sessionChildAliasCounters.$inferInsert;
 export type ArtifactRow = typeof artifacts.$inferSelect;
 export type NewArtifactRow = typeof artifacts.$inferInsert;
+export type SessionOutputSnapshotRow = typeof sessionOutputSnapshots.$inferSelect;
+export type SessionTurnRow = typeof sessionTurns.$inferSelect;
+export type SessionTurnRequestRow = typeof sessionTurnRequests.$inferSelect;

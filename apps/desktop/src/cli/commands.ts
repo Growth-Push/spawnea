@@ -266,7 +266,12 @@ export async function pollTurn(
     cursor = turn.cursor ?? cursor;
     version = turn.version ?? version;
 
-    if (turn.status === 'completed' || turn.status === 'needs_input' || turn.status === 'failed') {
+    if (
+      turn.status === 'completed' ||
+      turn.status === 'needs_input' ||
+      turn.status === 'failed' ||
+      turn.status === 'interrupted'
+    ) {
       let finalTurn = { ...turn };
 
       while (finalTurn.truncated && finalTurn.cursor) {
@@ -316,18 +321,40 @@ export interface WaitTurnOptions extends OutputOptions {
   timeout?: number;
 }
 
-export async function waitTurn(client: ControlCliClient, options: WaitTurnOptions): Promise<void> {
-  if (options.timeout !== undefined && (typeof options.timeout !== 'number' || isNaN(options.timeout) || options.timeout <= 0)) {
-    throw new Error(`Invalid timeout: ${options.timeout}. Expected positive number of seconds.`);
-  }
-  const timeoutSec = options.timeout ?? 120;
-  const result = await pollTurn(client, options.turn, timeoutSec);
-
+function reportTurnResult(
+  result: PollTurnResult,
+  options: OutputOptions,
+  context: {
+    turnId: string;
+    mode: 'wait' | 'send-and-wait';
+  },
+): void {
   if (result.status === 'failed') {
     if (options.json) {
       console.log(JSON.stringify(result.rawTurn, null, 2));
+    } else if (context.mode === 'wait') {
+      console.error(`Turn ${context.turnId} failed: ${result.error || result.output || 'Unknown error'}`);
     } else {
-      console.error(`Turn ${options.turn} failed: ${result.error || result.output || 'Unknown error'}`);
+      console.error(`Prompt execution failed: ${result.error || result.output || 'Unknown failure'}`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  if (result.status === 'interrupted') {
+    if (options.json) {
+      console.log(JSON.stringify(result.rawTurn, null, 2));
+    } else if (context.mode === 'wait') {
+      console.log(`Turn ${context.turnId} interrupted:`);
+      console.log(result.output || '(No response text)');
+      console.error(
+        `Turn ${context.turnId} was interrupted before completion (partial retained output shown above).`
+      );
+    } else {
+      console.log(result.output || '');
+      console.error(
+        `Prompt turn ${context.turnId} was interrupted before completion (partial retained output shown above).`
+      );
     }
     process.exitCode = 1;
     return;
@@ -335,10 +362,21 @@ export async function waitTurn(client: ControlCliClient, options: WaitTurnOption
 
   if (options.json) {
     console.log(JSON.stringify(result.rawTurn, null, 2));
-  } else {
-    console.log(`Turn ${options.turn} ${result.status}:`);
+  } else if (context.mode === 'wait') {
+    console.log(`Turn ${context.turnId} ${result.status}:`);
     console.log(result.output || '(No response text)');
+  } else {
+    console.log(result.output || '');
   }
+}
+
+export async function waitTurn(client: ControlCliClient, options: WaitTurnOptions): Promise<void> {
+  if (options.timeout !== undefined && (typeof options.timeout !== 'number' || isNaN(options.timeout) || options.timeout <= 0)) {
+    throw new Error(`Invalid timeout: ${options.timeout}. Expected positive number of seconds.`);
+  }
+  const timeoutSec = options.timeout ?? 120;
+  const result = await pollTurn(client, options.turn, timeoutSec);
+  reportTurnResult(result, options, { turnId: options.turn, mode: 'wait' });
 }
 
 export interface SendAndWaitOptions extends OutputOptions {
@@ -377,22 +415,7 @@ export async function sendAndWaitPrompt(client: ControlCliClient, options: SendA
   const timeoutSec = options.timeout ?? 300;
   try {
     const result = await pollTurn(client, turnId, timeoutSec, sent.version ?? 0);
-
-    if (result.status === 'failed') {
-      if (options.json) {
-        console.log(JSON.stringify(result.rawTurn, null, 2));
-      } else {
-        console.error(`Prompt execution failed: ${result.error || result.output || 'Unknown failure'}`);
-      }
-      process.exitCode = 1;
-      return;
-    }
-
-    if (options.json) {
-      console.log(JSON.stringify(result.rawTurn, null, 2));
-    } else {
-      console.log(result.output || '');
-    }
+    reportTurnResult(result, options, { turnId, mode: 'send-and-wait' });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('did not complete within')) {

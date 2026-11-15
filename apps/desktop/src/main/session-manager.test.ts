@@ -491,6 +491,26 @@ ${profile ? `      ${profile.id}:
     expect(history.items).toEqual([]);
   });
 
+  it('throws from captureSessionTerminal when tmux capture fails and returns empty string when capture succeeds empty', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Check captureSessionTerminal error propagation',
+    });
+
+    const tmux = (sessionManager as any).tmuxManager;
+    const captureSpy = vi.spyOn(tmux, 'capturePaneTailDetailed');
+
+    captureSpy.mockResolvedValueOnce({ success: false, lines: [] });
+    await expect(sessionManager.captureSessionTerminal(session.id)).rejects.toThrow(
+      `Failed to capture terminal output for session '${session.id}'`
+    );
+
+    captureSpy.mockResolvedValueOnce({ success: true, lines: [] });
+    await expect(sessionManager.captureSessionTerminal(session.id)).resolves.toBe('');
+  });
+
   describe('direct root model validation before resource creation', () => {
     const input = {
       serverId: 'dev-workstation', projectId: 'dev-workstation:spawnea',
@@ -4344,5 +4364,49 @@ up 1 day, 5 hours
       resolveHost();
       await resurrectPromise;
     });
+  });
+
+  it('deletes persisted snapshot, turns, and turn request metadata when a session is deleted or forgotten locally', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Cascade delete persistence test',
+    });
+
+    await repos.sessionHistory!.upsertSnapshot({
+      sessionId: session.id,
+      output: 'saved screen',
+      items: [{ id: 'item-1', role: 'agent', text: 'saved screen', source: 'screen' }],
+    });
+    await repos.sessionHistory!.saveTurn({
+      id: 'turn-del-1',
+      sessionId: session.id,
+      harness: 'claude',
+      prompt: 'hi',
+      output: 'bye',
+      outputGeneration: 1,
+      baseOffset: 0,
+      version: 1,
+      status: 'completed',
+      observedWorking: true,
+      outputChanges: 1,
+      promptDelimiterPairs: 0,
+    });
+    await repos.sessionHistory!.saveTurnRequest({
+      sessionId: session.id,
+      clientRequestId: 'req-del-1',
+      turnId: 'turn-del-1',
+      fingerprintHash: '0'.repeat(64),
+      delivered: true,
+      deliveryMethod: 'tmux',
+      deliveryStatus: 'delivered',
+    });
+
+    await sessionManager.forgetSessionLocally(session.id);
+
+    expect(await repos.sessionHistory!.findSnapshotBySessionId(session.id)).toBeNull();
+    expect(await repos.sessionHistory!.findTurnById('turn-del-1')).toBeNull();
+    expect(await repos.sessionHistory!.findTurnRequest(session.id, 'req-del-1')).toBeNull();
   });
 });
