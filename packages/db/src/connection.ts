@@ -1,11 +1,20 @@
 import Database from 'better-sqlite3';
-import { dirname } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema.js';
 import { runMigrations, type Migration } from './migrations.js';
+import {
+  ensurePrivateSqliteStorage,
+  ensurePrivateSqliteStorageForClient,
+  resolveSqliteStorageTarget,
+} from './storage-privacy.js';
 
 export type DbClient = BetterSQLite3Database<typeof schema>;
+
+const dbSqliteClients = new WeakMap<DbClient, Database.Database>();
+
+export function getSqliteClient(db: DbClient): Database.Database | undefined {
+  return dbSqliteClients.get(db) ?? (db as unknown as { $client?: Database.Database }).$client;
+}
 
 export interface DatabaseOptions {
   /**
@@ -40,37 +49,58 @@ export interface DatabaseConnection {
 
 export function createDatabase(options: DatabaseOptions = {}): DatabaseConnection {
   const dbPath = options.path ?? ':memory:';
-  const isMemory = dbPath === ':memory:' || dbPath.startsWith('file::memory:');
+  const explicitReadonly = Boolean(options.readonly || options.sqliteOptions?.readonly);
+  const fileMustExist = Boolean(options.sqliteOptions?.fileMustExist);
+  const target = resolveSqliteStorageTarget({
+    path: dbPath,
+    readonly: explicitReadonly,
+    fileMustExist,
+  });
+  const isMemory = target.kind === 'memory';
+  const isReadonly = target.kind === 'readonly';
 
-  // Ensure parent directory exists for file-backed SQLite databases
-  if (!isMemory && !options.readonly) {
-    const dir = dirname(dbPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-  }
+  // Ensure writable file-backed DB and sidecar storage is owner-only before opening or migrating.
+  ensurePrivateSqliteStorage({
+    path: dbPath,
+    readonly: explicitReadonly,
+    fileMustExist,
+  });
 
   const sqlite = new Database(dbPath, {
-    readonly: options.readonly ?? false,
+    readonly: explicitReadonly,
     ...options.sqliteOptions,
   });
 
-  // Enable foreign keys
-  sqlite.pragma('foreign_keys = ON');
-  sqlite.pragma('busy_timeout = 5000');
+  try {
+    // Enable foreign keys
+    sqlite.pragma('foreign_keys = ON');
+    sqlite.pragma('busy_timeout = 5000');
 
-  // Configure WAL and synchronous mode for file-backed databases
-  if (!isMemory && !options.readonly) {
-    sqlite.pragma('journal_mode = WAL');
-    sqlite.pragma('synchronous = NORMAL');
-  }
+    // Configure WAL and synchronous mode for writable file-backed databases
+    if (!isMemory && !isReadonly) {
+      sqlite.pragma('journal_mode = WAL');
+      sqlite.pragma('synchronous = NORMAL');
+      ensurePrivateSqliteStorageForClient(sqlite);
+    }
 
-  // Run migrations if enabled and not in read-only mode
-  if (options.migrate !== false && !options.readonly) {
-    runMigrations(sqlite, options.customMigrations);
+    // Run migrations if enabled and not in read-only mode
+    if (options.migrate !== false && !isReadonly) {
+      runMigrations(sqlite, options.customMigrations);
+      if (!isMemory) {
+        ensurePrivateSqliteStorageForClient(sqlite);
+      }
+    }
+  } catch (error) {
+    try {
+      sqlite.close();
+    } catch {
+      // Preserve primary initialization or permission error.
+    }
+    throw error;
   }
 
   const db = drizzle(sqlite, { schema });
+  dbSqliteClients.set(db, sqlite);
 
   return {
     db,

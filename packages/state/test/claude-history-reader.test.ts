@@ -1264,5 +1264,76 @@ describe('ClaudeHistoryReader', () => {
       expect(page2).not.toBeNull();
       expect(page2!.items.length).toBeGreaterThan(0);
     });
+
+    it('reports explicit cursorStatus and cursorExpired across initial, valid, eof, invalid, mismatched, and expired states', async () => {
+      const worktreePath = '/data/cursor-outcomes';
+      const encoded = encodeClaudeProjectPath(worktreePath);
+      const projDir = path.join(tempHome, '.claude', 'projects', encoded);
+      fs.mkdirSync(projDir, { recursive: true });
+
+      const file = path.join(projDir, 'sess-cursor-status.jsonl');
+      const lines = [
+        JSON.stringify({ type: 'user', uuid: 'u1', message: { role: 'user', content: 'Prompt 1' } }),
+        JSON.stringify({ type: 'assistant', uuid: 'a1', message: { role: 'assistant', stop_reason: 'end_turn', content: 'Answer 1' } }),
+        JSON.stringify({ type: 'user', uuid: 'u2', message: { role: 'user', content: 'Prompt 2' } }),
+        JSON.stringify({ type: 'assistant', uuid: 'a2', message: { role: 'assistant', stop_reason: 'end_turn', content: 'Answer 2' } }),
+      ];
+      fs.writeFileSync(file, lines.join('\n') + '\n');
+
+      const context = {
+        sessionId: 'sess-cursor-status',
+        harness: 'claude',
+        worktreePath,
+        isLocal: true,
+        agentSessionId: 'sess-cursor-status',
+        homeDir: tempHome,
+      };
+
+      // Initial read -> initial, valid paging -> valid, tail poll -> eof
+      const initial = await reader.readHistory(context, { limit: 2 });
+      expect(initial?.cursorStatus).toBe('initial');
+      expect(initial?.cursorExpired).toBe(false);
+      expect(initial?.hasMore).toBe(true);
+
+      const nextPage = await reader.readHistory(context, { limit: 10, cursor: initial?.cursor });
+      expect(nextPage?.cursorStatus).toBe('valid');
+      expect(nextPage?.cursorExpired).toBe(false);
+      expect(nextPage?.hasMore).toBe(false);
+      expect(nextPage?.items).toHaveLength(2);
+
+      const atEof = await reader.readHistory(context, { limit: 10, cursor: nextPage?.cursor });
+      expect(atEof?.cursorStatus).toBe('eof');
+      expect(atEof?.cursorExpired).toBe(false);
+      expect(atEof?.items).toEqual([]);
+
+      // Malformed cursors -> invalid + cursorExpired=true, reset to offset 0
+      for (const badCursor of ['garbage-cursor', 'offset:notanumber', 'offset:10:extra:junk']) {
+        const malformed = await reader.readHistory(context, { limit: 10, cursor: badCursor });
+        expect(malformed?.cursorStatus).toBe('invalid');
+        expect(malformed?.cursorExpired).toBe(true);
+        expect(malformed?.items.length).toBe(4);
+        expect(malformed?.items[0]?.text).toBe('Prompt 1');
+      }
+
+      // Past-EOF cursor -> expired + cursorExpired=true, reset to offset 0
+      const expired = await reader.readHistory(context, { limit: 10, cursor: 'offset:9999999' });
+      expect(expired?.cursorStatus).toBe('expired');
+      expect(expired?.cursorExpired).toBe(true);
+      expect(expired?.items).toHaveLength(4);
+
+      // Replaced file (head fingerprint mismatch) -> mismatched + cursorExpired=true, reset to offset 0
+      fs.writeFileSync(
+        file,
+        [
+          JSON.stringify({ type: 'user', uuid: 'u-new', message: { role: 'user', content: 'Replaced prompt' } }),
+          JSON.stringify({ type: 'assistant', uuid: 'a-new', message: { role: 'assistant', stop_reason: 'end_turn', content: 'Replaced answer' } }),
+        ].join('\n') + '\n'
+      );
+      const mismatched = await reader.readHistory(context, { limit: 10, cursor: nextPage?.cursor });
+      expect(mismatched?.cursorStatus).toBe('mismatched');
+      expect(mismatched?.cursorExpired).toBe(true);
+      expect(mismatched?.items).toHaveLength(2);
+      expect(mismatched?.items[0]?.text).toBe('Replaced prompt');
+    });
   });
 });

@@ -347,4 +347,56 @@ describe('ScreenHistoryReader', () => {
     expect(result.items.at(-1)?.text).toContain('screen answer 25');
     expect(result.hasMore).toBe(false);
   });
+
+  it('distinguishes initial, valid, eof, invalid, mismatched, and expired cursors explicitly', async () => {
+    const context = {
+      sessionId: 'sess-cursor-states',
+      harness: 'codex',
+      worktreePath: '/ws',
+      isLocal: true,
+      tailLines: [
+        '› first prompt',
+        'first answer',
+        'Worked for 1s · done',
+        '› second prompt',
+        'second answer',
+        'Worked for 1s · done',
+      ],
+    };
+
+    const initial = await reader.readHistory(context, { limit: 2 });
+    expect(initial.cursorStatus).toBe('initial');
+    expect(initial.cursorExpired).toBe(false);
+    expect(initial.hasMore).toBe(true);
+
+    const validNext = await reader.readHistory(context, { limit: 10, cursor: initial.cursor });
+    expect(validNext.cursorStatus).toBe('valid');
+    expect(validNext.cursorExpired).toBe(false);
+    expect(validNext.hasMore).toBe(false);
+
+    const eof = await reader.readHistory(context, { limit: 10, cursor: validNext.cursor });
+    expect(eof.items).toHaveLength(0);
+    expect(eof.cursorStatus).toBe('eof');
+    expect(eof.cursorExpired).toBe(false);
+
+    const invalid = await reader.readHistory(context, { limit: 2, cursor: 'bogus-cursor' });
+    expect(invalid.cursorStatus).toBe('invalid');
+    expect(invalid.cursorExpired).toBe(true);
+
+    const mismatched = await reader.readHistory(
+      { ...context, tailLines: [...context.tailLines, '› third prompt', 'third answer'] },
+      { limit: 2, cursor: initial.cursor }
+    );
+    expect(mismatched.cursorStatus).toBe('mismatched');
+    expect(mismatched.cursorExpired).toBe(true);
+
+    const fpMatch = /:fp:([0-9a-f]+)$/.exec(initial.cursor!);
+    const expired = await reader.readHistory(context, {
+      limit: 2,
+      cursor: `line:999:fp:${fpMatch![1]}`,
+    });
+    expect(expired.items).toHaveLength(0);
+    expect(expired.cursorStatus).toBe('expired');
+    expect(expired.cursorExpired).toBe(true);
+  });
 });

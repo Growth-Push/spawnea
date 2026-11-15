@@ -1,4 +1,5 @@
 import type {
+  SessionHistoryCursorStatus,
   SessionHistoryItem,
   SessionHistoryQuery,
   SessionHistoryResult,
@@ -46,13 +47,23 @@ function computeTailFingerprint(lines: string[]): string {
   return (hash >>> 0).toString(16);
 }
 
-function parseScreenCursor(cursor?: string): { line: number; fingerprint?: string } {
-  if (!cursor || !cursor.startsWith('line:')) return { line: 0 };
-  const parts = cursor.slice('line:'.length).split(':fp:');
-  const num = parseInt(parts[0], 10);
+type ParsedScreenCursor =
+  | { kind: 'none'; line: number }
+  | { kind: 'invalid'; line: number }
+  | { kind: 'valid'; line: number; fingerprint?: string };
+
+function parseScreenCursor(cursor?: string): ParsedScreenCursor {
+  if (cursor === undefined) return { kind: 'none', line: 0 };
+  const match = /^line:(\d+)(?::fp:([0-9a-f]+))?$/.exec(cursor);
+  if (!match) return { kind: 'invalid', line: 0 };
+  const num = parseInt(match[1]!, 10);
+  if (!Number.isSafeInteger(num) || num < 0) {
+    return { kind: 'invalid', line: 0 };
+  }
   return {
-    line: isNaN(num) || num < 0 ? 0 : num,
-    fingerprint: parts[1] || undefined,
+    kind: 'valid',
+    line: num,
+    fingerprint: match[2] || undefined,
   };
 }
 
@@ -78,8 +89,22 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
     }
 
     const captureSuccess = context.captureSuccess ?? true;
+    const parsed = parseScreenCursor(query?.cursor);
 
     if (lines.length === 0) {
+      let cursorStatus: SessionHistoryCursorStatus = 'initial';
+      let cursorExpired = false;
+      if (parsed.kind === 'invalid') {
+        cursorStatus = 'invalid';
+        cursorExpired = true;
+      } else if (parsed.kind === 'valid') {
+        if (parsed.line === 0 && !parsed.fingerprint) {
+          cursorStatus = 'eof';
+        } else {
+          cursorStatus = parsed.fingerprint ? 'mismatched' : 'expired';
+          cursorExpired = true;
+        }
+      }
       return {
         sessionId: context.sessionId,
         source: 'screen',
@@ -87,16 +112,27 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
         cursor: 'line:0',
         hasMore: false,
         captureSuccess,
+        cursorStatus,
+        cursorExpired,
       };
     }
 
     const currentFp = computeTailFingerprint(lines);
-    const parsed = parseScreenCursor(query?.cursor);
     let startLine = parsed.line;
+    let cursorStatus: SessionHistoryCursorStatus = parsed.kind === 'none' ? 'initial' : 'valid';
+    let cursorExpired = false;
 
-    // If a fingerprint was provided from a previous snapshot and it matches, check if we're at EOF
-    if (parsed.fingerprint && parsed.fingerprint === currentFp) {
-      if (startLine >= lines.length) {
+    if (parsed.kind === 'invalid') {
+      startLine = 0;
+      cursorStatus = 'invalid';
+      cursorExpired = true;
+    } else if (parsed.kind === 'valid') {
+      if (parsed.fingerprint && parsed.fingerprint !== currentFp) {
+        // The snapshot window has shifted/scrolled; restart pagination and signal mismatch explicitly
+        startLine = 0;
+        cursorStatus = 'mismatched';
+        cursorExpired = true;
+      } else if (startLine > lines.length) {
         return {
           sessionId: context.sessionId,
           source: 'screen',
@@ -104,22 +140,21 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
           cursor: `line:${lines.length}:fp:${currentFp}`,
           hasMore: false,
           captureSuccess,
+          cursorStatus: 'expired',
+          cursorExpired: true,
+        };
+      } else if (startLine === lines.length) {
+        return {
+          sessionId: context.sessionId,
+          source: 'screen',
+          items: [],
+          cursor: `line:${lines.length}:fp:${currentFp}`,
+          hasMore: false,
+          captureSuccess,
+          cursorStatus: 'eof',
+          cursorExpired: false,
         };
       }
-    } else if (parsed.fingerprint && parsed.fingerprint !== currentFp) {
-      // The snapshot window has shifted/scrolled; restart pagination against the new snapshot
-      startLine = 0;
-    }
-
-    if (startLine >= lines.length) {
-      return {
-        sessionId: context.sessionId,
-        source: 'screen',
-        items: [],
-        cursor: `line:${lines.length}:fp:${currentFp}`,
-        hasMore: false,
-        captureSuccess,
-      };
     }
 
     const isRecentMode =
@@ -291,6 +326,8 @@ export class ScreenHistoryReader implements HarnessHistoryReader {
       cursor: `line:${nextCursorLine}:fp:${currentFp}`,
       hasMore,
       captureSuccess,
+      cursorStatus,
+      cursorExpired,
     };
   }
 }

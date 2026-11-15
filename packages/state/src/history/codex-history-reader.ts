@@ -25,6 +25,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type {
+  SessionHistoryCursorStatus,
   SessionHistoryItem,
   SessionHistoryQuery,
   SessionHistoryResult,
@@ -47,15 +48,20 @@ interface ParsedCursor {
   file?: string;
   head?: string;
   pendingOffset?: number;
+  valid: boolean;
 }
 
 function parseOffsetCursor(cursor?: string): ParsedCursor {
-  if (!cursor || !cursor.startsWith('offset:')) return { offset: 0 };
+  if (!cursor) return { offset: 0, valid: true };
+  if (!cursor.startsWith('offset:')) return { offset: 0, valid: false };
   let rest = cursor.slice('offset:'.length);
   let turnClosed = false;
   if (rest.includes(':closed:1')) {
     turnClosed = true;
     rest = rest.replace(':closed:1', '');
+    if (rest.includes(':closed:')) {
+      return { offset: 0, valid: false };
+    }
   }
 
   let pendingOffset: number | undefined = undefined;
@@ -64,10 +70,10 @@ function parseOffsetCursor(cursor?: string): ParsedCursor {
     const afterPending = rest.slice(pendingIdx + ':pending:'.length);
     const nextColon = afterPending.indexOf(':');
     const pStr = nextColon === -1 ? afterPending : afterPending.slice(0, nextColon);
-    const pNum = parseInt(pStr, 10);
-    if (!isNaN(pNum) && pNum >= 0) {
-      pendingOffset = pNum;
+    if (!/^\d+$/.test(pStr)) {
+      return { offset: 0, valid: false };
     }
+    pendingOffset = Number(pStr);
     rest = rest.slice(0, pendingIdx) + (nextColon === -1 ? '' : afterPending.slice(nextColon));
   }
 
@@ -83,6 +89,9 @@ function parseOffsetCursor(cursor?: string): ParsedCursor {
       file = afterFile.slice(0, nextColon);
       rest = rest.slice(0, fileIdx) + afterFile.slice(nextColon);
     }
+    if (!file) {
+      return { offset: 0, valid: false };
+    }
   }
 
   let head: string | undefined = undefined;
@@ -97,29 +106,39 @@ function parseOffsetCursor(cursor?: string): ParsedCursor {
       head = afterHead.slice(0, nextColon);
       rest = rest.slice(0, headIdx) + afterHead.slice(nextColon);
     }
+    if (!head) {
+      return { offset: 0, valid: false };
+    }
   }
 
   const turnIdx = rest.indexOf(':turn:');
   if (turnIdx === -1) {
-    const num = parseInt(rest, 10);
+    if (!/^\d+$/.test(rest)) {
+      return { offset: 0, valid: false };
+    }
     return {
-      offset: isNaN(num) || num < 0 ? 0 : num,
+      offset: Number(rest),
       turnClosed,
       file,
       head,
       pendingOffset,
+      valid: true,
     };
   }
 
-  const num = parseInt(rest.slice(0, turnIdx), 10);
+  const offsetStr = rest.slice(0, turnIdx);
   const turnId = rest.slice(turnIdx + ':turn:'.length);
+  if (!/^\d+$/.test(offsetStr) || !turnId) {
+    return { offset: 0, valid: false };
+  }
   return {
-    offset: isNaN(num) || num < 0 ? 0 : num,
-    turnId: turnId || undefined,
+    offset: Number(offsetStr),
+    turnId,
     turnClosed,
     file,
     head,
     pendingOffset,
+    valid: true,
   };
 }
 
@@ -546,29 +565,53 @@ export class CodexHistoryReader implements HarnessHistoryReader {
     try {
       const stat = fs.fstatSync(fd);
       const currentFileName = path.basename(filePath);
+      const hasInputCursor = Boolean(query?.cursor);
+      let parsedCursor = hasInputCursor ? parseOffsetCursor(query?.cursor) : { offset: 0, valid: true };
+      let cursorStatus: SessionHistoryCursorStatus = hasInputCursor ? 'valid' : 'initial';
+      let cursorExpired = false;
+
+      if (hasInputCursor && !parsedCursor.valid) {
+        parsedCursor = { offset: 0, valid: false };
+        cursorStatus = 'invalid';
+        cursorExpired = true;
+      } else if (hasInputCursor && parsedCursor.file && parsedCursor.file !== currentFileName) {
+        // Switched to a new rollout file; reset offset and turn state
+        parsedCursor = { offset: 0, valid: false };
+        cursorStatus = 'mismatched';
+        cursorExpired = true;
+      }
 
       if (stat.size === 0) {
+        if (hasInputCursor && !cursorExpired) {
+          if (parsedCursor.head) {
+            cursorStatus = 'mismatched';
+            cursorExpired = true;
+          } else if (parsedCursor.offset > 0) {
+            cursorStatus = 'expired';
+            cursorExpired = true;
+          } else {
+            cursorStatus = 'eof';
+          }
+        }
         return {
           sessionId: context.sessionId,
           source: 'transcript',
           items: [],
           cursor: `offset:0:file:${currentFileName}`,
           hasMore: false,
+          cursorStatus,
+          cursorExpired,
           transcriptPath: filePath,
         };
       }
 
       const maxChars = query?.maxItemChars || DEFAULT_MAX_ITEM_CHARS;
-      let parsedCursor = parseOffsetCursor(query?.cursor);
-      if (parsedCursor.file && parsedCursor.file !== currentFileName) {
-        // Switched to a new rollout file; reset offset and turn state
-        parsedCursor = { offset: 0 };
-      }
-
       const headFp = computeHeadFingerprint(fd, stat.size);
-      if (parsedCursor.head && !isHeadMatching(fd, stat.size, parsedCursor.head)) {
+      if (hasInputCursor && !cursorExpired && parsedCursor.head && !isHeadMatching(fd, stat.size, parsedCursor.head)) {
         // Rollout was replaced under the same filename; reset offset and turn state
-        parsedCursor = { offset: 0 };
+        parsedCursor = { offset: 0, valid: false };
+        cursorStatus = 'mismatched';
+        cursorExpired = true;
       }
 
       const isRecentMode =
@@ -576,8 +619,12 @@ export class CodexHistoryReader implements HarnessHistoryReader {
         !query?.cursor;
       const targetExchanges = query?.recentExchanges || query?.limit || 20;
 
-      if (parsedCursor.offset > stat.size) {
-        parsedCursor = { offset: 0 };
+      if (hasInputCursor && !cursorExpired && parsedCursor.offset > stat.size) {
+        parsedCursor = { offset: 0, valid: false };
+        cursorStatus = 'expired';
+        cursorExpired = true;
+      } else if (hasInputCursor && !cursorExpired && parsedCursor.offset === stat.size) {
+        cursorStatus = 'eof';
       }
       let startOffset = parsedCursor.offset;
       if (isRecentMode) {
@@ -603,6 +650,8 @@ export class CodexHistoryReader implements HarnessHistoryReader {
           items: [],
           cursor: query?.cursor || `offset:${stat.size}:file:${currentFileName}:head:${headFp}`,
           hasMore: false,
+          cursorStatus,
+          cursorExpired,
           transcriptPath: filePath,
         };
       }
@@ -814,6 +863,8 @@ export class CodexHistoryReader implements HarnessHistoryReader {
         items: [],
         cursor: returnCursor,
         hasMore: false,
+        cursorStatus,
+        cursorExpired,
         transcriptPath: filePath,
       };
     }
@@ -889,6 +940,8 @@ export class CodexHistoryReader implements HarnessHistoryReader {
         items,
         cursor: returnCursor,
         hasMore,
+        cursorStatus,
+        cursorExpired,
         transcriptPath: filePath,
       };
     } finally {

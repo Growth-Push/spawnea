@@ -6,6 +6,15 @@ export type SessionHistorySource = 'transcript' | 'screen';
 
 export type TurnBoundary = 'start' | 'end' | 'single';
 
+export type SessionHistoryCursorStatus =
+  | 'initial'
+  | 'valid'
+  | 'eof'
+  | 'expired'
+  | 'invalid'
+  | 'mismatched'
+  | 'restarted';
+
 export interface SessionHistoryItem {
   id: string;
   role: SessionHistoryRole;
@@ -33,6 +42,8 @@ export interface SessionHistoryResult {
   hasMore?: boolean;
   transcriptPath?: string;
   captureSuccess?: boolean;
+  cursorStatus?: SessionHistoryCursorStatus;
+  cursorExpired?: boolean;
 }
 
 export const SessionHistoryRoleSchema = z.enum(['user', 'agent', 'tool']);
@@ -60,6 +71,16 @@ export const SessionHistoryQuerySchema = z.object({
   recentExchanges: z.number().int().positive().optional(),
 });
 
+export const SessionHistoryCursorStatusSchema = z.enum([
+  'initial',
+  'valid',
+  'eof',
+  'expired',
+  'invalid',
+  'mismatched',
+  'restarted',
+]);
+
 export const SessionHistoryResultSchema = z.object({
   sessionId: z.string(),
   source: SessionHistorySourceSchema,
@@ -68,4 +89,6 @@ export const SessionHistoryResultSchema = z.object({
   hasMore: z.boolean().optional(),
   transcriptPath: z.string().optional(),
   captureSuccess: z.boolean().optional(),
+  cursorStatus: SessionHistoryCursorStatusSchema.optional(),
+  cursorExpired: z.boolean().optional(),
 });

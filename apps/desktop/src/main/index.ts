@@ -1156,6 +1156,9 @@ app.whenReady().then(async () => {
         return true;
       },
     });
+    await agentControlService.restorePersistedHistory().catch((error: unknown) => {
+      logger.error('Failed to mark active persisted turns interrupted on startup', { error });
+    });
 
     const artifactsCacheDir = join(app.getPath('userData'), 'artifacts');
     artifactManager = new ArtifactManager({
@@ -1264,6 +1267,7 @@ app.whenReady().then(async () => {
       mobileApiServer = new MobileApiServer({
         control: agentControlService,
         sessionManager,
+        repositories,
         logger: logger.child('mobile-api'),
         config: activeCatalog.api,
         profile: activeProfile,

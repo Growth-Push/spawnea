@@ -171,15 +171,30 @@ text delivery succeeds but Enter cannot be confirmed, the response reports
 `delivered: false` and `status: "unknown"`; do not resend the prompt.
 
 `spawnea_get_turn` takes a `turnId` and returns bounded output after the initial
-or supplied cursor, a replacement cursor, version, `truncated`, and
-`cursorExpired`. `waitMs` is bounded to 30 seconds and wakes on output or when the
-turn reaches `needs_input`, `completed`, or `failed`. A turn completes on a
+or supplied cursor, a replacement cursor, version, `truncated` (true only while
+additional unread output pages remain after the returned cursor, false at EOF),
+additive `retainedTruncated` (true when persisted retention caps such as the
+`256 KiB` turn output limit trimmed earlier bytes), `cursorExpired`,
+`cursorStatus` (`initial`, `valid`, `eof`, `expired`, `invalid`, `mismatched`,
+`restarted`), `archived`, and `interrupted`. `waitMs` is bounded to 30 seconds
+and wakes on output or when the turn reaches `needs_input`, `completed`,
+`failed`, or `interrupted`. A turn completes on a
 response delimiter, an `idle` state rule, process exit, or a screen that stayed
 unchanged for at least 30 seconds after producing output; a quiet screen that no
 rule recognizes is otherwise reported as `unknown` (see [State Rules](state-rules.md)). `compact` output applies the
-harness adapter's extraction; `raw` returns captured terminal output. Turns,
-cursors, idempotency caches, and Agent Context records are volatile and are lost
-when Spawnea restarts.
+harness adapter's extraction; `raw` returns captured terminal output. Spawnea
+persists bounded turn state and output (`256 KiB` turn output, `200` turns per
+session, `1,000` turns globally, `7`-day TTL inside a `32 MiB` aggregate
+serialized payload budget) plus bounded request metadata (`50` entries per
+session with bounded `clientRequestId`, SHA-256 fingerprint hashes, and delivery
+status) locally in cleartext SQLite without continuously recording PTY streams (with owner-only `0600` permissions enforced on writable POSIX SQLite and WAL/SHM/journal sidecar files before writes, failing closed if protection cannot be established; Windows relies on user profile ACLs). Note that
+persisted turn output comes from rendered terminal text and can contain
+sensitive user data readable by the local OS user and authorized callers. On Desktop restart, previously active persisted turns
+(`working`, `needs_input`, `unknown`) transition to `interrupted`, increment
+`outputGeneration`, and remain read-only (`archived: true`, never auto-completed
+or auto-resumed); owning-session authorization is validated before returning any
+persisted turn, while live replay deduplication caches and `Agent Context`
+call records remain strictly volatile and are lost when Spawnea restarts.
 
 The desktop workspace includes a read-only **Agent Context** tab (`Alt+6`) with
 the bounded calls made through scoped connections. It is never written as a
@@ -282,7 +297,7 @@ Spawnea provides an optional, private HTTP API adapter over `AgentControlService
   - `POST /api/v1/sessions/:id/message` — send a message to any active root or child session.
 - **Polling only:** No WebSockets or persistent push connections.
 - **Idempotency & uncertain delivery:** Bounded `clientRequestId` deduplication replays exact matches and rejects conflicts. If prompt delivery is uncertain, the API returns status `unknown` and `delivered: false`, advising callers not to resend.
-- **No persistence (#68):** What does not come from agent files (e.g. live terminal tails or screen history) is reported as unavailable after an application restart, never as live.
+- **Bounded historical snapshots & turns:** When no valid live capture is available (such as for an inactive session after a restart or on capture failure), `/output` and screen-only `/history` keep legacy live fields unavailable (`available: false`, `status: "unavailable"`, `output: null`, `items: []`) and expose any retained SQLite snapshot via `lastOutput` or `storedItems` with explicit snapshot `freshness`, never presenting stale data as live; once live capture succeeds again on an active session, endpoints return live data (`available: true`, and `status: "live"` with `output` on `/output`). Separately, persisted control turns read through `spawnea_get_turn` use their own fields (`output`, `status`, `version`, `cursor`, `archived`, `interrupted`): previously active turns (`working`, `needs_input`, `unknown`) become `interrupted` on restart while already `completed` turns remain `completed` (`archived: true`, `interrupted: false`; see [Prompts and turns](#prompts-and-turns)).
 - **Request limits:** Requests are bounded to 128 KiB with dual-tier rate limiting (default 300 authenticated requests per minute, 10 failed authentication attempts per minute).
 
 See [Mobile API Guide](mobile-api.md) for full enablement, key generation, rotation, and Tailscale Serve configuration instructions.

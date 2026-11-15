@@ -52,7 +52,7 @@ Spawnea does not install a daemon, package, plugin, hook, service, or background
 
 Hermes and other harness states are inferred by reading terminal/tmux output and parsing rendered prompts and responses. No harness hook, event file, or resident helper process is required by the base runtime.
 
-The terminal view uses the open-source [`@xterm/xterm`](https://github.com/xtermjs/xterm.js) library, with `node-pty` and `ssh2` for PTY and SSH transport. Terminal bytes are streamed to the local UI; Spawnea does not record a conversation transcript or upload terminal data to a Spawnea service. Local configuration, session metadata, logs, artifacts, and explicitly requested diagnostic reports remain separate persistence features.
+The terminal view uses the open-source [`@xterm/xterm`](https://github.com/xtermjs/xterm.js) library, with `node-pty` and `ssh2` for PTY and SSH transport. Terminal bytes are streamed to the local UI; Spawnea does not continuously record raw PTY streams or full provider transcripts, or upload terminal data to a Spawnea service. For restart recovery (even when the Mobile HTTP adapter is disabled), Spawnea replaces a bounded per-session latest screen snapshot (`64 KiB` / `50` parsed items) and retains bounded control-turn state (`256 KiB` per turn, `7`-day TTL, `32 MiB` aggregate budget) locally in cleartext SQLite storage (`0600` owner-only permissions on supported POSIX systems, failing closed if unsecurable; Windows profile ACLs apply on Windows). Local configuration, session metadata, logs, artifacts, and explicitly requested diagnostic reports remain separate persistence features.
 
 ## Quick start
 

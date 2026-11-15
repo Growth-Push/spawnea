@@ -1,9 +1,13 @@
+import * as fs from 'node:fs';
 import * as http from 'node:http';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
-import { createLogger, type Session, type SessionHistoryResult } from '@spawnea/domain';
+import { createLogger, type Session, type SessionHistoryQuery, type SessionHistoryResult } from '@spawnea/domain';
 import { PromptSubmissionError } from '@spawnea/hosts';
+import { ClaudeHistoryReader, CodexHistoryReader, encodeClaudeProjectPath } from '@spawnea/state';
 import { AgentControlService } from './agent-control-service.js';
 import { MobileApiServer } from './mobile-api-server.js';
 import * as mobileAuth from './mobile-api-auth.js';
@@ -963,8 +967,46 @@ describe('MobileApiServer', () => {
       const transcriptData = await jsonBody(transcriptRes);
       expect(transcriptData.available).toBe(true);
       expect(transcriptData.source).toBe('transcript');
+      expect(transcriptData.freshness).toBe('historical');
+      expect(transcriptData.stale).toBe(true);
+      expect(transcriptData.stored).toBe(false);
       expect(transcriptData.items).toHaveLength(2);
       expect(transcriptData.items[0].text).toBe('Persistent user prompt');
+    });
+
+    it('reports honest freshness and stale metadata on transcript /history for done, disconnected, and live sessions', async () => {
+      await repositories.sessions.save(mockSession('sess-done-tx', { status: 'done' }));
+      await repositories.sessions.save(mockSession('sess-live-tx', { status: 'working' }));
+
+      sessionManager.getSessionHistory.mockImplementation(async (sessionId: string) => ({
+        sessionId,
+        source: 'transcript',
+        items: [{ id: `${sessionId}-1`, role: 'agent', text: 'Transcript message', source: 'transcript' }],
+        cursor: 'offset:64',
+        hasMore: false,
+      }));
+
+      const { baseUrl } = await createAndStartServer();
+
+      const doneRes = await fetch(`${baseUrl}/api/v1/sessions/sess-done-tx/history`, {
+        headers: { Authorization: `Bearer ${rawSecretKey}` },
+      });
+      const doneData = await jsonBody(doneRes);
+      expect(doneData.available).toBe(true);
+      expect(doneData.source).toBe('transcript');
+      expect(doneData.freshness).toBe('historical');
+      expect(doneData.stale).toBe(true);
+      expect(doneData.stored).toBe(false);
+
+      const liveRes = await fetch(`${baseUrl}/api/v1/sessions/sess-live-tx/history`, {
+        headers: { Authorization: `Bearer ${rawSecretKey}` },
+      });
+      const liveData = await jsonBody(liveRes);
+      expect(liveData.available).toBe(true);
+      expect(liveData.source).toBe('transcript');
+      expect(liveData.freshness).toBe('live');
+      expect(liveData.stale).toBe(false);
+      expect(liveData.stored).toBe(false);
     });
 
     it('keeps successful empty screen history pages from live sessions available', async () => {
@@ -1132,6 +1174,334 @@ describe('MobileApiServer', () => {
       expect(fail3.headers.get('Retry-After')).toBeDefined();
       const failData = await jsonBody(fail3);
       expect(failData.error.code).toBe('rate_limited');
+    });
+  });
+
+  describe('Persisted Snapshot Fallback & Honest Freshness Metadata', () => {
+    it('exposes lastOutput additively on /output after restart without masquerading as live, and preserves legacy unavailable shape', async () => {
+      await repositories.sessions.save(mockSession('sess-persisted-out', { status: 'disconnected' }));
+      const snapshot = await repositories.sessionHistory!.upsertSnapshot({
+        sessionId: 'sess-persisted-out',
+        output: 'build finished with 0 warnings',
+        items: [{ id: 'i1', role: 'agent', text: 'Done building', source: 'screen' }],
+        capturedAt: Date.now() - 5_000,
+      });
+
+      const { baseUrl } = await createAndStartServer();
+      const res = await fetch(`${baseUrl}/api/v1/sessions/sess-persisted-out/output`, {
+        headers: { Authorization: `Bearer ${rawSecretKey}` },
+      });
+      expect(res.status).toBe(200);
+      const data = await jsonBody(res);
+      expect(data.available).toBe(false);
+      expect(data.status).toBe('unavailable');
+      expect(data.output).toBe(null);
+      expect(data.freshness).toBe('historical');
+      expect(data.stale).toBe(true);
+      expect(data.stored).toBe(true);
+      expect(data.version).toBe(snapshot.version);
+      expect(data.lastOutput).toEqual({
+        output: 'build finished with 0 warnings',
+        updatedAt: new Date(snapshot.updatedAt).toISOString(),
+        capturedAt: new Date(snapshot.capturedAt).toISOString(),
+        stale: true,
+        truncated: false,
+        version: snapshot.version,
+      });
+    });
+
+    it('exposes storedItems and explicit pagination/restarted/invalid/eof cursors on /history while keeping items empty for disconnected screen sessions', async () => {
+      await repositories.sessions.save(mockSession('sess-persisted-hist', { status: 'disconnected' }));
+      await repositories.sessionHistory!.upsertSnapshot({
+        sessionId: 'sess-persisted-hist',
+        output: '› cmd 1\nans 1\n› cmd 2\nans 2',
+        items: [
+          { id: 's1', role: 'user', text: 'cmd 1', source: 'screen' },
+          { id: 's2', role: 'agent', text: 'ans 1', source: 'screen' },
+          { id: 's3', role: 'user', text: 'cmd 2', source: 'screen' },
+        ],
+      });
+      sessionManager.getSessionHistory.mockResolvedValue({
+        sessionId: 'sess-persisted-hist',
+        source: 'screen',
+        items: [],
+        cursor: 'line:0',
+        hasMore: false,
+        captureSuccess: false,
+      });
+
+      const { baseUrl } = await createAndStartServer();
+
+      const page1Res = await fetch(`${baseUrl}/api/v1/sessions/sess-persisted-hist/history?limit=2`, {
+        headers: { Authorization: `Bearer ${rawSecretKey}` },
+      });
+      const page1 = await jsonBody(page1Res);
+      expect(page1.available).toBe(false);
+      expect(page1.source).toBe('screen');
+      expect(page1.items).toEqual([]);
+      expect(page1.hasMore).toBe(false);
+      expect(page1.freshness).toBe('historical');
+      expect(page1.stale).toBe(true);
+      expect(page1.stored).toBe(true);
+      expect(page1.storedItems.map((i: any) => i.id)).toEqual(['s1', 's2']);
+      expect(page1.storedHasMore).toBe(true);
+      expect(page1.cursorStatus).toBe('initial');
+      expect(page1.cursorExpired).toBe(false);
+
+      const page2Res = await fetch(
+        `${baseUrl}/api/v1/sessions/sess-persisted-hist/history?limit=2&cursor=${encodeURIComponent(page1.cursor)}`,
+        { headers: { Authorization: `Bearer ${rawSecretKey}` } }
+      );
+      const page2 = await jsonBody(page2Res);
+      expect(page2.storedItems.map((i: any) => i.id)).toEqual(['s3']);
+      expect(page2.storedHasMore).toBe(false);
+      expect(page2.cursorStatus).toBe('valid');
+      expect(page2.cursorExpired).toBe(false);
+
+      const eofRes = await fetch(
+        `${baseUrl}/api/v1/sessions/sess-persisted-hist/history?limit=2&cursor=${encodeURIComponent(page2.cursor)}`,
+        { headers: { Authorization: `Bearer ${rawSecretKey}` } }
+      );
+      const eof = await jsonBody(eofRes);
+      expect(eof.storedItems).toEqual([]);
+      expect(eof.cursorStatus).toBe('eof');
+      expect(eof.cursorExpired).toBe(false);
+
+      const restartedRes = await fetch(
+        `${baseUrl}/api/v1/sessions/sess-persisted-hist/history?cursor=${encodeURIComponent('line:3:fp:deadbeef')}`,
+        { headers: { Authorization: `Bearer ${rawSecretKey}` } }
+      );
+      const restarted = await jsonBody(restartedRes);
+      expect(restarted.storedItems).toEqual([]);
+      expect(restarted.cursorStatus).toBe('restarted');
+      expect(restarted.cursorExpired).toBe(true);
+
+      const invalidRes = await fetch(
+        `${baseUrl}/api/v1/sessions/sess-persisted-hist/history?cursor=malformed`,
+        { headers: { Authorization: `Bearer ${rawSecretKey}` } }
+      );
+      const invalid = await jsonBody(invalidRes);
+      expect(invalid.cursorStatus).toBe('invalid');
+      expect(invalid.cursorExpired).toBe(true);
+
+      // Foreign-session cursor with matching version=1 must report mismatched, never eof
+      await repositories.sessions.save(mockSession('sess-other-v1', { status: 'disconnected' }));
+      await repositories.sessionHistory!.upsertSnapshot({
+        sessionId: 'sess-other-v1',
+        output: 'other screen',
+        items: [{ id: 'o1', role: 'user', text: 'other 1', source: 'screen' }],
+      });
+      await repositories.sessions.save(mockSession('sess-other-empty', { status: 'disconnected' }));
+
+      const foreignWithSnapshotRes = await fetch(
+        `${baseUrl}/api/v1/sessions/sess-other-v1/history?limit=2&cursor=${encodeURIComponent(page2.cursor)}`,
+        { headers: { Authorization: `Bearer ${rawSecretKey}` } }
+      );
+      const foreignWithSnapshot = await jsonBody(foreignWithSnapshotRes);
+      expect(foreignWithSnapshot.storedItems).toEqual([]);
+      expect(foreignWithSnapshot.cursorStatus).toBe('mismatched');
+      expect(foreignWithSnapshot.cursorExpired).toBe(true);
+
+      const foreignNoSnapshotRes = await fetch(
+        `${baseUrl}/api/v1/sessions/sess-other-empty/history?limit=2&cursor=${encodeURIComponent(page1.cursor)}`,
+        { headers: { Authorization: `Bearer ${rawSecretKey}` } }
+      );
+      const foreignNoSnapshot = await jsonBody(foreignNoSnapshotRes);
+      expect(foreignNoSnapshot.storedItems).toEqual([]);
+      expect(foreignNoSnapshot.cursorStatus).toBe('mismatched');
+      expect(foreignNoSnapshot.cursorExpired).toBe(true);
+
+      // Pruned and recreated snapshot on same session resets version=1 but mints a new snapshotGeneration
+      await repositories.sessionHistory!.pruneExpiredAndExcess(Date.now() + 8 * 24 * 60 * 60 * 1000);
+      await repositories.sessionHistory!.upsertSnapshot({
+        sessionId: 'sess-persisted-hist',
+        output: 'recreated screen',
+        items: [{ id: 'r1', role: 'user', text: 'recreated', source: 'screen' }],
+      });
+
+      const recreatedStaleRes = await fetch(
+        `${baseUrl}/api/v1/sessions/sess-persisted-hist/history?limit=2&cursor=${encodeURIComponent(page1.cursor)}`,
+        { headers: { Authorization: `Bearer ${rawSecretKey}` } }
+      );
+      const recreatedStale = await jsonBody(recreatedStaleRes);
+      expect(recreatedStale.storedItems).toEqual([]);
+      expect(recreatedStale.cursorStatus).toBe('expired');
+      expect(recreatedStale.cursorExpired).toBe(true);
+    });
+
+    it('reports DB snapshot read errors honestly on unavailable /output and /history', async () => {
+      await repositories.sessions.save(mockSession('sess-db-err', { status: 'disconnected' }));
+      sessionManager.getSessionHistory.mockResolvedValue({
+        sessionId: 'sess-db-err',
+        source: 'screen',
+        items: [],
+        hasMore: false,
+        captureSuccess: false,
+      });
+      const spy = vi.spyOn(repositories.sessionHistory!, 'findSnapshotBySessionId').mockRejectedValue(
+        new Error('SQLITE_BUSY')
+      );
+
+      try {
+        const { baseUrl } = await createAndStartServer();
+        const outRes = await fetch(`${baseUrl}/api/v1/sessions/sess-db-err/output`, {
+          headers: { Authorization: `Bearer ${rawSecretKey}` },
+        });
+        const outData = await jsonBody(outRes);
+        expect(outData.available).toBe(false);
+        expect(outData.lastOutput).toBe(null);
+        expect(outData.message).toContain('Retained snapshot lookup failed');
+
+        const histRes = await fetch(`${baseUrl}/api/v1/sessions/sess-db-err/history`, {
+          headers: { Authorization: `Bearer ${rawSecretKey}` },
+        });
+        const histData = await jsonBody(histRes);
+        expect(histData.available).toBe(false);
+        expect(histData.stored).toBe(false);
+        expect(histData.message).toContain('Retained snapshot lookup failed');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('propagates transcript reader cursor resets (invalid, mismatched, expired, eof) over HTTP /history', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'spawnea-mobile-cursor-'));
+      try {
+        // 1. Claude transcript session
+        const claudeReader = new ClaudeHistoryReader();
+        const claudeWorktree = '/ws/cursor-claude';
+        const claudeDir = path.join(tempRoot, '.claude', 'projects', encodeClaudeProjectPath(claudeWorktree));
+        fs.mkdirSync(claudeDir, { recursive: true });
+        const claudeFile = path.join(claudeDir, 'sess-tr-claude.jsonl');
+        fs.writeFileSync(
+          claudeFile,
+          [
+            JSON.stringify({ type: 'user', uuid: 'cu1', message: { role: 'user', content: 'Claude Q1' } }),
+            JSON.stringify({ type: 'assistant', uuid: 'ca1', message: { role: 'assistant', stop_reason: 'end_turn', content: 'Claude A1' } }),
+            JSON.stringify({ type: 'user', uuid: 'cu2', message: { role: 'user', content: 'Claude Q2' } }),
+            JSON.stringify({ type: 'assistant', uuid: 'ca2', message: { role: 'assistant', stop_reason: 'end_turn', content: 'Claude A2' } }),
+          ].join('\n') + '\n'
+        );
+
+        // 2. Codex transcript session
+        const codexReader = new CodexHistoryReader();
+        const codexFile = path.join(tempRoot, 'rollout-cursor.jsonl');
+        fs.writeFileSync(
+          codexFile,
+          [
+            JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: 'Codex Q1' } }),
+            JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: 'Codex A1' } }),
+          ].join('\n') + '\n'
+        );
+
+        await repositories.sessions.save(mockSession('sess-tr-claude', { status: 'working' }));
+        await repositories.sessions.save(mockSession('sess-tr-codex', { status: 'working' }));
+
+        sessionManager.getSessionHistory.mockImplementation(async (sessionId: string, query?: SessionHistoryQuery) => {
+          if (sessionId === 'sess-tr-claude') {
+            return (
+              await claudeReader.readHistory(
+                {
+                  sessionId,
+                  harness: 'claude',
+                  worktreePath: claudeWorktree,
+                  isLocal: true,
+                  agentSessionId: 'sess-tr-claude',
+                  homeDir: tempRoot,
+                },
+                query
+              )
+            )!;
+          }
+          return (
+            await codexReader.readHistory(
+              {
+                sessionId,
+                harness: 'codex',
+                worktreePath: '/ws/cursor-codex',
+                isLocal: true,
+                resolvedTranscriptPath: codexFile,
+              },
+              query
+            )
+          )!;
+        });
+
+        const { baseUrl } = await createAndStartServer();
+
+        // Claude initial -> forward valid paging -> eof -> invalid -> replaced mismatched
+        const cInit = await jsonBody(
+          await fetch(`${baseUrl}/api/v1/sessions/sess-tr-claude/history?limit=10`, {
+            headers: { Authorization: `Bearer ${rawSecretKey}` },
+          })
+        );
+        expect(cInit.cursorStatus).toBe('initial');
+        expect(cInit.cursorExpired).toBe(false);
+        expect(cInit.hasMore).toBe(false);
+        expect(cInit.items).toHaveLength(4);
+
+        const cPage1 = await jsonBody(
+          await fetch(`${baseUrl}/api/v1/sessions/sess-tr-claude/history?limit=2&cursor=${encodeURIComponent('offset:0')}`, {
+            headers: { Authorization: `Bearer ${rawSecretKey}` },
+          })
+        );
+        expect(cPage1.cursorStatus).toBe('valid');
+        expect(cPage1.cursorExpired).toBe(false);
+        expect(cPage1.hasMore).toBe(true);
+        expect(cPage1.items).toHaveLength(2);
+
+        const cPage2 = await jsonBody(
+          await fetch(`${baseUrl}/api/v1/sessions/sess-tr-claude/history?limit=10&cursor=${encodeURIComponent(cPage1.cursor)}`, {
+            headers: { Authorization: `Bearer ${rawSecretKey}` },
+          })
+        );
+        expect(cPage2.cursorStatus).toBe('valid');
+        expect(cPage2.cursorExpired).toBe(false);
+        expect(cPage2.hasMore).toBe(false);
+        expect(cPage2.items).toHaveLength(2);
+
+        const cEof = await jsonBody(
+          await fetch(`${baseUrl}/api/v1/sessions/sess-tr-claude/history?limit=10&cursor=${encodeURIComponent(cPage2.cursor)}`, {
+            headers: { Authorization: `Bearer ${rawSecretKey}` },
+          })
+        );
+        expect(cEof.cursorStatus).toBe('eof');
+        expect(cEof.cursorExpired).toBe(false);
+
+        const cInvalid = await jsonBody(
+          await fetch(`${baseUrl}/api/v1/sessions/sess-tr-claude/history?cursor=${encodeURIComponent('not-a-cursor')}`, {
+            headers: { Authorization: `Bearer ${rawSecretKey}` },
+          })
+        );
+        expect(cInvalid.cursorStatus).toBe('invalid');
+        expect(cInvalid.cursorExpired).toBe(true);
+        expect(cInvalid.items).toHaveLength(4);
+
+        fs.writeFileSync(
+          claudeFile,
+          JSON.stringify({ type: 'user', uuid: 'cu-rep', message: { role: 'user', content: 'Replaced Claude Q' } }) + '\n'
+        );
+        const cMismatched = await jsonBody(
+          await fetch(`${baseUrl}/api/v1/sessions/sess-tr-claude/history?cursor=${encodeURIComponent(cPage2.cursor)}`, {
+            headers: { Authorization: `Bearer ${rawSecretKey}` },
+          })
+        );
+        expect(cMismatched.cursorStatus).toBe('mismatched');
+        expect(cMismatched.cursorExpired).toBe(true);
+        expect(cMismatched.items[0].text).toBe('Replaced Claude Q');
+
+        // Codex expired past EOF over HTTP
+        const xExpired = await jsonBody(
+          await fetch(`${baseUrl}/api/v1/sessions/sess-tr-codex/history?cursor=${encodeURIComponent('offset:999999')}`, {
+            headers: { Authorization: `Bearer ${rawSecretKey}` },
+          })
+        );
+        expect(xExpired.cursorStatus).toBe('expired');
+        expect(xExpired.cursorExpired).toBe(true);
+        expect(xExpired.items).toHaveLength(2);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
     });
   });
 });

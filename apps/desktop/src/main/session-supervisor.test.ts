@@ -8,7 +8,10 @@ import { CatalogManager } from './catalog-manager.js';
 import { SessionContextStore } from './session-context-store.js';
 import { PtyBroker } from './pty-broker.js';
 import { SessionManager } from './session-manager.js';
-import { SessionSupervisor } from './session-supervisor.js';
+import {
+  SessionSupervisor,
+  DEFAULT_HISTORY_RETENTION_PRUNE_INTERVAL_MS,
+} from './session-supervisor.js';
 import type { ArtifactManager } from './artifact-manager.js';
 import type { WebContents } from 'electron';
 
@@ -492,5 +495,233 @@ describe('SessionSupervisor', () => {
       expect.anything(),
       expect.anything()
     );
+  });
+
+  it('persists bounded screen snapshots without overwriting on failed capture or crashing on DB errors', async () => {
+    const session = await sessionManager.createSession({
+      serverId: 'dev-workstation',
+      projectId: 'dev-workstation:spawnea',
+      agentId: 'dev-workstation:claude',
+      task: 'Snapshot persistence test',
+    });
+
+    const tmux = (supervisor as any).tmuxManager;
+    vi.spyOn(tmux, 'hasSession').mockResolvedValue(true);
+    vi.spyOn(tmux, 'getPaneInspection').mockResolvedValue({
+      paneExists: true,
+      paneDead: false,
+      paneCurrentCommand: 'claude',
+      panePid: 1234,
+    });
+    const captureSpy = vi.spyOn(tmux, 'capturePaneTailDetailed').mockResolvedValue({
+      success: true,
+      lines: ['❯ first prompt', 'assistant reply', '✻ Baked for 1s · done'],
+    });
+
+    await supervisor.checkSession(session.id);
+    const snap1 = await repos.sessionHistory!.findSnapshotBySessionId(session.id);
+    expect(snap1).not.toBeNull();
+    expect(snap1!.output).toContain('assistant reply');
+    expect(snap1!.version).toBe(1);
+
+    // Failed capture must NOT overwrite the prior snapshot
+    captureSpy.mockResolvedValueOnce({ success: false, lines: [] });
+    await supervisor.checkSession(session.id);
+    const snapAfterFail = await repos.sessionHistory!.findSnapshotBySessionId(session.id);
+    expect(snapAfterFail?.output).toBe(snap1!.output);
+    expect(snapAfterFail?.version).toBe(1);
+
+    // DB write error must be caught and logged without crashing status inspection
+    const upsertSpy = vi.spyOn(repos.sessionHistory!, 'upsertSnapshot').mockRejectedValueOnce(new Error('disk full'));
+    await expect(supervisor.checkSession(session.id)).resolves.toBeDefined();
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('prunes expired snapshot, turn, and request rows on schedule with failed captures or zero sessions and stops cleanly', async () => {
+    vi.useFakeTimers();
+    const realNow = Date.now();
+    vi.setSystemTime(realNow);
+
+    const fileDbDir = mkdtempSync(join(tmpdir(), 'spawnea-sup-retention-'));
+    const fileDbPath = join(fileDbDir, 'spawnea.sqlite');
+    let fileConn: ReturnType<typeof createDatabase> | undefined;
+    let fileSupervisor: SessionSupervisor | undefined;
+
+    try {
+      fileConn = createDatabase({ path: fileDbPath, migrate: true });
+      const fileRepos = createRepositories(fileConn.db);
+      await fileRepos.servers.save({
+        id: 'dev-workstation',
+        name: 'Development Workstation',
+        host: 'example-host',
+        sshPort: 22,
+        enabled: true,
+      });
+      await fileRepos.projects.save({
+        id: 'dev-workstation:spawnea',
+        serverId: 'dev-workstation',
+        name: 'Spawnea',
+        rootPath: '/workspace/spawnea',
+      });
+      await fileRepos.agents.save({
+        id: 'dev-workstation:claude',
+        name: 'Claude Code',
+        harness: 'claude',
+        command: 'claude',
+      });
+
+      const session = await fileRepos.sessions.save({
+        id: 'sess-expired',
+        name: 'Expired Session',
+        serverId: 'dev-workstation',
+        projectId: 'dev-workstation:spawnea',
+        agentId: 'dev-workstation:claude',
+        task: 'Retention test',
+        worktreePath: '/workspace/spawnea',
+        branch: 'main',
+        status: 'done',
+        tmuxSessionName: 'spawnea-sess-expired',
+      });
+
+      const expiredAt = realNow - 8 * 24 * 60 * 60 * 1000;
+      const historyRepo = fileRepos.sessionHistory!;
+      await historyRepo.upsertSnapshot({
+        sessionId: session.id,
+        output: 'expired terminal output',
+        items: [{ id: 'i1', role: 'agent', text: 'expired item', source: 'screen' }],
+        capturedAt: expiredAt,
+        updatedAt: expiredAt,
+      });
+      await historyRepo.saveTurn({
+        id: 'turn-expired',
+        sessionId: session.id,
+        harness: 'claude',
+        prompt: 'expired prompt',
+        output: 'expired turn output',
+        outputGeneration: 1,
+        baseOffset: 0,
+        version: 1,
+        status: 'completed',
+        observedWorking: true,
+        outputChanges: 1,
+        promptDelimiterPairs: 0,
+        createdAt: expiredAt,
+        changedAt: expiredAt,
+      });
+      await historyRepo.saveTurnRequest({
+        sessionId: session.id,
+        clientRequestId: 'req-expired',
+        turnId: 'turn-expired',
+        fingerprintHash: 'a'.repeat(64),
+        delivered: true,
+        deliveryMethod: 'tmux',
+        deliveryStatus: 'delivered',
+        acceptedAt: expiredAt,
+      });
+
+      const failingSessionManager = new SessionManager({
+        repositories: fileRepos,
+        catalogManager: catManager,
+        contextStore,
+        ptyBroker,
+        hostAdapterFactory: async () => {
+          throw new Error('host unreachable');
+        },
+      });
+      fileSupervisor = new SessionSupervisor({
+        repositories: fileRepos,
+        sessionManager: failingSessionManager,
+        contextStore,
+        ptyBroker,
+        pollIntervalMs: 1_000,
+        historyPruneIntervalMs: 60_000,
+      });
+
+      const pruneSpy = vi.spyOn(historyRepo, 'pruneExpiredAndExcess');
+      fileSupervisor.startPolling(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      // Runs despite capture failures and actually removes expired rows
+      expect(pruneSpy).toHaveBeenCalledTimes(1);
+      expect(await historyRepo.findSnapshotBySessionId(session.id, realNow)).toBeNull();
+      expect(await historyRepo.findTurnById('turn-expired', realNow)).toBeNull();
+      expect(await historyRepo.findTurnRequest(session.id, 'req-expired', realNow)).toBeNull();
+
+      // Still runs on schedule when there are zero sessions and recovers after a transient prune error
+      vi.spyOn(fileRepos.sessions, 'findAll').mockResolvedValue([]);
+      pruneSpy.mockRejectedValueOnce(new Error('transient sqlite busy'));
+
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(pruneSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(pruneSpy).toHaveBeenCalledTimes(2);
+
+      // Next scheduled cycle succeeds rather than being disabled by the earlier error
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(pruneSpy).toHaveBeenCalledTimes(3);
+
+      // Stopping polling prevents any further DB cleanup calls after shutdown
+      fileSupervisor.stopPolling();
+      fileConn.close();
+      fileConn = undefined;
+
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(pruneSpy).toHaveBeenCalledTimes(3);
+      expect(DEFAULT_HISTORY_RETENTION_PRUNE_INTERVAL_MS).toBe(60 * 60 * 1000);
+    } finally {
+      fileSupervisor?.stopPolling();
+      fileConn?.close();
+      vi.useRealTimers();
+      rmSync(fileDbDir, { recursive: true, force: true });
+    }
+  });
+
+  it('prevents overlapping periodic retention cleanup calls', async () => {
+    vi.useFakeTimers();
+    let releasePrune!: (value: {
+      deletedSnapshots: number;
+      deletedTurns: number;
+      deletedRequests: number;
+      totalPayloadBytes: number;
+    }) => void;
+    const pendingPrune = new Promise<{
+      deletedSnapshots: number;
+      deletedTurns: number;
+      deletedRequests: number;
+      totalPayloadBytes: number;
+    }>(
+      (resolve) => {
+        releasePrune = resolve;
+      },
+    );
+    const pruneSpy = vi
+      .spyOn(repos.sessionHistory!, 'pruneExpiredAndExcess')
+      .mockImplementationOnce(() => pendingPrune);
+
+    const fastSupervisor = new SessionSupervisor({
+      repositories: repos,
+      sessionManager,
+      contextStore,
+      ptyBroker,
+      pollIntervalMs: 500,
+      historyPruneIntervalMs: 100,
+    });
+
+    try {
+      fastSupervisor.startPolling(500);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(pruneSpy).toHaveBeenCalledTimes(1);
+
+      // Additional timer ticks while prune is still in flight must not start overlapping work
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(pruneSpy).toHaveBeenCalledTimes(1);
+
+      fastSupervisor.stopPolling();
+      releasePrune({ deletedSnapshots: 0, deletedTurns: 0, deletedRequests: 0, totalPayloadBytes: 0 });
+      await Promise.resolve();
+    } finally {
+      fastSupervisor.stopPolling();
+      vi.useRealTimers();
+    }
   });
 });

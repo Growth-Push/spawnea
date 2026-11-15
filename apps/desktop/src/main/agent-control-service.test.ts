@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
 import { createLogger, type OperationalCatalog, type Session } from '@spawnea/domain';
 import { AgentControlService, STABLE_SCREEN_COMPLETION_MS } from './agent-control-service.js';
+import { createControlOperations } from './control-operations.js';
+import { pollTurn } from '../cli/commands.js';
+import type { ControlCliClient } from '../cli/client.js';
 import type { SessionManager } from './session-manager.js';
 import { PromptSubmissionError } from '@spawnea/hosts';
 
@@ -2038,6 +2041,448 @@ describe('AgentControlService', () => {
         await expect(service.closeSession('failing-delete-sess')).rejects.toThrow(
           "Session 'failing-delete-sess' runtime stopped but session record could not be removed"
         );
+      });
+    });
+
+    describe('persisted turn recovery across restart', () => {
+      it('marks active persisted turns interrupted on restart, preserves completed turns, keeps replay and Agent Context volatile, and enforces scoped auth', async () => {
+        await repositories.servers.save({ id: 'host-local', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+        await repositories.sessions.save(session('existing', { serverId: 'host-local', status: 'idle' }));
+        await repositories.sessions.save(session('child-1', { serverId: 'host-local', parentSessionId: 'existing', childAlias: 'child-1', status: 'idle' }));
+        await repositories.sessions.save(session('other-root', { serverId: 'host-local', status: 'idle' }));
+
+        const activeSent = await service.sendPrompt({
+          target: 'child-1',
+          prompt: 'Run long analysis 🚀',
+          clientRequestId: 'req-before-restart',
+        });
+        terminalOutput = 'Codex ready\n› Run long analysis 🚀\n• Working 🚀 output line';
+        // Read through scoped control so Agent Context records the call while the turn is active
+        const preRestartScope = await service.createScopedControl('existing');
+        const preRestartActive = await preRestartScope.getTurn({ turnId: activeSent.turnId });
+        expect(preRestartActive.status).toBe('working');
+        expect(preRestartActive.cursorStatus).toBe('initial');
+        const preContext = await service.getAgentContext('existing');
+        expect(preContext.available).toBe(true);
+        expect(preContext.calls.length).toBeGreaterThanOrEqual(1);
+        await expect(service.getAgentContextTurn('existing', activeSent.turnId, 'raw')).resolves.toBeDefined();
+
+        // Also record a completed turn before restart
+        const doneSent = await service.sendPrompt({
+          target: 'existing',
+          prompt: 'Quick reply',
+          clientRequestId: 'req-done-turn',
+        });
+        terminalOutput = 'Codex ready\n› Quick reply\n<<<SPAWNEA_RESPONSE_BEGIN>>>\nfinished ok\n<<<SPAWNEA_RESPONSE_END>>>';
+        const doneTurn = await service.getTurn({ turnId: doneSent.turnId });
+        expect(doneTurn.status).toBe('completed');
+
+        // Simulate restart with a brand new AgentControlService backed by the same SQLite repositories
+        const restartedService = new AgentControlService({
+          repositories,
+          sessionManager: sessionManager as unknown as SessionManager,
+          logger: createLogger('ControlRestartTest'),
+        });
+        await restartedService.restorePersistedHistory();
+
+        // Terminal shows idle/done now — restored active turn must stay interrupted & archived, never completed/auto-resumed
+        terminalOutput = 'Codex ready\n› Ask Codex to do anything';
+        const archivedActive = await restartedService.getTurn({ turnId: activeSent.turnId });
+        expect(archivedActive).toMatchObject({
+          turnId: activeSent.turnId,
+          status: 'interrupted',
+          archived: true,
+          interrupted: true,
+          cursorStatus: 'initial',
+          cursorExpired: false,
+        });
+        expect(archivedActive.output).toContain('Working 🚀 output line');
+
+        // Pre-restart cursor now explicitly reports 'restarted' and cursorExpired: true
+        const restartedCursorRead = await restartedService.getTurn({
+          turnId: activeSent.turnId,
+          cursor: preRestartActive.cursor,
+        });
+        expect(restartedCursorRead).toMatchObject({
+          cursorStatus: 'restarted',
+          cursorExpired: true,
+          archived: true,
+          interrupted: true,
+        });
+
+        // Completed turn remains completed and archived
+        const archivedDone = await restartedService.getTurn({ turnId: doneSent.turnId });
+        expect(archivedDone).toMatchObject({
+          status: 'completed',
+          archived: true,
+          interrupted: false,
+          output: 'finished ok',
+        });
+
+        // EOF vs invalid vs mismatched cursors
+        const eofRead = await restartedService.getTurn({
+          turnId: activeSent.turnId,
+          cursor: archivedActive.cursor,
+          afterVersion: archivedActive.version,
+        });
+        expect(eofRead).toMatchObject({
+          status: 'unchanged',
+          output: '',
+          cursorStatus: 'eof',
+          cursorExpired: false,
+        });
+
+        const invalidCursorRead = await restartedService.getTurn({
+          turnId: activeSent.turnId,
+          cursor: 'not-a-valid-cursor',
+        });
+        expect(invalidCursorRead).toMatchObject({
+          output: '',
+          cursorStatus: 'invalid',
+          cursorExpired: true,
+        });
+
+        const mismatchedCursorRead = await restartedService.getTurn({
+          turnId: activeSent.turnId,
+          cursor: `${doneSent.turnId}:1:0`,
+        });
+        expect(mismatchedCursorRead).toMatchObject({
+          output: '',
+          cursorStatus: 'mismatched',
+          cursorExpired: true,
+        });
+
+        // Agent Context call records and turn lookup remain volatile across restart
+        await expect(restartedService.getAgentContext('existing')).resolves.toMatchObject({
+          available: false,
+          calls: [],
+        });
+        await expect(restartedService.getAgentContextTurn('existing', activeSent.turnId, 'raw')).rejects.toThrow(
+          'Turn context is unavailable for this session'
+        );
+
+        // Request metadata was saved with hashed fingerprint, yet volatile deduplication does NOT activate after restart
+        const savedRequest = await repositories.sessionHistory?.findTurnRequest('child-1', 'req-before-restart');
+        expect(savedRequest).toMatchObject({
+          sessionId: 'child-1',
+          clientRequestId: 'req-before-restart',
+          turnId: activeSent.turnId,
+          delivered: true,
+          deliveryStatus: 'delivered',
+        });
+        expect(savedRequest?.fingerprintHash).toMatch(/^[0-9a-f]{64}$/);
+
+        const postRestartSend = await restartedService.sendPrompt({
+          target: 'child-1',
+          prompt: 'Different prompt with same ID after restart',
+          clientRequestId: 'req-before-restart',
+        });
+        expect(postRestartSend.replayed).toBe(false);
+        expect(postRestartSend.turnId).not.toBe(activeSent.turnId);
+
+        // Scoped authorization validates owning session BEFORE returning persisted turns
+        const childOnlyScope = await restartedService.createScopedControl('existing');
+        await expect(childOnlyScope.getTurn({ turnId: activeSent.turnId })).resolves.toMatchObject({
+          sessionId: 'child-1',
+          archived: true,
+        });
+        await expect(childOnlyScope.getTurn({ turnId: doneSent.turnId })).rejects.toThrow('outside');
+
+        const otherRootScope = await restartedService.createScopedControl('other-root', { allowRootPrompts: true });
+        await expect(otherRootScope.getTurn({ turnId: activeSent.turnId })).rejects.toThrow('outside');
+        await expect(otherRootScope.getTurn({ turnId: doneSent.turnId })).rejects.toThrow('outside');
+
+        const rootAllowedScope = await restartedService.createScopedControl('existing', { allowRootPrompts: true });
+        await expect(rootAllowedScope.getTurn({ turnId: doneSent.turnId })).resolves.toMatchObject({
+          sessionId: 'existing',
+          archived: true,
+        });
+      });
+
+      it('truncates live turn tail output at valid UTF-8 boundaries when exceeding 256 KiB', async () => {
+        const sent = await service.sendPrompt({ target: 'existing', prompt: 'Emit UTF-8' });
+        terminalOutput = 'Codex ready\n' + '🚀'.repeat(70_000); // ~280 KB
+        const read = await service.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+        expect(read.output.includes('\uFFFD')).toBe(false);
+        expect(read.cursorExpired).toBe(true);
+      });
+
+      it('separates page truncation from retainedTruncated and lets CLI pollTurn drain >256 KiB completed turns and interrupted archived turns', async () => {
+        await repositories.servers.save({ id: 'host-local', name: 'Local', host: 'localhost', sshPort: 22, enabled: true });
+        await repositories.sessions.save(session('existing', { serverId: 'host-local', status: 'idle' }));
+
+        // 1. Completed turn > 256 KiB saved cleanly across restart
+        const largeOutput = 'A'.repeat(280 * 1024);
+        const largeTurnId = '11111111-1111-4111-8111-111111111111';
+        await repositories.sessionHistory?.saveTurn({
+          id: largeTurnId,
+          sessionId: 'existing',
+          harness: 'codex',
+          prompt: 'Emit large response',
+          output: largeOutput,
+          outputGeneration: 1,
+          baseOffset: 0,
+          version: 2,
+          status: 'completed',
+          observedWorking: true,
+          outputChanges: 2,
+          promptDelimiterPairs: 0,
+        });
+
+        // 2. Active turn transitions to interrupted on restart
+        const interruptedTurnId = '22222222-2222-4222-8222-222222222222';
+        await repositories.sessionHistory?.saveTurn({
+          id: interruptedTurnId,
+          sessionId: 'existing',
+          harness: 'codex',
+          prompt: 'Interrupted prompt',
+          output: 'Working chunk before restart',
+          outputGeneration: 1,
+          baseOffset: 0,
+          version: 1,
+          status: 'working',
+          observedWorking: true,
+          outputChanges: 1,
+          promptDelimiterPairs: 0,
+        });
+
+        const restartedService = new AgentControlService({
+          repositories,
+          sessionManager: sessionManager as unknown as SessionManager,
+          logger: createLogger('test:control-pagination'),
+        });
+        await restartedService.restorePersistedHistory();
+        const ops = createControlOperations(restartedService);
+        const cliClient = {
+          callTool: async (name: string, args: Record<string, unknown>) => {
+            const res = await ops.call(name, args);
+            if (!res.ok) throw new Error(res.error.message);
+            return res.value;
+          },
+        } as unknown as ControlCliClient;
+
+        // First page vs EOF page on spawnea_get_turn
+        const firstPage = await cliClient.callTool('spawnea_get_turn', {
+          turnId: largeTurnId,
+          outputMode: 'compact',
+        });
+        expect(firstPage.truncated).toBe(true);
+        expect(firstPage.retainedTruncated).toBe(true);
+
+        // Actual CLI consumer drains >256 KiB retained turn to EOF without timing out
+        const polledLarge = await pollTurn(cliClient, largeTurnId, 5);
+        expect(polledLarge.status).toBe('completed');
+        expect(polledLarge.rawTurn.truncated).toBe(false);
+        expect(polledLarge.rawTurn.retainedTruncated).toBe(true);
+        expect(polledLarge.rawTurn.archived).toBe(true);
+        expect(polledLarge.output.length).toBe(256 * 1024);
+
+        // Archived interrupted turn terminates pollTurn immediately with status='interrupted'
+        const polledInterrupted = await pollTurn(cliClient, interruptedTurnId, 5);
+        expect(polledInterrupted.status).toBe('interrupted');
+        expect(polledInterrupted.rawTurn.archived).toBe(true);
+        expect(polledInterrupted.rawTurn.interrupted).toBe(true);
+        expect(polledInterrupted.output).toContain('Working chunk before restart');
+      });
+
+      it('preserves retained turn output when a subsequent tmux capture fails while still handling genuinely empty captures', async () => {
+        let captureState: { success: boolean; output: string } = {
+          success: true,
+          output: 'Codex ready\n',
+        };
+        const smWithDetailed = {
+          ...sessionManager,
+          captureSessionTerminalDetailed: vi.fn(async () => captureState),
+          captureSessionTerminal: vi.fn(async () => {
+            if (!captureState.success) {
+              throw new Error("Failed to capture terminal output for session 'existing'");
+            }
+            return captureState.output;
+          }),
+        };
+        const detailedService = new AgentControlService({
+          repositories,
+          sessionManager: smWithDetailed as unknown as SessionManager,
+          logger: createLogger('test:control-capture-fail'),
+        });
+
+        // 1. Submit prompt and observe partial streamed output
+        const sent = await detailedService.sendPrompt({ target: 'existing', prompt: 'Inspect logs' });
+        captureState = { success: true, output: 'Codex ready\nPartial working answer\n' };
+        const beforeFailure = await detailedService.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+        expect(beforeFailure.status).toBe('working');
+        expect(beforeFailure.output).toBe('Partial working answer\n');
+
+        const persistedBefore = await repositories.sessionHistory?.findTurnById(sent.turnId);
+        expect(persistedBefore?.output).toBe('Partial working answer\n');
+        expect(persistedBefore?.version).toBe(beforeFailure.version);
+
+        // 2. Transient failed capture must NOT overwrite output/status/version or force completion
+        captureState = { success: false, output: '' };
+        const duringFailure = await detailedService.getTurn({
+          turnId: sent.turnId,
+          outputMode: 'raw',
+          waitMs: 0,
+        });
+        expect(duringFailure.status).toBe('working');
+        expect(duringFailure.output).toBe('Partial working answer\n');
+        expect(duringFailure.version).toBe(beforeFailure.version);
+
+        const persistedDuringFailure = await repositories.sessionHistory?.findTurnById(sent.turnId);
+        expect(persistedDuringFailure?.output).toBe('Partial working answer\n');
+        expect(persistedDuringFailure?.status).toBe('working');
+        expect(persistedDuringFailure?.version).toBe(persistedBefore?.version);
+
+        // 3. Fallback path when captureSessionTerminal rejects directly also preserves output
+        let fallbackOutput = 'Codex ready\n';
+        let fallbackFail = false;
+        const rejectOnlyManager = {
+          ...sessionManager,
+          captureSessionTerminal: vi.fn(async () => {
+            if (fallbackFail) {
+              throw new Error('tmux socket temporarily busy');
+            }
+            return fallbackOutput;
+          }),
+        };
+        const fallbackService = new AgentControlService({
+          repositories,
+          sessionManager: rejectOnlyManager as unknown as SessionManager,
+          logger: createLogger('test:control-capture-reject'),
+        });
+        const fallbackSent = await fallbackService.sendPrompt({ target: 'existing', prompt: 'Check fallback' });
+        fallbackOutput = 'Codex ready\nFallback retained answer\n';
+        const fallbackBefore = await fallbackService.getTurn({ turnId: fallbackSent.turnId, outputMode: 'raw' });
+        expect(fallbackBefore.output).toBe('Fallback retained answer\n');
+
+        fallbackFail = true;
+        const afterReject = await fallbackService.getTurn({ turnId: fallbackSent.turnId, outputMode: 'raw' });
+        expect(afterReject.status).toBe('working');
+        expect(afterReject.output).toBe('Fallback retained answer\n');
+        expect(afterReject.version).toBe(fallbackBefore.version);
+
+        // 4. Genuine empty capture with success=true still executes refresh normally
+        captureState = { success: true, output: '' };
+        const afterEmptySuccess = await detailedService.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+        expect(afterEmptySuccess.status).toBe('working');
+        expect(afterEmptySuccess.version).toBeGreaterThan(beforeFailure.version);
+        expect(afterEmptySuccess.output).toBe('');
+      });
+
+      it('applies authoritative terminal session states (error, disconnected, done) when capture fails or throws without erasing retained output', async () => {
+        const sendPromptSpy = sessionManager.sendPrompt;
+        const callsBefore = sendPromptSpy.mock.calls.length;
+
+        // Helper creates an isolated working turn with partial captured output, then switches capture to fail or reject
+        const setupActiveTurn = async (mode: 'detailed-fail' | 'throw') => {
+          let state: { success: boolean; output: string; shouldThrow?: boolean } = {
+            success: true,
+            output: 'Codex ready\n',
+          };
+          const mgr =
+            mode === 'detailed-fail'
+              ? {
+                  ...sessionManager,
+                  captureSessionTerminalDetailed: vi.fn(async () => state),
+                  captureSessionTerminal: vi.fn(async () => state.output),
+                }
+              : {
+                  ...sessionManager,
+                  captureSessionTerminal: vi.fn(async () => {
+                    if (state.shouldThrow) throw new Error('tmux pane disappeared');
+                    return state.output;
+                  }),
+                };
+          const svc = new AgentControlService({
+            repositories,
+            sessionManager: mgr as unknown as SessionManager,
+            logger: createLogger(`test:control-terminal-${mode}`),
+          });
+          await repositories.sessions.save(session('existing', { status: 'working' }));
+          const sent = await svc.sendPrompt({ target: 'existing', prompt: 'Inspect failure' });
+          state.output = 'Codex ready\nRetained partial line 1\nRetained partial line 2\n';
+          const initial = await svc.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+          expect(initial.status).toBe('working');
+          expect(initial.output).toBe('Retained partial line 1\nRetained partial line 2\n');
+          return { svc, sent, initial, setFail: () => { state.success = false; state.output = ''; state.shouldThrow = true; } };
+        };
+
+        // 1. Active session + failed capture: retains output and stays working (still owns open turn)
+        const errCase = await setupActiveTurn('detailed-fail');
+        errCase.setFail();
+        const stillWorking = await errCase.svc.getTurn({ turnId: errCase.sent.turnId, outputMode: 'raw' });
+        expect(stillWorking.status).toBe('working');
+        expect(stillWorking.output).toBe('Retained partial line 1\nRetained partial line 2\n');
+        expect(stillWorking.version).toBe(errCase.initial.version);
+
+        // Session becomes 'error' while capture still fails -> turn transitions to 'failed', output preserved, open turn retired
+        await repositories.sessions.save(session('existing', { status: 'error' }));
+        const onError = await errCase.svc.getTurn({ turnId: errCase.sent.turnId, outputMode: 'raw' });
+        expect(onError.status).toBe('failed');
+        expect(onError.output).toBe('Retained partial line 1\nRetained partial line 2\n');
+        expect(onError.version).toBe(errCase.initial.version + 1);
+        const persistedErr = await repositories.sessionHistory?.findTurnById(errCase.sent.turnId);
+        expect(persistedErr?.status).toBe('failed');
+        expect(persistedErr?.output).toBe('Retained partial line 1\nRetained partial line 2\n');
+        expect(persistedErr?.outputGeneration).toBe(1);
+        expect(persistedErr?.baseOffset).toBe(0);
+
+        // Confirm open-turn association was retired (can accept a new prompt once session becomes working again)
+        await repositories.sessions.save(session('existing', { status: 'working' }));
+        const nextPromptAfterError = await errCase.svc.sendPrompt({ target: 'existing', prompt: 'Next prompt' });
+        expect(nextPromptAfterError.turnId).not.toBe(errCase.sent.turnId);
+
+        // 2. Session becomes 'disconnected' while captureSessionTerminal rejects -> 'failed' + preserved output
+        const discCase = await setupActiveTurn('throw');
+        discCase.setFail();
+        await repositories.sessions.save(session('existing', { status: 'disconnected' }));
+        const onDisconnected = await discCase.svc.getTurn({ turnId: discCase.sent.turnId, outputMode: 'raw' });
+        expect(onDisconnected.status).toBe('failed');
+        expect(onDisconnected.output).toBe('Retained partial line 1\nRetained partial line 2\n');
+        expect(onDisconnected.version).toBe(discCase.initial.version + 1);
+        const persistedDisc = await repositories.sessionHistory?.findTurnById(discCase.sent.turnId);
+        expect(persistedDisc?.status).toBe('failed');
+        expect(persistedDisc?.output).toBe('Retained partial line 1\nRetained partial line 2\n');
+
+        // 3. Session becomes 'done' while capture fails -> 'completed' with retained output preserved and open turn retired
+        const doneCase = await setupActiveTurn('detailed-fail');
+        doneCase.setFail();
+        await repositories.sessions.save(session('existing', { status: 'done' }));
+        const onDone = await doneCase.svc.getTurn({ turnId: doneCase.sent.turnId, outputMode: 'raw' });
+        expect(onDone.status).toBe('completed');
+        expect(onDone.output).toBe('Retained partial line 1\nRetained partial line 2\n');
+        expect(onDone.version).toBe(doneCase.initial.version + 1);
+        const persistedDone = await repositories.sessionHistory?.findTurnById(doneCase.sent.turnId);
+        expect(persistedDone?.status).toBe('completed');
+        expect(persistedDone?.output).toBe('Retained partial line 1\nRetained partial line 2\n');
+
+        // 4. Uncertain prompt with no output on 'done' + failed capture still keeps 'unknown' contract
+        let failUncertain = false;
+        const uncertainMgr = {
+          ...sessionManager,
+          sendPrompt: vi.fn(async () => {
+            throw new PromptSubmissionError('tmux');
+          }),
+          captureSessionTerminalDetailed: vi.fn(async () =>
+            failUncertain ? { success: false, output: '' } : { success: true, output: 'Codex ready\n' }
+          ),
+        };
+        const uncertainSvc = new AgentControlService({
+          repositories,
+          sessionManager: uncertainMgr as unknown as SessionManager,
+          logger: createLogger('test:control-terminal-uncertain'),
+        });
+        await repositories.sessions.save(session('existing', { status: 'idle' }));
+        const uncertainSent = await uncertainSvc.sendPrompt({ target: 'existing', prompt: 'Maybe lost enter' });
+        expect(uncertainSent.status).toBe('unknown');
+        failUncertain = true;
+        await repositories.sessions.save(session('existing', { status: 'done' }));
+        const uncertainOnDone = await uncertainSvc.getTurn({ turnId: uncertainSent.turnId, outputMode: 'raw' });
+        expect(uncertainOnDone.status).toBe('unknown');
+        expect(uncertainOnDone.output).toBe('');
+
+        // Only the explicit sendPrompt calls above occurred (no retries from failed capture refreshes)
+        expect(sendPromptSpy.mock.calls.length).toBe(callsBefore + 4);
       });
     });
   });

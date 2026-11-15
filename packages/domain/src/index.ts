@@ -11,6 +11,7 @@ export * from './path-security.js';
 export * from './model-selection.js';
 export * from './github-links.js';
 export * from './history.js';
+export * from './session-history-retention.js';
 export type SessionStatus =
   | 'starting'
   | 'working'

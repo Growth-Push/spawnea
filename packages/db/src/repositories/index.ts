@@ -4,6 +4,7 @@ import type {
   AgentRepository,
   SessionRepository,
   ArtifactRepository,
+  SessionHistoryRepository,
   Logger,
 } from '@spawnea/domain';
 import type { DbClient } from '../connection.js';
@@ -13,6 +14,7 @@ import { SqliteAgentRepository } from './agent-repository.js';
 import { SqliteSessionRepository } from './session-repository.js';
 import { SqliteArtifactRepository } from './artifact-repository.js';
 import { SqliteGitHubRepository } from './github-repository.js';
+import { SqliteSessionHistoryRepository } from './session-history-repository.js';
 
 export * from './server-repository.js';
 export * from './project-repository.js';
@@ -20,6 +22,7 @@ export * from './agent-repository.js';
 export * from './session-repository.js';
 export * from './artifact-repository.js';
 export * from './github-repository.js';
+export * from './session-history-repository.js';
 
 export interface Repositories {
   servers: ServerRepository;
@@ -28,6 +31,7 @@ export interface Repositories {
   sessions: SessionRepository;
   artifacts: ArtifactRepository;
   github?: SqliteGitHubRepository;
+  sessionHistory?: SessionHistoryRepository;
 }
 
 export interface RepositoryOptions {
@@ -42,5 +46,6 @@ export function createRepositories(db: DbClient, options: RepositoryOptions = {}
     sessions: new SqliteSessionRepository(db, options.logger),
     artifacts: new SqliteArtifactRepository(db, options.logger),
     github: new SqliteGitHubRepository(db),
+    sessionHistory: new SqliteSessionHistoryRepository(db, { logger: options.logger }),
   };
 }

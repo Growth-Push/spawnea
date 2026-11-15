@@ -21,6 +21,7 @@ import type { SessionContextStore } from './session-context-store.js';
 import type { PtyBroker } from './pty-broker.js';
 import type { ArtifactManager } from './artifact-manager.js';
 import { retainSessionLinks } from './session-links.js';
+import { persistSessionScreenSnapshot } from './session-history-snapshot.js';
 import {
   buildFeedbackPayload,
   FEEDBACK_CAPTURE_FAILED_REASON,
@@ -32,6 +33,8 @@ import {
 const STATUS_DETECTION_TAIL_LINES = 50;
 /** Terminal lines scanned for artifact paths. */
 const ARTIFACT_DETECTION_TAIL_LINES = 250;
+/** Periodic cadence for enforcing SQLite session history retention bounds while Desktop stays open (1 hour). */
+export const DEFAULT_HISTORY_RETENTION_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 
 export interface SessionSupervisorOptions {
   repositories: Repositories;
@@ -43,6 +46,7 @@ export interface SessionSupervisorOptions {
   stateDetector?: StateDetector;
   logger?: Logger;
   pollIntervalMs?: number;
+  historyPruneIntervalMs?: number;
   maxConcurrentChecks?: number;
   feedbackDir?: string;
 }
@@ -62,13 +66,17 @@ export class SessionSupervisor {
   private readonly stateDetector: StateDetector;
   private readonly logger: Logger;
   private readonly defaultPollIntervalMs: number;
+  private readonly historyPruneIntervalMs: number;
   private readonly maxConcurrentChecks: number;
   private readonly feedbackDir?: string;
 
 
   private pollTimer: NodeJS.Timeout | null = null;
+  private pollingActive = false;
   private isPolling = false;
   private pollingGeneration = 0;
+  private lastHistoryPruneAttemptAt: number | null = null;
+  private inFlightHistoryPrune: Promise<void> | null = null;
   private readonly inFlightChecks: Set<string> = new Set();
   private pollingCursor = 0;
   private readonly activityDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
@@ -86,6 +94,9 @@ export class SessionSupervisor {
     this.tmuxManager = options.tmuxManager || new TmuxManager(this.logger.child('tmux'));
     this.stateDetector = options.stateDetector || new StateDetector();
     this.defaultPollIntervalMs = options.pollIntervalMs || 10000;
+    this.historyPruneIntervalMs = options.historyPruneIntervalMs && options.historyPruneIntervalMs > 0
+      ? options.historyPruneIntervalMs
+      : DEFAULT_HISTORY_RETENTION_PRUNE_INTERVAL_MS;
     this.maxConcurrentChecks = Math.max(1, Math.trunc(options.maxConcurrentChecks ?? 4));
     this.feedbackDir = options.feedbackDir;
 
@@ -173,6 +184,7 @@ export class SessionSupervisor {
     let panePid: number | undefined = undefined;
     let tailLines: string[] = [];
     let artifactTailLines: string[] = [];
+    let captureSucceeded = false;
     let linkHost: HostAdapter | undefined;
 
     let harnessName: string | undefined = undefined;
@@ -201,11 +213,22 @@ export class SessionSupervisor {
         }
 
         if (!paneDead) {
-          tailLines = await this.tmuxManager.capturePaneTail(
-            host,
-            session.tmuxSessionName,
-            STATUS_DETECTION_TAIL_LINES
-          );
+          if (typeof (this.tmuxManager as Partial<TmuxManager>).capturePaneTailDetailed === 'function') {
+            const detailed = await this.tmuxManager.capturePaneTailDetailed(
+              host,
+              session.tmuxSessionName,
+              STATUS_DETECTION_TAIL_LINES
+            );
+            tailLines = detailed.lines;
+            captureSucceeded = detailed.success && paneExists;
+          } else {
+            tailLines = await this.tmuxManager.capturePaneTail(
+              host,
+              session.tmuxSessionName,
+              STATUS_DETECTION_TAIL_LINES
+            );
+            captureSucceeded = paneExists;
+          }
           // Artifact detection scans a longer, separate capture so the status
           // detector keeps receiving exactly the capture it always had.
           if (this.artifactManager) {
@@ -249,6 +272,18 @@ export class SessionSupervisor {
 
     if (generation !== this.pollingGeneration) {
       return result;
+    }
+
+    if (captureSucceeded) {
+      const snapshotLines = artifactTailLines.length > 0 ? artifactTailLines : tailLines;
+      await persistSessionScreenSnapshot({
+        repositories: this.repos,
+        logger: this.logger,
+        sessionId,
+        harness: harnessName ?? harnessCommand,
+        tailLines: snapshotLines,
+        captureSuccess: true,
+      });
     }
 
     // Auto-detect candidate output artifacts from terminal tail lines
@@ -350,8 +385,57 @@ export class SessionSupervisor {
     return results;
   }
 
+  private async pruneSessionHistoryIfDue(generation: number): Promise<void> {
+    if (!this.pollingActive || generation !== this.pollingGeneration) return;
+    const historyRepo = this.repos.sessionHistory;
+    if (!historyRepo || this.inFlightHistoryPrune) return;
+
+    const now = Date.now();
+    if (
+      this.lastHistoryPruneAttemptAt !== null &&
+      now - this.lastHistoryPruneAttemptAt < this.historyPruneIntervalMs
+    ) {
+      return;
+    }
+
+    this.lastHistoryPruneAttemptAt = now;
+    const run = (async () => {
+      if (!this.pollingActive || generation !== this.pollingGeneration) return;
+      try {
+        const pruned = await historyRepo.pruneExpiredAndExcess(now);
+        if (pruned.deletedSnapshots > 0 || pruned.deletedTurns > 0 || pruned.deletedRequests > 0) {
+          this.logger.info('Pruned expired or excess session history rows', { ...pruned });
+        }
+      } catch (err) {
+        this.logger.warn('Periodic session history retention cleanup failed', { error: err });
+      }
+    })();
+    this.inFlightHistoryPrune = run;
+    try {
+      await run;
+    } finally {
+      if (this.inFlightHistoryPrune === run) {
+        this.inFlightHistoryPrune = null;
+      }
+    }
+  }
+
+  private async runPollCycle(generation: number): Promise<void> {
+    if (!this.pollingActive || generation !== this.pollingGeneration || this.isPolling) return;
+    this.isPolling = true;
+    try {
+      await this.pruneSessionHistoryIfDue(generation);
+      if (!this.pollingActive || generation !== this.pollingGeneration) return;
+      await this.checkAllSessions();
+    } catch (err) {
+      this.logger.warn('Error during periodic session check', { error: err });
+    } finally {
+      this.isPolling = false;
+    }
+  }
+
   /**
-   * Starts periodic polling for live session attention supervision.
+   * Starts periodic polling for live session attention supervision and bounded history retention cleanup.
    */
   startPolling(intervalMs?: number): void {
     const effectiveInterval = intervalMs || this.defaultPollIntervalMs || 10000;
@@ -359,17 +443,14 @@ export class SessionSupervisor {
       clearInterval(this.pollTimer);
     }
 
-    this.logger.info('Starting SessionSupervisor periodic polling', { intervalMs: effectiveInterval });
-    this.pollTimer = setInterval(async () => {
-      if (this.isPolling) return;
-      this.isPolling = true;
-      try {
-        await this.checkAllSessions();
-      } catch (err) {
-        this.logger.warn('Error during periodic session check', { error: err });
-      } finally {
-        this.isPolling = false;
-      }
+    this.pollingActive = true;
+    const generation = this.pollingGeneration;
+    this.logger.info('Starting SessionSupervisor periodic polling', {
+      intervalMs: effectiveInterval,
+      historyPruneIntervalMs: this.historyPruneIntervalMs,
+    });
+    this.pollTimer = setInterval(() => {
+      void this.runPollCycle(generation);
     }, effectiveInterval);
   }
 
@@ -383,6 +464,7 @@ export class SessionSupervisor {
    * This never targets the persistent tmux session or the agent process.
    */
   stopPolling(): void {
+    this.pollingActive = false;
     if (this.pollTimer) {
       this.logger.info('Stopping SessionSupervisor periodic polling');
       clearInterval(this.pollTimer);

@@ -113,7 +113,12 @@ describe('Database Migrations', () => {
     insert.run('ui', 'tmux-ui', 'ui');
 
     const result = runMigrations(sqlite);
-    expect(result.appliedNames).toEqual(['0010_rename_mcp_creation_source', '0011_dashboard_history', '0012_github_integration']);
+    expect(result.appliedNames).toEqual([
+      '0010_rename_mcp_creation_source',
+      '0011_dashboard_history',
+      '0012_github_integration',
+      '0013_session_history_persistence',
+    ]);
     const rows = sqlite.prepare('SELECT id, creation_source FROM sessions ORDER BY id').all();
     expect(rows).toEqual([
       { id: 'legacy', creation_source: 'control' },
@@ -132,7 +137,7 @@ describe('Database Migrations', () => {
       INSERT INTO sessions (id,name,server_id,project_id,agent_id,task,worktree_path,branch,tmux_session_name,status,created_at,last_activity_at)
         VALUES ('x','Session','s','p','a','Task','/p','main','tmux','idle',0,0);
     `);
-    expect(runMigrations(sqlite).appliedNames).toEqual(['0012_github_integration']);
+    expect(runMigrations(sqlite).appliedNames).toEqual(['0012_github_integration', '0013_session_history_persistence']);
     expect(sqlite.prepare('SELECT origin_issue_url FROM sessions WHERE id = ?').get('x')).toEqual({ origin_issue_url: null });
     sqlite.prepare('INSERT INTO github_project_settings (project_id) VALUES (?)').run('p');
     expect(sqlite.prepare('SELECT tracker_enabled, ci_enabled FROM github_project_settings').get()).toEqual({ tracker_enabled: 0, ci_enabled: 0 });

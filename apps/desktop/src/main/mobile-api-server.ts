@@ -1,11 +1,17 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server as HttpServer } from 'node:http';
 import type { Socket, AddressInfo } from 'node:net';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import type { Repositories } from '@spawnea/db';
 import {
   DEFAULT_MOBILE_API_PORT,
+  MAX_SNAPSHOT_OUTPUT_BYTES,
   SPAWNEA_CONTROL_API_VERSION,
+  utf8ByteLength,
   type CatalogApiConfig,
   type Logger,
+  type PersistedSessionSnapshot,
+  type SessionHistoryCursorStatus,
+  type SessionHistoryItem,
 } from '@spawnea/domain';
 import type { AgentControlService } from './agent-control-service.js';
 import type { SessionManager } from './session-manager.js';
@@ -25,6 +31,7 @@ export const MAX_CLIENT_REQUEST_ID_LENGTH = 128;
 export interface MobileApiServerOptions {
   control: AgentControlService;
   sessionManager: SessionManager;
+  repositories?: Repositories;
   logger: Logger;
   config?: CatalogApiConfig | null;
   port?: number;
@@ -177,6 +184,7 @@ async function readJsonBody(
 export class MobileApiServer {
   private readonly control: AgentControlService;
   private readonly sessionManager: SessionManager;
+  private readonly repositories?: Repositories;
   private readonly logger: Logger;
   private readonly config?: CatalogApiConfig | null;
   private readonly options: MobileApiServerOptions;
@@ -193,6 +201,7 @@ export class MobileApiServer {
     this.options = options;
     this.control = options.control;
     this.sessionManager = options.sessionManager;
+    this.repositories = options.repositories ?? (options.sessionManager as unknown as { repos?: Repositories }).repos;
     this.logger = options.logger;
     this.config = options.config;
     this.profile = options.profile;
@@ -515,6 +524,7 @@ export class MobileApiServer {
 
     let output: string | null = null;
     let available = false;
+    let captureFailed = false;
 
     if (isLiveStatus) {
       try {
@@ -526,6 +536,7 @@ export class MobileApiServer {
           } else {
             output = null;
             available = false;
+            captureFailed = true;
           }
         } else {
           output = await this.sessionManager.captureSessionTerminal(sessionId, lines);
@@ -534,28 +545,298 @@ export class MobileApiServer {
       } catch {
         output = null;
         available = false;
+        captureFailed = true;
       }
     }
 
     if (!available) {
+      const { snapshot, readError } = await this.readPersistedSnapshot(sessionId);
+      const baseReason = captureFailed
+        ? 'Current terminal output is unavailable because the terminal capture failed.'
+        : 'Current terminal output is unavailable because the session is not running.';
+      const updatedAtIso = snapshot ? new Date(snapshot.updatedAt).toISOString() : null;
+      const capturedAtIso = snapshot ? new Date(snapshot.capturedAt).toISOString() : null;
+      const lastOutput = snapshot
+        ? {
+            output: snapshot.output,
+            updatedAt: updatedAtIso,
+            capturedAt: capturedAtIso,
+            stale: true,
+            truncated: snapshot.truncated,
+            version: snapshot.version,
+          }
+        : null;
+
       sendJson(res, 200, {
         apiVersion: SPAWNEA_CONTROL_API_VERSION,
         sessionId,
         available: false,
         status: 'unavailable',
         output: null,
-        message: 'Current terminal output is unavailable because the session is not running.',
+        freshness: snapshot ? 'historical' : 'unavailable',
+        stale: Boolean(snapshot),
+        stored: Boolean(snapshot),
+        updatedAt: updatedAtIso,
+        capturedAt: capturedAtIso,
+        truncated: snapshot ? snapshot.truncated : false,
+        version: snapshot ? snapshot.version : null,
+        lastOutput,
+        message: readError
+          ? `${baseReason} Retained snapshot lookup failed.`
+          : snapshot
+            ? `${baseReason} Retained historical output is exposed in lastOutput.`
+            : baseReason,
       });
       return;
     }
 
+    const nowIso = new Date().toISOString();
     sendJson(res, 200, {
       apiVersion: SPAWNEA_CONTROL_API_VERSION,
       sessionId,
       available: true,
       status: 'live',
       output,
+      freshness: 'live',
+      stale: false,
+      stored: false,
+      updatedAt: nowIso,
+      truncated: utf8ByteLength(output ?? '') > MAX_SNAPSHOT_OUTPUT_BYTES,
     });
+  }
+
+  private async readPersistedSnapshot(
+    sessionId: string
+  ): Promise<{ snapshot: PersistedSessionSnapshot | null; readError: boolean }> {
+    const historyRepo = this.repositories?.sessionHistory;
+    if (!historyRepo) {
+      return { snapshot: null, readError: false };
+    }
+    try {
+      const snapshot = await historyRepo.findSnapshotBySessionId(sessionId);
+      return { snapshot, readError: false };
+    } catch (error) {
+      this.logger.warn('Failed to read persisted session history snapshot', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { snapshot: null, readError: true };
+    }
+  }
+
+  private encodeStoredSnapshotCursor(
+    sessionId: string,
+    snapshotGeneration: string,
+    version: number,
+    offset: number
+  ): string {
+    const payload = { s: sessionId, g: snapshotGeneration, v: version, o: offset };
+    return `stored:${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
+  }
+
+  private decodeStoredSnapshotCursor(
+    cursor: string
+  ): { s: string; g: string; v: number; o: number } | null {
+    if (!cursor.startsWith('stored:')) return null;
+    const encoded = cursor.slice('stored:'.length);
+    if (!encoded || !/^[A-Za-z0-9_-]+$/.test(encoded)) return null;
+    try {
+      const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+      const candidate = parsed as Record<string, unknown>;
+      if (
+        typeof candidate.s !== 'string' ||
+        candidate.s.length === 0 ||
+        typeof candidate.g !== 'string' ||
+        candidate.g.length === 0 ||
+        typeof candidate.v !== 'number' ||
+        !Number.isSafeInteger(candidate.v) ||
+        candidate.v < 1 ||
+        typeof candidate.o !== 'number' ||
+        !Number.isSafeInteger(candidate.o) ||
+        candidate.o < 0
+      ) {
+        return null;
+      }
+      return {
+        s: candidate.s,
+        g: candidate.g,
+        v: candidate.v,
+        o: candidate.o,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private paginateStoredSnapshotItems(
+    sessionId: string,
+    snapshot: PersistedSessionSnapshot | null,
+    limit: number,
+    cursor: string | undefined,
+    isLive: boolean
+  ): {
+    storedItems: SessionHistoryItem[];
+    storedHasMore: boolean;
+    cursor: string | undefined;
+    cursorStatus: SessionHistoryCursorStatus;
+    cursorExpired: boolean;
+  } {
+    if (!snapshot) {
+      if (!cursor) {
+        return {
+          storedItems: [],
+          storedHasMore: false,
+          cursor: undefined,
+          cursorStatus: 'initial',
+          cursorExpired: false,
+        };
+      }
+      if (cursor.startsWith('line:')) {
+        return {
+          storedItems: [],
+          storedHasMore: false,
+          cursor: undefined,
+          cursorStatus: !isLive ? 'restarted' : 'expired',
+          cursorExpired: true,
+        };
+      }
+      const decoded = this.decodeStoredSnapshotCursor(cursor);
+      if (!decoded) {
+        return {
+          storedItems: [],
+          storedHasMore: false,
+          cursor: undefined,
+          cursorStatus: 'invalid',
+          cursorExpired: true,
+        };
+      }
+      return {
+        storedItems: [],
+        storedHasMore: false,
+        cursor: undefined,
+        cursorStatus: decoded.s !== sessionId ? 'mismatched' : 'expired',
+        cursorExpired: true,
+      };
+    }
+
+    const resetCursor = this.encodeStoredSnapshotCursor(
+      sessionId,
+      snapshot.snapshotGeneration,
+      snapshot.version,
+      0
+    );
+    if (!cursor) {
+      const end = Math.min(snapshot.items.length, limit);
+      return {
+        storedItems: snapshot.items.slice(0, end),
+        storedHasMore: end < snapshot.items.length,
+        cursor: this.encodeStoredSnapshotCursor(
+          sessionId,
+          snapshot.snapshotGeneration,
+          snapshot.version,
+          end
+        ),
+        cursorStatus: 'initial',
+        cursorExpired: false,
+      };
+    }
+
+    if (cursor.startsWith('line:')) {
+      return {
+        storedItems: [],
+        storedHasMore: false,
+        cursor: resetCursor,
+        cursorStatus: !isLive ? 'restarted' : 'mismatched',
+        cursorExpired: true,
+      };
+    }
+
+    const decoded = this.decodeStoredSnapshotCursor(cursor);
+    if (!decoded) {
+      return {
+        storedItems: [],
+        storedHasMore: false,
+        cursor: resetCursor,
+        cursorStatus: 'invalid',
+        cursorExpired: true,
+      };
+    }
+
+    if (decoded.s !== sessionId) {
+      return {
+        storedItems: [],
+        storedHasMore: false,
+        cursor: resetCursor,
+        cursorStatus: 'mismatched',
+        cursorExpired: true,
+      };
+    }
+
+    if (decoded.g !== snapshot.snapshotGeneration) {
+      return {
+        storedItems: [],
+        storedHasMore: false,
+        cursor: resetCursor,
+        cursorStatus: 'expired',
+        cursorExpired: true,
+      };
+    }
+
+    if (decoded.v !== snapshot.version) {
+      return {
+        storedItems: [],
+        storedHasMore: false,
+        cursor: resetCursor,
+        cursorStatus: 'mismatched',
+        cursorExpired: true,
+      };
+    }
+
+    const offset = decoded.o;
+    if (offset > snapshot.items.length) {
+      return {
+        storedItems: [],
+        storedHasMore: false,
+        cursor: this.encodeStoredSnapshotCursor(
+          sessionId,
+          snapshot.snapshotGeneration,
+          snapshot.version,
+          snapshot.items.length
+        ),
+        cursorStatus: 'expired',
+        cursorExpired: true,
+      };
+    }
+
+    if (offset === snapshot.items.length) {
+      return {
+        storedItems: [],
+        storedHasMore: false,
+        cursor: this.encodeStoredSnapshotCursor(
+          sessionId,
+          snapshot.snapshotGeneration,
+          snapshot.version,
+          offset
+        ),
+        cursorStatus: 'eof',
+        cursorExpired: false,
+      };
+    }
+
+    const end = Math.min(snapshot.items.length, offset + limit);
+    return {
+      storedItems: snapshot.items.slice(offset, end),
+      storedHasMore: end < snapshot.items.length,
+      cursor: this.encodeStoredSnapshotCursor(
+        sessionId,
+        snapshot.snapshotGeneration,
+        snapshot.version,
+        end
+      ),
+      cursorStatus: 'valid',
+      cursorExpired: false,
+    };
   }
 
   private async handleHistory(
@@ -587,8 +868,12 @@ export class MobileApiServer {
       recentExchanges: cursor ? undefined : limit,
     });
 
+    const isLive = session.status !== 'disconnected' && session.status !== 'done';
+
     if (historyResult.source === 'transcript') {
       // Transcript from Claude/Codex agent files is persistent across restarts
+      const cursorStatus: SessionHistoryCursorStatus =
+        historyResult.cursorStatus ?? (historyResult.cursorExpired ? 'expired' : cursor ? 'valid' : 'initial');
       sendJson(res, 200, {
         apiVersion: SPAWNEA_CONTROL_API_VERSION,
         sessionId,
@@ -597,31 +882,57 @@ export class MobileApiServer {
         items: historyResult.items,
         cursor: historyResult.cursor,
         hasMore: historyResult.hasMore ?? false,
+        freshness: isLive ? 'live' : 'historical',
+        stale: !isLive,
+        stored: false,
+        truncated: historyResult.items.some((item) => Boolean(item.textTruncated)),
+        cursorStatus,
+        cursorExpired: Boolean(historyResult.cursorExpired),
       });
       return;
     }
 
     // If source is 'screen': check if session is currently active and terminal capture succeeded
-    const isLive = session.status !== 'disconnected' && session.status !== 'done';
-
     if (!isLive || historyResult.captureSuccess === false) {
-      // After restart, when session is disconnected, or when terminal capture failed, screen history is unavailable
+      const { snapshot, readError } = await this.readPersistedSnapshot(sessionId);
+      const paged = this.paginateStoredSnapshotItems(sessionId, snapshot, limit, cursor, isLive);
+      const baseReason = !isLive
+        ? 'Session history is unavailable because this session does not have agent transcript files and the terminal is not active.'
+        : 'Session history is unavailable because the terminal capture failed.';
+      const updatedAtIso = snapshot ? new Date(snapshot.updatedAt).toISOString() : null;
+      const capturedAtIso = snapshot ? new Date(snapshot.capturedAt).toISOString() : null;
+      const effectiveCursor = snapshot ? paged.cursor : (historyResult.cursor ?? paged.cursor);
+
       sendJson(res, 200, {
         apiVersion: SPAWNEA_CONTROL_API_VERSION,
         sessionId,
         available: false,
         source: 'screen',
         items: [],
-        cursor: historyResult.cursor,
+        cursor: effectiveCursor,
         hasMore: false,
-        message:
-          !isLive
-            ? 'Session history is unavailable because this session does not have agent transcript files and the terminal is not active.'
-            : 'Session history is unavailable because the terminal capture failed.',
+        freshness: snapshot ? 'historical' : 'unavailable',
+        stale: Boolean(snapshot),
+        stored: Boolean(snapshot),
+        updatedAt: updatedAtIso,
+        capturedAt: capturedAtIso,
+        truncated: snapshot ? snapshot.truncated || snapshot.historyTruncated : false,
+        version: snapshot ? snapshot.version : null,
+        storedItems: paged.storedItems,
+        storedHasMore: paged.storedHasMore,
+        cursorStatus: snapshot ? paged.cursorStatus : cursor ? paged.cursorStatus : 'initial',
+        cursorExpired: snapshot ? paged.cursorExpired : Boolean(cursor && paged.cursorExpired),
+        message: readError
+          ? `${baseReason} Retained snapshot lookup failed.`
+          : snapshot
+            ? `${baseReason} Retained historical items are exposed in storedItems.`
+            : baseReason,
       });
       return;
     }
 
+    const liveCursorStatus: SessionHistoryCursorStatus =
+      historyResult.cursorStatus ?? (historyResult.cursorExpired ? 'expired' : cursor ? 'valid' : 'initial');
     sendJson(res, 200, {
       apiVersion: SPAWNEA_CONTROL_API_VERSION,
       sessionId,
@@ -630,6 +941,13 @@ export class MobileApiServer {
       items: historyResult.items,
       cursor: historyResult.cursor,
       hasMore: historyResult.hasMore ?? false,
+      freshness: 'live',
+      stale: false,
+      stored: false,
+      updatedAt: new Date().toISOString(),
+      truncated: historyResult.items.some((item) => Boolean(item.textTruncated)),
+      cursorStatus: liveCursorStatus,
+      cursorExpired: Boolean(historyResult.cursorExpired),
     });
   }
 

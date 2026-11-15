@@ -276,8 +276,18 @@ export type ControlTurnStatus =
   | 'needs_input'
   | 'completed'
   | 'failed'
+  | 'interrupted'
   | 'unknown'
   | 'unchanged';
+
+export type ControlTurnCursorStatus =
+  | 'initial'
+  | 'valid'
+  | 'eof'
+  | 'expired'
+  | 'invalid'
+  | 'mismatched'
+  | 'restarted';
 
 export type ControlTurnOutputMode = 'compact' | 'raw';
 
@@ -300,7 +310,11 @@ export interface ControlGetTurnResult {
   output: string;
   outputMode: ControlTurnOutputMode;
   truncated: boolean;
+  retainedTruncated?: boolean;
   cursorExpired: boolean;
+  cursorStatus?: ControlTurnCursorStatus;
+  archived?: boolean;
+  interrupted?: boolean;
   extraction: 'none' | 'delimited' | 'best_effort';
   confidence: 'high' | 'medium' | 'low';
   omitted: Array<{
