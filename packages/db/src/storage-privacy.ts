@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { execFileSync } from 'node:child_process';
 import {
   closeSync,
   constants,
@@ -117,10 +118,85 @@ function enforceFdOwnerOnly(fd: number, targetPath: string, expectedStat?: Stats
   }
 }
 
-function inspectAndSecurePosixFile(
+interface PendingPosixTighten {
+  targetPath: string;
+  dev: number;
+  ino: number;
+}
+
+// Executed in an isolated child process so closing the reopened descriptor never
+// releases POSIX fcntl byte-range locks held by active SQLite handles in this process.
+const CHILD_TIGHTEN_POSIX_SCRIPT = `'use strict';
+const fs = require('node:fs');
+const targets = JSON.parse(process.argv[1]);
+const euid = typeof process.geteuid === 'function' ? process.geteuid() : undefined;
+const mode = ${PRIVATE_SQLITE_FILE_MODE};
+const openFlags = fs.constants.O_RDWR | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK || 0);
+try {
+  for (const item of targets) {
+    const fd = fs.openSync(item.targetPath, openFlags, mode);
+    try {
+      const st = fs.fstatSync(fd);
+      if (!st.isFile()) {
+        throw new Error('Refusing non-regular SQLite storage inode: ' + item.targetPath);
+      }
+      if (euid !== undefined && st.uid !== euid) {
+        throw new Error('Refusing unowned SQLite storage inode: ' + item.targetPath);
+      }
+      if (st.dev !== item.dev || st.ino !== item.ino) {
+        throw new Error('Detected path swap while securing SQLite storage file: ' + item.targetPath);
+      }
+      if ((st.mode & 0o777) !== mode) {
+        fs.fchmodSync(fd, mode);
+        const updated = fs.fstatSync(fd);
+        const updatedMode = updated.mode & 0o777;
+        if ((updatedMode & 0o077) !== 0 || updatedMode !== mode) {
+          throw new Error('Failed to enforce owner-only permissions on SQLite storage file: ' + item.targetPath);
+        }
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+} catch (error) {
+  process.stderr.write(error && error.message ? error.message : String(error));
+  process.exit(1);
+}
+`;
+
+function enforceTightenInChild(targets: PendingPosixTighten[]): void {
+  if (targets.length === 0) {
+    return;
+  }
+  try {
+    execFileSync(
+      process.execPath,
+      ['--input-type=commonjs', '-e', CHILD_TIGHTEN_POSIX_SCRIPT, JSON.stringify(targets)],
+      {
+        env: {
+          ...process.env,
+          ELECTRON_RUN_AS_NODE: '1',
+          NODE_OPTIONS: '',
+        },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      },
+    );
+  } catch (error) {
+    const stderr = (error as { stderr?: Buffer | string }).stderr;
+    const stderrText =
+      typeof stderr === 'string' ? stderr.trim() : Buffer.isBuffer(stderr) ? stderr.toString('utf8').trim() : '';
+    if (stderrText) {
+      throw new Error(stderrText);
+    }
+    throw error;
+  }
+}
+
+function inspectAndCollectPosixFile(
   targetPath: string,
   createIfMissing: boolean,
   requireExists: boolean,
+  pendingTighten: PendingPosixTighten[],
 ): void {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let existingStat: Stats | undefined;
@@ -173,12 +249,14 @@ function inspectAndSecurePosixFile(
       throw new Error(`Refusing unowned SQLite storage path: ${targetPath}`);
     }
 
-    const openFlags = constants.O_RDWR | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0);
-    const fd = openSync(targetPath, openFlags, PRIVATE_SQLITE_FILE_MODE);
-    try {
-      enforceFdOwnerOnly(fd, targetPath, existingStat);
-    } finally {
-      closeSync(fd);
+    // Never open/close an already-existing SQLite inode in this process: POSIX releases
+    // all fcntl locks held by this process on that inode when any descriptor closes.
+    if ((existingStat.mode & 0o777) !== PRIVATE_SQLITE_FILE_MODE) {
+      pendingTighten.push({
+        targetPath,
+        dev: Number(existingStat.dev),
+        ino: Number(existingStat.ino),
+      });
     }
     return;
   }
@@ -213,12 +291,20 @@ export function ensurePrivateSqliteStorage(options: EnsureSqliteStorageOptions):
     return;
   }
 
+  const pendingTighten: PendingPosixTighten[] = [];
   const createMainIfMissing = !target.fileMustExist && !options.requireMainExists;
-  inspectAndSecurePosixFile(target.filePath, createMainIfMissing, Boolean(options.requireMainExists));
+  inspectAndCollectPosixFile(
+    target.filePath,
+    createMainIfMissing,
+    Boolean(options.requireMainExists),
+    pendingTighten,
+  );
 
   for (const sidecarSuffix of SQLITE_SIDECAR_SUFFIXES) {
-    inspectAndSecurePosixFile(`${target.filePath}${sidecarSuffix}`, false, false);
+    inspectAndCollectPosixFile(`${target.filePath}${sidecarSuffix}`, false, false, pendingTighten);
   }
+
+  enforceTightenInChild(pendingTighten);
 }
 
 /**

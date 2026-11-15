@@ -118,9 +118,17 @@ const MAX_TURN_WAIT_MS = 30_000;
 const TURN_PERSIST_RETRY_BASE_MS = 100;
 const TURN_PERSIST_RETRY_MAX_MS = 5_000;
 const MAX_TURN_PERSIST_RETRIES = 8;
+const MAX_PENDING_TURN_REQUESTS = 500;
+const MAX_TRACKED_PERSISTED_TURN_IDS = 1_000;
 
 interface PendingTurnWrite {
   input: SaveControlTurnInput;
+  attempts: number;
+  nextRetryAtMs: number;
+}
+
+interface PendingTurnRequestWrite {
+  input: SaveTurnRequestInput;
   attempts: number;
   nextRetryAtMs: number;
 }
@@ -214,6 +222,8 @@ export class AgentControlService {
   private readonly childRequestsInFlight = new Map<string, { fingerprint: string; promise: Promise<ControlCreateChildSessionResult> }>();
   private readonly turns = new Map<string, TrackedTurn>();
   private readonly pendingTurnWrites = new Map<string, PendingTurnWrite>();
+  private readonly pendingTurnRequestWrites = new Map<string, PendingTurnRequestWrite>();
+  private readonly persistedTurnIds = new Set<string>();
   private readonly turnPersistLocks = new Map<string, Promise<void>>();
   private readonly promptRequestIds = new Map<string, string>();
   private readonly openTurnBySession = new Map<string, string>();
@@ -1213,9 +1223,10 @@ export class AgentControlService {
         await this.persistRetryLoopPromise.catch(() => undefined);
       }
       await Promise.allSettled(Array.from(this.turnPersistLocks.values()));
-      if (this.pendingTurnWrites.size > 0 && this.repos.sessionHistory) {
+      if ((this.pendingTurnWrites.size > 0 || this.pendingTurnRequestWrites.size > 0) && this.repos.sessionHistory) {
         await this.runPendingTurnPersistPass(false, true);
         this.pendingTurnWrites.clear();
+        this.pendingTurnRequestWrites.clear();
       }
       await Promise.allSettled(Array.from(this.turnPersistLocks.values()));
     })();
@@ -1262,13 +1273,18 @@ export class AgentControlService {
   }
 
   private scheduleTurnPersistRetry(): void {
-    if (this.disposed || this.persistRetryTimer !== null || this.pendingTurnWrites.size === 0) {
+    if (this.disposed || this.persistRetryTimer !== null) {
       return;
     }
     const now = Date.now();
     let earliestAt = Infinity;
     for (const entry of this.pendingTurnWrites.values()) {
       if (entry.nextRetryAtMs < earliestAt) {
+        earliestAt = entry.nextRetryAtMs;
+      }
+    }
+    for (const entry of this.pendingTurnRequestWrites.values()) {
+      if (!this.pendingTurnWrites.has(entry.input.turnId) && entry.nextRetryAtMs < earliestAt) {
         earliestAt = entry.nextRetryAtMs;
       }
     }
@@ -1290,7 +1306,7 @@ export class AgentControlService {
     }
 
     const historyRepo = this.repos.sessionHistory;
-    if (!historyRepo || this.pendingTurnWrites.size === 0) {
+    if (!historyRepo || (this.pendingTurnWrites.size === 0 && this.pendingTurnRequestWrites.size === 0)) {
       return;
     }
 
@@ -1303,6 +1319,17 @@ export class AgentControlService {
         if (dueOnly && entry.nextRetryAtMs > Date.now()) continue;
         await this.writeTurnEntry(turnId, entry.input.version, allowDuringDispose);
       }
+
+      const requestKeys = Array.from(this.pendingTurnRequestWrites.keys());
+      for (const key of requestKeys) {
+        if (this.disposed && !allowDuringDispose) break;
+        const entry = this.pendingTurnRequestWrites.get(key);
+        if (!entry) continue;
+        // Wait until the parent session_turns row write is no longer pending before saving child request metadata.
+        if (this.pendingTurnWrites.has(entry.input.turnId)) continue;
+        if (dueOnly && entry.nextRetryAtMs > Date.now()) continue;
+        await this.writeTurnRequestEntry(key, allowDuringDispose);
+      }
     })();
 
     this.persistRetryLoopPromise = pass;
@@ -1312,9 +1339,64 @@ export class AgentControlService {
       if (this.persistRetryLoopPromise === pass) {
         this.persistRetryLoopPromise = null;
       }
-      if (!this.disposed && this.pendingTurnWrites.size > 0) {
+      if (!this.disposed && (this.pendingTurnWrites.size > 0 || this.pendingTurnRequestWrites.size > 0)) {
         this.scheduleTurnPersistRetry();
       }
+    }
+  }
+
+  private recordPersistedTurnId(turnId: string): void {
+    this.persistedTurnIds.add(turnId);
+    if (this.persistedTurnIds.size > MAX_TRACKED_PERSISTED_TURN_IDS) {
+      const oldest = this.persistedTurnIds.values().next().value;
+      if (oldest) this.persistedTurnIds.delete(oldest);
+    }
+  }
+
+  private turnRequestKey(input: SaveTurnRequestInput): string {
+    return `${input.sessionId}:${input.clientRequestId}`;
+  }
+
+  private queuePendingTurnRequest(input: SaveTurnRequestInput, failedAttempt: boolean): void {
+    const key = this.turnRequestKey(input);
+    const existing = this.pendingTurnRequestWrites.get(key);
+    if (!existing && this.pendingTurnRequestWrites.size >= MAX_PENDING_TURN_REQUESTS) {
+      const oldestKey = this.pendingTurnRequestWrites.keys().next().value;
+      if (oldestKey) this.pendingTurnRequestWrites.delete(oldestKey);
+    }
+    const attempts = failedAttempt ? (existing?.attempts ?? 0) + 1 : (existing?.attempts ?? 0);
+    if (failedAttempt && attempts >= MAX_TURN_PERSIST_RETRIES) {
+      this.pendingTurnRequestWrites.delete(key);
+      this.logger.error('Abandoned turn request metadata persistence after exhausting retries', new Error('Max retries reached'), {
+        turnId: input.turnId,
+        sessionId: input.sessionId,
+        attempts,
+      });
+      return;
+    }
+    this.pendingTurnRequestWrites.set(key, {
+      input,
+      attempts,
+      nextRetryAtMs: failedAttempt ? Date.now() + this.computeRetryDelayMs(attempts) : 0,
+    });
+    if (failedAttempt) {
+      this.scheduleTurnPersistRetry();
+    }
+  }
+
+  private abandonPendingTurnRequestsForTurn(turnId: string): void {
+    let dropped = 0;
+    for (const [key, entry] of this.pendingTurnRequestWrites.entries()) {
+      if (entry.input.turnId === turnId) {
+        this.pendingTurnRequestWrites.delete(key);
+        dropped += 1;
+      }
+    }
+    if (dropped > 0) {
+      this.logger.warn('Dropped pending turn request metadata after parent turn persistence failed permanently', {
+        turnId,
+        dropped,
+      });
     }
   }
 
@@ -1322,20 +1404,21 @@ export class AgentControlService {
     turnId: string,
     targetVersion: number,
     allowDuringDispose: boolean,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const historyRepo = this.repos.sessionHistory;
-    if (!historyRepo) return;
+    if (!historyRepo) return false;
 
-    await this.serializeTurnWrite(turnId, async () => {
-      if (this.disposed && !allowDuringDispose) return;
+    return this.serializeTurnWrite(turnId, async () => {
+      if (this.disposed && !allowDuringDispose) return false;
       const pending = this.pendingTurnWrites.get(turnId);
       if (!pending || pending.input.version > targetVersion) {
-        return;
+        return false;
       }
 
       const inputToPersist = pending.input;
       try {
         const persisted = await historyRepo.saveTurn(inputToPersist);
+        this.recordPersistedTurnId(turnId);
         const tracked = this.turns.get(turnId);
         if (tracked && tracked.version === persisted.version) {
           tracked.truncated = persisted.truncated;
@@ -1344,12 +1427,16 @@ export class AgentControlService {
         if (currentPending && currentPending.input.version === inputToPersist.version) {
           this.pendingTurnWrites.delete(turnId);
         }
+        return !this.pendingTurnWrites.has(turnId);
       } catch (error) {
         const currentPending = this.pendingTurnWrites.get(turnId);
         if (currentPending && currentPending.input.version === inputToPersist.version) {
           currentPending.attempts += 1;
           if (currentPending.attempts >= MAX_TURN_PERSIST_RETRIES || allowDuringDispose) {
             this.pendingTurnWrites.delete(turnId);
+            if (!this.persistedTurnIds.has(turnId)) {
+              this.abandonPendingTurnRequestsForTurn(turnId);
+            }
             this.logger.error('Abandoned control turn persistence after exhausting retries', error, {
               turnId,
               sessionId: inputToPersist.sessionId,
@@ -1365,8 +1452,62 @@ export class AgentControlService {
           sessionId: inputToPersist.sessionId,
           error: errorMessage(error),
         });
+        return false;
       }
     });
+  }
+
+  private async writeTurnRequestEntry(key: string, allowDuringDispose: boolean): Promise<void> {
+    const historyRepo = this.repos.sessionHistory;
+    const entry = this.pendingTurnRequestWrites.get(key);
+    if (!historyRepo || !entry) return;
+
+    await this.serializeTurnWrite(entry.input.turnId, async () => {
+      if (this.disposed && !allowDuringDispose) return;
+      const current = this.pendingTurnRequestWrites.get(key);
+      if (!current || this.pendingTurnWrites.has(current.input.turnId)) return;
+
+      const inputToPersist = current.input;
+      try {
+        await historyRepo.saveTurnRequest(inputToPersist);
+        const latest = this.pendingTurnRequestWrites.get(key);
+        if (latest && latest.input === inputToPersist) {
+          this.pendingTurnRequestWrites.delete(key);
+        }
+      } catch (error) {
+        const latest = this.pendingTurnRequestWrites.get(key);
+        if (latest && latest.input === inputToPersist) {
+          if (allowDuringDispose || latest.attempts + 1 >= MAX_TURN_PERSIST_RETRIES) {
+            this.pendingTurnRequestWrites.delete(key);
+            this.logger.error('Abandoned turn request metadata persistence after exhausting retries', error, {
+              turnId: inputToPersist.turnId,
+              sessionId: inputToPersist.sessionId,
+              attempts: latest.attempts + 1,
+            });
+          } else {
+            this.queuePendingTurnRequest(inputToPersist, true);
+          }
+        }
+        this.logger.warn('Failed to persist turn request metadata', {
+          turnId: inputToPersist.turnId,
+          sessionId: inputToPersist.sessionId,
+          error: errorMessage(error),
+        });
+      }
+    });
+  }
+
+  private async flushPendingTurnRequestsForTurn(turnId: string, allowDuringDispose: boolean): Promise<void> {
+    const matchingKeys: string[] = [];
+    for (const [key, entry] of this.pendingTurnRequestWrites.entries()) {
+      if (entry.input.turnId === turnId) {
+        matchingKeys.push(key);
+      }
+    }
+    for (const key of matchingKeys) {
+      if (this.disposed && !allowDuringDispose) break;
+      await this.writeTurnRequestEntry(key, allowDuringDispose);
+    }
   }
 
   private async persistTurn(turn: TrackedTurn): Promise<void> {
@@ -1380,21 +1521,20 @@ export class AgentControlService {
         nextRetryAtMs: 0,
       });
     }
-    await this.writeTurnEntry(turn.id, input.version, false);
+    const parentPersisted = await this.writeTurnEntry(turn.id, input.version, false);
+    if (parentPersisted) {
+      await this.flushPendingTurnRequestsForTurn(turn.id, false);
+    }
   }
 
   private async persistTurnRequest(input: SaveTurnRequestInput): Promise<void> {
-    const historyRepo = this.repos.sessionHistory;
-    if (!historyRepo) return;
-    try {
-      await historyRepo.saveTurnRequest(input);
-    } catch (error) {
-      this.logger.warn('Failed to persist turn request metadata', {
-        turnId: input.turnId,
-        sessionId: input.sessionId,
-        error: errorMessage(error),
-      });
+    if (this.disposed || !this.repos.sessionHistory) return;
+    const key = this.turnRequestKey(input);
+    this.queuePendingTurnRequest(input, false);
+    if (this.pendingTurnWrites.has(input.turnId)) {
+      return;
     }
+    await this.writeTurnRequestEntry(key, false);
   }
 
   private persistedToTrackedTurn(persisted: PersistedControlTurn): TrackedTurn {

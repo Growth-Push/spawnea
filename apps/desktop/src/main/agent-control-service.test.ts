@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDatabase, createRepositories, type Repositories } from '@spawnea/db';
 import { createLogger, type OperationalCatalog, type Session } from '@spawnea/domain';
@@ -2681,6 +2684,294 @@ describe('AgentControlService', () => {
           await retryService.dispose();
         } finally {
           vi.useRealTimers();
+        }
+      });
+
+      it('recovers pending turn request metadata when initial saveTurn fails, supersedes cleanly, retries transient request failures, and flushes on dispose', async () => {
+        vi.useFakeTimers();
+        try {
+          const historyRepo = repositories.sessionHistory!;
+          let captureOutput = 'Codex ready\n';
+          const captureSpy = vi.fn(async () => captureOutput);
+          const sendSpy = vi.fn(async () => ({ delivered: true, deliveryMethod: 'tmux' }));
+          const customMgr = {
+            ...sessionManager,
+            sendPrompt: sendSpy,
+            captureSessionTerminal: captureSpy,
+          };
+
+          const recoveryService = new AgentControlService({
+            repositories,
+            sessionManager: customMgr as unknown as SessionManager,
+            logger: createLogger('test:control-request-recovery'),
+          });
+
+          // 1. First-ever saveTurn fails: request metadata must wait for parent instead of failing FK and dropping silently
+          const saveTurnSpy = vi.spyOn(historyRepo, 'saveTurn');
+          const saveRequestSpy = vi.spyOn(historyRepo, 'saveTurnRequest');
+          saveTurnSpy.mockRejectedValueOnce(new Error('initial parent write failed'));
+
+          const sent = await recoveryService.sendPrompt({
+            target: 'existing',
+            clientRequestId: 'r2-initial-fail',
+            prompt: 'Recover initial parent and request',
+          });
+
+          expect(await historyRepo.findTurnById(sent.turnId)).toBeNull();
+          expect(await historyRepo.findTurnRequest('existing', 'r2-initial-fail')).toBeNull();
+          expect(saveRequestSpy).not.toHaveBeenCalled();
+
+          const capturesAfterSend = captureSpy.mock.calls.length;
+          const sendsAfterSend = sendSpy.mock.calls.length;
+
+          // Advance timers WITHOUT polling getTurn or resending prompt
+          await vi.advanceTimersByTimeAsync(150);
+
+          const recoveredTurn = await historyRepo.findTurnById(sent.turnId);
+          const recoveredRequest = await historyRepo.findTurnRequest('existing', 'r2-initial-fail');
+          expect(recoveredTurn?.id).toBe(sent.turnId);
+          expect(recoveredRequest).not.toBeNull();
+          expect(recoveredRequest?.turnId).toBe(sent.turnId);
+          expect(recoveredRequest?.clientRequestId).toBe('r2-initial-fail');
+          expect(recoveredRequest?.fingerprintHash).toMatch(/^[a-f0-9]{64}$/);
+          expect(recoveredRequest?.deliveryMethod).toBe('tmux');
+          expect(recoveredRequest?.deliveryStatus).toBe('delivered');
+          expect(recoveredRequest?.delivered).toBe(true);
+          expect(captureSpy.mock.calls.length).toBe(capturesAfterSend);
+          expect(sendSpy.mock.calls.length).toBe(sendsAfterSend);
+
+          captureOutput = 'Codex ready\nInitial answer\nWorked for 1s · done\n';
+          const completed1 = await recoveryService.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+          expect(completed1.status).toBe('completed');
+
+          // 2. Newer turn version supersedes failed initial write without dropping queued request metadata
+          saveTurnSpy.mockRejectedValueOnce(new Error('initial parent write failed before supersede'));
+          await repositories.sessions.save(session('existing', { status: 'idle' }));
+          captureOutput = 'Codex ready\n';
+          const sentSuperseded = await recoveryService.sendPrompt({
+            target: 'existing',
+            clientRequestId: 'r2-supersede-req',
+            prompt: 'Supersede after initial parent failure',
+          });
+          expect(await historyRepo.findTurnById(sentSuperseded.turnId)).toBeNull();
+          expect(await historyRepo.findTurnRequest('existing', 'r2-supersede-req')).toBeNull();
+
+          captureOutput = 'Codex ready\nSuperseded completion answer\nWorked for 1s · done\n';
+          await recoveryService.getTurn({ turnId: sentSuperseded.turnId, outputMode: 'raw' });
+
+          const supersededTurn = await historyRepo.findTurnById(sentSuperseded.turnId);
+          const supersededRequest = await historyRepo.findTurnRequest('existing', 'r2-supersede-req');
+          expect(supersededTurn?.status).toBe('completed');
+          expect(supersededTurn?.output).toContain('Superseded completion answer');
+          expect(supersededRequest?.turnId).toBe(sentSuperseded.turnId);
+          expect(supersededRequest?.deliveryStatus).toBe('delivered');
+          expect(supersededRequest?.delivered).toBe(true);
+
+          // 3. Transient saveTurnRequest failure after parent succeeded retries automatically
+          saveRequestSpy.mockRejectedValueOnce(new Error('transient request metadata failure'));
+          await repositories.sessions.save(session('existing', { status: 'idle' }));
+          captureOutput = 'Codex ready\n';
+          const sentTransientReq = await recoveryService.sendPrompt({
+            target: 'existing',
+            clientRequestId: 'r2-req-transient',
+            prompt: 'Transient request metadata fail',
+          });
+          expect((await historyRepo.findTurnById(sentTransientReq.turnId))?.id).toBe(sentTransientReq.turnId);
+          expect(await historyRepo.findTurnRequest('existing', 'r2-req-transient')).toBeNull();
+
+          await vi.advanceTimersByTimeAsync(150);
+
+          const retriedReq = await historyRepo.findTurnRequest('existing', 'r2-req-transient');
+          expect(retriedReq?.turnId).toBe(sentTransientReq.turnId);
+          expect(retriedReq?.deliveryMethod).toBe('tmux');
+          expect(retriedReq?.deliveryStatus).toBe('delivered');
+          expect(retriedReq?.delivered).toBe(true);
+
+          captureOutput = 'Codex ready\nTransient request answer\nWorked for 1s · done\n';
+          const completed3 = await recoveryService.getTurn({ turnId: sentTransientReq.turnId, outputMode: 'raw' });
+          expect(completed3.status).toBe('completed');
+
+          // 4. Permanent parent failure exhausts bounded retries and drops orphaned request without endless loops
+          saveRequestSpy.mockClear();
+          saveTurnSpy.mockRejectedValue(new Error('permanent parent storage failure'));
+          await repositories.sessions.save(session('existing', { status: 'idle' }));
+          const sentPermanent = await recoveryService.sendPrompt({
+            target: 'existing',
+            clientRequestId: 'r2-req-permanent-fail',
+            prompt: 'Permanent failure stops cleanly',
+          });
+          const callsRightAfterPermanentSend = saveTurnSpy.mock.calls.length;
+          await vi.advanceTimersByTimeAsync(120_000);
+          const callsAfterBoundedRetries = saveTurnSpy.mock.calls.length;
+          expect(callsAfterBoundedRetries).toBeGreaterThan(callsRightAfterPermanentSend);
+          expect(callsAfterBoundedRetries).toBeLessThanOrEqual(callsRightAfterPermanentSend + 8);
+          await vi.advanceTimersByTimeAsync(120_000);
+          expect(saveTurnSpy.mock.calls.length).toBe(callsAfterBoundedRetries);
+          expect(saveRequestSpy).not.toHaveBeenCalled();
+          expect(await historyRepo.findTurnById(sentPermanent.turnId)).toBeNull();
+
+          saveTurnSpy.mockRestore();
+          saveRequestSpy.mockRestore();
+          await recoveryService.dispose();
+
+          // 5. dispose() drains both pending parent turn AND pending request metadata before db.close()
+          const localDb = createDatabase({ path: ':memory:', migrate: true });
+          const localRepos = createRepositories(localDb.db);
+          await localRepos.servers.save({
+            id: 'host-1',
+            name: 'Local host',
+            host: 'localhost',
+            sshPort: 22,
+            enabled: true,
+          });
+          await localRepos.projects.save({
+            id: 'project-1',
+            serverId: 'host-1',
+            name: 'Spawnea',
+            rootPath: '/repo',
+            baseBranch: 'main',
+          });
+          await localRepos.agents.save({ id: 'agent-1', name: 'Codex', harness: 'codex', command: 'codex' });
+          await localRepos.sessions.save(session('existing', { status: 'idle' }));
+
+          const disposeService = new AgentControlService({
+            repositories: localRepos,
+            sessionManager: {
+              ...sessionManager,
+              sendPrompt: vi.fn(async () => ({ delivered: true, deliveryMethod: 'tmux' })),
+              captureSessionTerminal: vi.fn(async () => 'Codex ready\n'),
+            } as unknown as SessionManager,
+            logger: createLogger('test:control-dispose-request-flush'),
+          });
+
+          const localTurnSpy = vi.spyOn(localRepos.sessionHistory!, 'saveTurn');
+          const localReqSpy = vi.spyOn(localRepos.sessionHistory!, 'saveTurnRequest');
+          localTurnSpy.mockRejectedValueOnce(new Error('transient initial write fail before dispose'));
+
+          const sentDispose = await disposeService.sendPrompt({
+            target: 'existing',
+            clientRequestId: 'r2-dispose-req',
+            prompt: 'Flush parent and request before close',
+          });
+          expect(await localRepos.sessionHistory!.findTurnById(sentDispose.turnId)).toBeNull();
+          expect(await localRepos.sessionHistory!.findTurnRequest('existing', 'r2-dispose-req')).toBeNull();
+
+          await disposeService.dispose();
+          const flushedTurn = await localRepos.sessionHistory!.findTurnById(sentDispose.turnId);
+          const flushedReq = await localRepos.sessionHistory!.findTurnRequest('existing', 'r2-dispose-req');
+          expect(flushedTurn?.id).toBe(sentDispose.turnId);
+          expect(flushedReq?.turnId).toBe(sentDispose.turnId);
+          expect(flushedReq?.deliveryMethod).toBe('tmux');
+          expect(flushedReq?.deliveryStatus).toBe('delivered');
+          expect(flushedReq?.delivered).toBe(true);
+
+          const turnCallsAtDispose = localTurnSpy.mock.calls.length;
+          const reqCallsAtDispose = localReqSpy.mock.calls.length;
+          localDb.close();
+          await vi.advanceTimersByTimeAsync(30_000);
+          expect(localTurnSpy.mock.calls.length).toBe(turnCallsAtDispose);
+          expect(localReqSpy.mock.calls.length).toBe(reqCallsAtDispose);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('persists parent turn and request metadata across real private SQLite reopen after injected initial saveTurn failure', async () => {
+        const tempDir = mkdtempSync(join(tmpdir(), 'spawnea-r2-sqlite-'));
+        const dbPath = join(tempDir, 'control-r2.sqlite');
+        let db1: ReturnType<typeof createDatabase> | undefined;
+        let db2: ReturnType<typeof createDatabase> | undefined;
+        try {
+          if (process.platform !== 'win32') {
+            expect(statSync(tempDir).mode & 0o777).toBe(0o700);
+          }
+          db1 = createDatabase({ path: dbPath, migrate: true });
+          if (process.platform !== 'win32') {
+            expect(statSync(dbPath).mode & 0o777).toBe(0o600);
+          }
+          const repos1 = createRepositories(db1.db);
+          await repos1.servers.save({
+            id: 'fictional-host',
+            name: 'Fictional Local Host',
+            host: 'localhost',
+            sshPort: 22,
+            enabled: true,
+          });
+          await repos1.projects.save({
+            id: 'fictional-project',
+            serverId: 'fictional-host',
+            name: 'Fictional Project',
+            rootPath: '/tmp/fictional-project',
+            baseBranch: 'main',
+          });
+          await repos1.agents.save({
+            id: 'fictional-agent',
+            name: 'Fictional Codex',
+            harness: 'codex',
+            command: 'codex',
+          });
+          await repos1.sessions.save(
+            session('file-session', {
+              serverId: 'fictional-host',
+              projectId: 'fictional-project',
+              agentId: 'fictional-agent',
+              status: 'idle',
+            }),
+          );
+
+          const service1 = new AgentControlService({
+            repositories: repos1,
+            sessionManager: {
+              ...sessionManager,
+              sendPrompt: vi.fn(async () => ({ delivered: true, deliveryMethod: 'tmux' })),
+              captureSessionTerminal: vi.fn(async () => 'Codex ready\n'),
+            } as unknown as SessionManager,
+            logger: createLogger('test:r2-file-sqlite-1'),
+          });
+
+          vi.spyOn(repos1.sessionHistory!, 'saveTurn').mockRejectedValueOnce(
+            new Error('sqlite locked on initial turn'),
+          );
+
+          const sent = await service1.sendPrompt({
+            target: 'file-session',
+            clientRequestId: 'r2-file-req',
+            prompt: 'Persist parent and request across SQLite close/reopen',
+          });
+
+          // Flush pending parent + request writes during graceful shutdown and close file DB
+          await service1.dispose();
+          db1.close();
+          db1 = undefined;
+
+          // Reopen file-backed SQLite database in a fresh service instance
+          db2 = createDatabase({ path: dbPath, migrate: true });
+          const repos2 = createRepositories(db2.db);
+          const reopenedTurn = await repos2.sessionHistory!.findTurnById(sent.turnId);
+          const reopenedReq = await repos2.sessionHistory!.findTurnRequest('file-session', 'r2-file-req');
+
+          expect(reopenedTurn?.id).toBe(sent.turnId);
+          expect(reopenedTurn?.sessionId).toBe('file-session');
+          expect(reopenedTurn?.prompt).toBe('Persist parent and request across SQLite close/reopen');
+          expect(reopenedReq?.turnId).toBe(sent.turnId);
+          expect(reopenedReq?.clientRequestId).toBe('r2-file-req');
+          expect(reopenedReq?.fingerprintHash).toMatch(/^[a-f0-9]{64}$/);
+          expect(reopenedReq?.deliveryMethod).toBe('tmux');
+          expect(reopenedReq?.deliveryStatus).toBe('delivered');
+          expect(reopenedReq?.delivered).toBe(true);
+
+          const service2 = new AgentControlService({
+            repositories: repos2,
+            sessionManager: sessionManager as unknown as SessionManager,
+            logger: createLogger('test:r2-file-sqlite-2'),
+          });
+          const reloadedTurn = await service2.getTurn({ turnId: sent.turnId, outputMode: 'raw' });
+          expect(reloadedTurn.turnId).toBe(sent.turnId);
+          expect(reloadedTurn.archived).toBe(true);
+        } finally {
+          db1?.close();
+          db2?.close();
+          rmSync(tempDir, { recursive: true, force: true });
         }
       });
     });

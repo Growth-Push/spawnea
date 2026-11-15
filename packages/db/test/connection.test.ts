@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
+import { execFileSync } from 'node:child_process';
 import { createDatabase, createRepositories, type DatabaseConnection } from '../src/index.js';
+import { ensurePrivateSqliteStorageForClient } from '../src/storage-privacy.js';
 import {
   chmodSync,
   existsSync,
@@ -260,5 +262,219 @@ describe('Database Connection', () => {
       .all();
     roCheck.close();
     expect(migRows).toHaveLength(0);
+  });
+
+  posixIt('preserves POSIX SQLite fcntl locks across permission enforcement when transitioning 0644 files and holding transactions', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'spawnea-db-locks-'));
+    const dbPath = join(tempDir, 'locks-wal.sqlite');
+    const dbPkgUrl = new URL('../package.json', import.meta.url).href;
+
+    const runSecondProcessSql = (sql: string): { ok: true } | { ok: false; code?: string; message: string } => {
+      const childScript = `
+        const { createRequire } = require('node:module');
+        const req = createRequire(${JSON.stringify(dbPkgUrl)});
+        const SqliteDb = req('better-sqlite3');
+        const db = new SqliteDb(process.argv[1]);
+        db.pragma('busy_timeout = 50');
+        try {
+          db.exec(process.argv[2]);
+          process.stdout.write(JSON.stringify({ ok: true }));
+        } catch (err) {
+          process.stdout.write(JSON.stringify({
+            ok: false,
+            code: err && err.code ? String(err.code) : undefined,
+            message: err && err.message ? String(err.message) : String(err),
+          }));
+        } finally {
+          db.close();
+        }
+      `;
+      const out = execFileSync(process.execPath, ['--input-type=commonjs', '-e', childScript, dbPath, sql], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return JSON.parse(out) as { ok: true } | { ok: false; code?: string; message: string };
+    };
+
+    const raw = new Database(dbPath);
+    try {
+      raw.pragma('journal_mode = WAL');
+      raw.exec('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT NOT NULL);');
+      raw.exec("INSERT INTO items (note) VALUES ('seed-row');");
+
+      for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+        if (existsSync(filePath)) {
+          chmodSync(filePath, 0o644);
+        }
+      }
+
+      // BEFORE enforcement: unlocked write succeeds, active BEGIN IMMEDIATE causes SQLITE_BUSY in child process
+      expect(runSecondProcessSql("INSERT INTO items (note) VALUES ('before-unlocked');")).toEqual({ ok: true });
+
+      raw.exec("BEGIN IMMEDIATE; INSERT INTO items (note) VALUES ('before-rolled-back');");
+      const busyBefore = runSecondProcessSql("INSERT INTO items (note) VALUES ('before-blocked');");
+      expect(busyBefore.ok).toBe(false);
+      if (!busyBefore.ok) {
+        expect(busyBefore.code).toBe('SQLITE_BUSY');
+      }
+      raw.exec('ROLLBACK;');
+
+      // Enforce 0600 on permissive 0644 files while WAL/SHM handle remains open (must NOT drop SHM/DB locks)
+      ensurePrivateSqliteStorageForClient(raw);
+      expect(statSync(dbPath).mode & 0o777).toBe(0o600);
+      expect(statSync(`${dbPath}-wal`).mode & 0o777).toBe(0o600);
+      expect(statSync(`${dbPath}-shm`).mode & 0o777).toBe(0o600);
+
+      // AFTER enforcement while unlocked: second OS process succeeds without SQLITE_PROTOCOL
+      expect(runSecondProcessSql("INSERT INTO items (note) VALUES ('after-unlocked');")).toEqual({ ok: true });
+
+      // AFTER enforcement while active write transaction is held (plus repeated privacy check during lock):
+      raw.exec("BEGIN IMMEDIATE; INSERT INTO items (note) VALUES ('parent-committed');");
+      ensurePrivateSqliteStorageForClient(raw);
+      const busyAfter = runSecondProcessSql("INSERT INTO items (note) VALUES ('after-blocked');");
+      expect(busyAfter.ok).toBe(false);
+      if (!busyAfter.ok) {
+        expect(busyAfter.code).toBe('SQLITE_BUSY');
+      }
+      raw.exec('COMMIT;');
+
+      // Once lock releases, second OS process writes cleanly and database passes integrity_check
+      expect(runSecondProcessSql("INSERT INTO items (note) VALUES ('after-commit');")).toEqual({ ok: true });
+
+      expect(raw.pragma('integrity_check')).toEqual([{ integrity_check: 'ok' }]);
+      const notes = (raw.prepare('SELECT note FROM items ORDER BY id ASC').all() as Array<{ note: string }>).map(
+        (r) => r.note,
+      );
+      expect(notes).toEqual(['seed-row', 'before-unlocked', 'after-unlocked', 'parent-committed', 'after-commit']);
+    } finally {
+      raw.close();
+    }
+  });
+
+  posixIt('preserves concurrent OS-process SQLite locking across createDatabase and sessionHistory writes', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'spawnea-db-concurrent-'));
+    const dbPath = join(tempDir, 'spawnea.sqlite');
+    const dbPkgUrl = new URL('../package.json', import.meta.url).href;
+
+    const runSecondProcessSessionCheck = (
+      mode: 'write-attempt' | 'integrity',
+    ): { ok: true; integrity?: unknown } | { ok: false; code?: string; message: string } => {
+      const childScript = `
+        const { createRequire } = require('node:module');
+        const req = createRequire(${JSON.stringify(dbPkgUrl)});
+        const SqliteDb = req('better-sqlite3');
+        const db = new SqliteDb(process.argv[1]);
+        db.pragma('busy_timeout = 50');
+        try {
+          if (process.argv[2] === 'write-attempt') {
+            db.exec("UPDATE session_output_snapshots SET output = 'child-after-commit' WHERE session_id = 'sess-lock'");
+            process.stdout.write(JSON.stringify({ ok: true }));
+          } else {
+            const integrity = db.pragma('integrity_check');
+            process.stdout.write(JSON.stringify({ ok: true, integrity }));
+          }
+        } catch (err) {
+          process.stdout.write(JSON.stringify({
+            ok: false,
+            code: err && err.code ? String(err.code) : undefined,
+            message: err && err.message ? String(err.message) : String(err),
+          }));
+        } finally {
+          db.close();
+        }
+      `;
+      const out = execFileSync(process.execPath, ['--input-type=commonjs', '-e', childScript, dbPath, mode], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return JSON.parse(out) as { ok: true; integrity?: unknown } | { ok: false; code?: string; message: string };
+    };
+
+    conn = createDatabase({ path: dbPath, migrate: true });
+    const repos = createRepositories(conn.db);
+    await repos.servers.save({
+      id: 'srv-lock',
+      name: 'Fictional Local Host',
+      host: 'localhost',
+      sshPort: 22,
+      enabled: true,
+    });
+    await repos.projects.save({
+      id: 'proj-lock',
+      serverId: 'srv-lock',
+      name: 'Fictional Project',
+      rootPath: '/tmp/fictional-lock-proj',
+      baseBranch: 'main',
+    });
+    await repos.agents.save({
+      id: 'agent-lock',
+      name: 'Fictional Shell',
+      harness: 'shell',
+      command: 'sh',
+    });
+    await repos.sessions.save({
+      id: 'sess-lock',
+      name: 'Lock Verification Session',
+      serverId: 'srv-lock',
+      projectId: 'proj-lock',
+      agentId: 'agent-lock',
+      task: 'Verify multi-process locking around retained writes',
+      worktreePath: '/tmp/fictional-lock-proj',
+      branch: 'main',
+      status: 'working',
+      tmuxSessionName: 'spawnea-sess-lock',
+    });
+
+    const nowMs = Date.now();
+    await repos.sessionHistory!.saveTurn({
+      id: 'turn-lock-1',
+      sessionId: 'sess-lock',
+      harness: 'shell',
+      prompt: 'Check locking after retained turn write',
+      output: 'Initial output',
+      outputGeneration: 0,
+      baseOffset: 0,
+      version: 1,
+      status: 'completed',
+      observedWorking: true,
+      outputChanges: 1,
+      promptDelimiterPairs: 0,
+      createdAt: nowMs - 100,
+      changedAt: nowMs,
+    });
+    await repos.sessionHistory!.upsertSnapshot({
+      sessionId: 'sess-lock',
+      output: 'initial snapshot',
+      items: [],
+    });
+
+    expect(statSync(dbPath).mode & 0o777).toBe(0o600);
+    if (existsSync(`${dbPath}-wal`)) {
+      expect(statSync(`${dbPath}-wal`).mode & 0o777).toBe(0o600);
+    }
+    if (existsSync(`${dbPath}-shm`)) {
+      expect(statSync(`${dbPath}-shm`).mode & 0o777).toBe(0o600);
+    }
+
+    // Acquire write transaction in main process; second OS process must see SQLITE_BUSY, never SQLITE_PROTOCOL
+    conn.sqlite.exec('BEGIN IMMEDIATE;');
+    conn.sqlite.exec("UPDATE session_output_snapshots SET output = 'retained output under lock' WHERE session_id = 'sess-lock';");
+    ensurePrivateSqliteStorageForClient(conn.sqlite);
+    const busy = runSecondProcessSessionCheck('write-attempt');
+    expect(busy.ok).toBe(false);
+    if (!busy.ok) {
+      expect(busy.code).toBe('SQLITE_BUSY');
+    }
+    conn.sqlite.exec('COMMIT;');
+
+    expect((await repos.sessionHistory!.findSnapshotBySessionId('sess-lock'))?.output).toBe(
+      'retained output under lock',
+    );
+    expect(runSecondProcessSessionCheck('write-attempt')).toEqual({ ok: true });
+
+    const integrity = runSecondProcessSessionCheck('integrity');
+    expect(integrity).toEqual({ ok: true, integrity: [{ integrity_check: 'ok' }] });
+    expect((await repos.sessionHistory!.findSnapshotBySessionId('sess-lock'))?.output).toBe('child-after-commit');
+    expect((await repos.sessionHistory!.findTurnById('turn-lock-1'))?.output).toBe('Initial output');
   });
 });
