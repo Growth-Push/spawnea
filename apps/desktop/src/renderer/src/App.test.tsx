@@ -295,6 +295,8 @@ function createMockSpawneaApi(overrides: Partial<Window['spawneaApi']> = {}): Wi
     }),
     openExternalUrl: vi.fn().mockResolvedValue(true),
     getSessionLinks: vi.fn().mockResolvedValue([]),
+    getSessionLinkStatuses: vi.fn().mockResolvedValue({}),
+    cancelSessionLinkStatuses: vi.fn().mockResolvedValue(undefined),
     openConfig: vi.fn().mockResolvedValue({ success: true }),
     deleteSession: vi.fn().mockResolvedValue(true),
     forgetSessionLocally: vi.fn().mockResolvedValue(true),
