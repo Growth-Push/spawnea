@@ -161,14 +161,15 @@ describe('WorkspaceTabs Component', () => {
     (window as any).spawneaApi.openExternalUrl = openExternalUrl;
     const issueUrl = 'https://github.com/example/project/issues/123';
     const { rerender } = render(<WorkspaceTabs session={{ ...mockSession, originIssueUrl: issueUrl, tmuxSessionName: 'long-session-name-'.repeat(12) }} activeTab="terminal" onTabChange={vi.fn()} />);
-    const shortcut = screen.getByRole('button', { name: 'Origin · Issue #123 · example/project' });
+    const name = 'Origin · Issue #123 · example/project · GitHub status unavailable';
+    const shortcut = screen.getByRole('button', { name });
     shortcut.focus();
     expect(document.activeElement).toBe(shortcut);
     expect(openExternalUrl).not.toHaveBeenCalled();
     fireEvent.click(shortcut);
     expect(openExternalUrl).toHaveBeenCalledWith(issueUrl);
     rerender(<WorkspaceTabs session={mockSession} activeTab="details" onTabChange={vi.fn()} />);
-    expect(screen.queryByRole('button', { name: 'Origin · Issue #123 · example/project' })).toBeNull();
+    expect(screen.queryByRole('button', { name })).toBeNull();
   });
 
   it('copies current session data and reports success only after the clipboard resolves', async () => {

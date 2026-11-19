@@ -67,7 +67,7 @@ Spawnea treats developer terminal output with strict privacy boundaries:
 
 - **Live Terminal Streams**: Characters received from the host are forwarded directly to the `@xterm/xterm` canvas for interactive display without continuous recording.
 - **No Continuous PTY or Full-Transcript Recording**: Spawnea does **not** continuously record raw PTY streams, log keystrokes, or archive complete provider transcripts on its own.
-- **No Cloud Uploads**: Terminal data is never uploaded to any remote Spawnea server, telemetry service, or third party. Spawnea is 100% local-first.
+- **Local terminal data**: Spawnea stores captured terminal text and snapshots locally. In the active, visible workspace, issue and pull request chips automatically send the canonical GitHub owner, repository, and issue or pull request number to GitHub.com using existing local `gh` authentication to look up status. The lookup excludes surrounding terminal text, and Spawnea does not upload terminal transcripts to a server or telemetry service.
 - **Volatile Caches and Comparison State**: Status-detection comparison windows, volatile prompt-replay/retry deduplication caches, and scoped **Agent Context** call records remain strictly in-memory only and are discarded on restart.
 
 ### What Spawnea Persists Locally

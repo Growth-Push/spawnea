@@ -19,6 +19,7 @@ import type {
   StateFeedbackResult,
   ControlFinalizationRequest,
 } from './index.js';
+import type { GitHubLinkStatuses } from './github-links.js';
 
 export interface CreateSessionInput {
   serverId: string;
@@ -169,6 +170,8 @@ export interface FinishSessionResult {
 
 export interface IpcChannels {
   'github:links': (sessionId: string) => Promise<Array<{ sessionId: string; url: string; kind: 'repository' | 'issue' | 'pull'; source: 'task' | 'prompt' | 'output'; createdAt: Date }>>;
+  'github:linkStatuses': (sessionId: string, requestId: number) => Promise<GitHubLinkStatuses>;
+  'github:cancelLinkStatuses': (sessionId: string, requestId: number) => Promise<void>;
   // Operational Catalog
   'catalog:get': () => Promise<CatalogState>;
   'catalog:reload': () => Promise<CatalogReloadResult>;

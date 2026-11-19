@@ -23,6 +23,7 @@ import {
 } from '@spawnea/domain';
 import { CatalogManager } from './catalog-manager.js';
 import { initializeStateRules } from './state-rules.js';
+import { SessionGitHubStatusRequests } from './github-link-status.js';
 import { SessionContextStore } from './session-context-store.js';
 import { PtyBroker } from './pty-broker.js';
 import { SessionManager } from './session-manager.js';
@@ -384,6 +385,23 @@ function registerIpcHandlers(
     return history.page(range.from, range.to, cursor, 100);
   });
   ipcMain.handle('github:links', async (_event, sessionId: string) => repos.github?.links(sessionId) ?? []);
+  const githubStatus = new SessionGitHubStatusRequests(repos);
+  ipcMain.handle('github:linkStatuses', async (event, sessionId: unknown, requestId: unknown) => {
+    if (event.sender !== mainWindowRef?.webContents || typeof sessionId !== 'string' || !sessionId || sessionId.length > 256
+      || typeof requestId !== 'number' || !Number.isSafeInteger(requestId) || requestId < 1) return {};
+    const cancel = () => githubStatus.cancel(sessionId, requestId);
+    event.sender.once('destroyed', cancel);
+    event.sender.once('render-process-gone', cancel);
+    try {
+      return await githubStatus.refresh(sessionId, requestId);
+    } finally {
+      event.sender.removeListener('destroyed', cancel);
+      event.sender.removeListener('render-process-gone', cancel);
+    }
+  });
+  ipcMain.handle('github:cancelLinkStatuses', (event, sessionId: unknown, requestId: unknown) => {
+    if (event.sender === mainWindowRef?.webContents) githubStatus.cancel(sessionId, requestId);
+  });
   if (process.env.SPAWNEA_RELEASE_SMOKE === '1') {
     ipcMain.handle('app:quitForReleaseSmoke', (event) => {
       if (event.sender !== mainWindowRef?.webContents) {
