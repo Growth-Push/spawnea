@@ -184,6 +184,38 @@ describe('Dashboard', () => {
   });
 });
 describe('Aggregate observations', () => {
+  it('distinguishes steps spanning summarized observations and breaks both series at gaps', () => {
+    render(<ActivityChart startedAt={0} bounds={[0, 430]} samples={[
+      { time: 0, parents: 0, children: 2, gap: false },
+      { time: 50, parents: 0, children: 1, gap: false, summarized: true, containsGap: false },
+      { time: 100, parents: 2, children: 0, gap: false },
+      { time: 150, parents: 1, children: 1, gap: false, summarized: true, containsGap: true },
+      { time: 200, parents: 1, children: 2, gap: false },
+      { time: 201, parents: 2, children: 0, gap: false },
+      { time: 250, parents: 0, children: 0, gap: true },
+      { time: 300, parents: 0, children: 0, gap: false },
+      { time: 350, parents: 1, children: 1, gap: false },
+    ]} />);
+
+    const chart = screen.getByRole('img', { name: 'Observed concurrent working sessions' });
+    const [parents, children, summarizedParents, summarizedChildren] = chart.querySelectorAll('path');
+    expect(parents.getAttribute('d')).toBe(
+      'M35.0,140.0 H85.0 V140.0 M235.0,85.0 H236.0 V30.0 M335.0,140.0 H385.0 V85.0',
+    );
+    expect(children.getAttribute('d')).toBe(
+      'M35.0,30.0 H85.0 V85.0 M235.0,30.0 H236.0 V140.0 M335.0,140.0 H385.0 V85.0',
+    );
+    expect(summarizedParents.getAttribute('d')).toBe('M85.0,140.0 H135.0 V30.0');
+    expect(summarizedChildren.getAttribute('d')).toBe('M85.0,85.0 H135.0 V140.0');
+    expect(summarizedParents.getAttribute('stroke')).toBe(parents.getAttribute('stroke'));
+    expect(summarizedChildren.getAttribute('stroke')).toBe(children.getAttribute('stroke'));
+    expect(summarizedParents.getAttribute('stroke-opacity')).toBe('0.6');
+    expect(summarizedChildren.getAttribute('stroke-opacity')).toBe('0.6');
+    expect(summarizedChildren.getAttribute('stroke-dasharray')).not.toBe(children.getAttribute('stroke-dasharray'));
+    expect(screen.getByText('Faded steps summarize multiple observations. Counts can vary within them.')).toBeTruthy();
+    expect(chart.querySelectorAll('line[stroke="#f59e0b"]')).toHaveLength(2);
+  });
+
   it('preserves the selected observation across a live refresh and resets on range changes', () => {
     const a = { time: 1000, parents: 1, children: 0, gap: false };
     const b = { time: 5000, parents: 2, children: 0, gap: false };

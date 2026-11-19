@@ -22,17 +22,31 @@ export function ActivityChart({ samples, startedAt, bounds, onRangeChange }: { s
     if (sample) setSelected({ time: sample.time, ordinal: visible.slice(0, next).filter((s) => s.time === sample.time).length });
   };
   const max = Math.max(1, ...visible.filter((s) => !s.gap).flatMap((s) => [s.parents, s.children]));
-  const path = (key: 'parents' | 'children') => {
-    let drawing = false;
-    return visible.map((s) => {
-      if (s.gap || s.containsGap || s.summarized) { drawing = false; return ''; }
-      const x = 35 + (s.time - start) / Math.max(1, end - start) * 430;
-      const y = 140 - s[key] / max * 110;
-      const result = `${drawing ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
-      drawing = true;
-      return result;
-    }).join(' ');
+  const seriesPaths = (key: 'parents' | 'children') => {
+    const paths = { exact: '', summarized: '' };
+    let previous: { x: string; y: string; summarized: boolean } | undefined;
+    let activePath: keyof typeof paths | undefined;
+    for (const s of visible) {
+      if (s.gap || s.containsGap) {
+        previous = undefined;
+        activePath = undefined;
+        continue;
+      }
+      const x = (35 + (s.time - start) / Math.max(1, end - start) * 430).toFixed(1);
+      const y = (140 - s[key] / max * 110).toFixed(1);
+      if (previous) {
+        // The first observation represents its bucket, so omitted counts affect the outgoing step.
+        const style = previous.summarized ? 'summarized' : 'exact';
+        if (style !== activePath) paths[style] += ` M${previous.x},${previous.y}`;
+        paths[style] += ` H${x} V${y}`;
+        activePath = style;
+      }
+      previous = { x, y, summarized: s.summarized === true };
+    }
+    return { exact: paths.exact.trim(), summarized: paths.summarized.trim() };
   };
+  const parents = seriesPaths('parents');
+  const children = seriesPaths('children');
   const changeRange = (factor: number, shift = 0) => {
     const total = last - first;
     if (total <= 0) return;
@@ -73,12 +87,15 @@ export function ActivityChart({ samples, startedAt, bounds, onRangeChange }: { s
       <h2 className="text-sm font-semibold text-white">Observed activity</h2>
       <p className="text-[11px] text-zinc-400">Working or starting sessions · local time</p>
       <p className="text-[11px] text-zinc-400">Green: parents · Blue: children · Amber: interval contains a gap</p>
+      {parents.summarized && <p className="text-[11px] text-zinc-400">Faded steps summarize multiple observations. Counts can vary within them.</p>}
       <svg viewBox="0 0 500 170" role="img" aria-label="Observed concurrent working sessions" onPointerMove={selectAt} className="w-full max-h-48">
         <line x1="35" y1="140" x2="465" y2="140" stroke="#3f3f46" />
         <text x="10" y="34" fill="#71717a" fontSize="10">{max}</text>
         <text x="10" y="144" fill="#71717a" fontSize="10">0</text>
-        <path d={path('parents')} stroke="#10b981" strokeWidth="2.5" fill="none" />
-        <path d={path('children')} stroke="#38bdf8" strokeWidth="2" strokeDasharray="4 3" fill="none" />
+        <path d={parents.exact} stroke="#10b981" strokeWidth="2.5" fill="none" />
+        <path d={children.exact} stroke="#38bdf8" strokeWidth="2" strokeDasharray="4 3" fill="none" />
+        {parents.summarized && <path d={parents.summarized} stroke="#10b981" strokeWidth="2.5" strokeOpacity={0.6} strokeDasharray="8 4" fill="none" />}
+        {children.summarized && <path d={children.summarized} stroke="#38bdf8" strokeWidth="2" strokeOpacity={0.6} strokeDasharray="8 4 2 4" fill="none" />}
         {visible.map((s, i) => (s.gap || s.containsGap) && <line key={`gap-${i}`} x1={35 + (s.time - start) / Math.max(1, end - start) * 430} x2={35 + (s.time - start) / Math.max(1, end - start) * 430} y1="20" y2="140" stroke="#f59e0b" strokeDasharray="3 3" />)}
         {visible.map((s, i) => !s.gap && <g key={`${s.time}-${i}`}>
           <circle cx={35 + (s.time - start) / Math.max(1, end - start) * 430} cy={140 - s.parents / max * 110} r="2" fill="#10b981" />
