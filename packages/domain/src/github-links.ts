@@ -115,3 +115,13 @@ export function findGitHubLinks(text: string): GitHubLink[] {
   }
   return [...links.values()];
 }
+
+export type GitHubItemState = 'open' | 'closed' | 'draft' | 'merged';
+export type GitHubCiState = 'failed' | 'pending' | 'passed' | 'cancelled' | 'skipped' | 'none' | 'unavailable';
+
+export type GitHubLinkStatus = {
+  state?: GitHubItemState;
+  ci?: GitHubCiState;
+} & ({ freshness: 'fresh'; expiresAt: number } | { freshness: 'stale' | 'unavailable' });
+
+export type GitHubLinkStatuses = Record<string, GitHubLinkStatus>;

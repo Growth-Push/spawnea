@@ -952,3 +952,39 @@ Session context files and SQLite retain canonical repository, issue and PR ident
 Each session retains at most 128 canonical identities and three provenance records per identity; task takes priority over prompt and output, with stable older-first admission within a priority. A higher-priority identity may displace a lower-priority one; the separate originating issue is never evicted by this policy. Extraction examines at most 32,768 characters and accepts raw and canonical URLs of at most 2,048 characters, without accepting a truncated token. SQLite admission, direct insertion, bounded reads and recovery normalize the same policy, and context mutations serialize accepted snapshots without recreating deleted files. Legacy link metadata is normalized on read. Context files larger than 8 MiB are reported and left intact rather than loaded or partially rewritten; this limit does not bound SSH transport or guarantee recovery of arbitrarily large contexts.
 
 Before normalization, an indexed probe checks at most 4,097 link rows for the session. Legacy metadata exceeding 4,096 rows is preserved and reported as requiring explicit recovery; no new metadata is admitted until it is recovered. Normal bounded sessions remain below this technical recovery limit.
+
+When the workspace is active and visible, contextual issue and PR chips can
+show read-only GitHub status from the desktop's existing local `gh`
+authentication. Main resolves the session's stored links and originating
+issue through typed IPC. Each lookup sends the canonical owner, repository,
+and issue or PR number to GitHub.com. Surrounding terminal text stays local.
+Status is held in memory. The chips still open their existing URLs when
+status is stale or unavailable.
+
+The PR and CI signals are independent. A merged PR can display failing CI.
+CI is the GitHub GraphQL check and status rollup of the last PR commit in
+the PR's repository context. Its commit OID must equal the PR's head OID
+from the same response, including for forked and merged PRs. Checks on
+other commits are excluded. Checks on the same OID can come from different
+branches or triggers, including a target-branch push. Empty rollups
+show no checks. If more than 100 contexts are returned, the head cannot be
+verified, or GitHub denies access to the rollup, CI is unavailable.
+For complete rollups, the highest-priority result is shown in this order:
+failure, unknown result, pending or running, cancellation, skipped or
+neutral, success. A mix of successful and skipped checks therefore displays
+the skipped indicator.
+
+Visible workspaces poll every 10 seconds. Main allows one serial batch
+of up to four lookups at a time, prioritizing links with the oldest or no
+attempts, with at least 10 seconds between batch starts. Each lookup has a
+five-second deadline and a link is eligible again after 60 seconds. A failed
+read or a result older than that refresh window is marked stale if a previous
+value is available. Otherwise the status is unavailable. The renderer uses
+the deadline from the last successful observation, including while a
+refresh is pending after the workspace resumes. Rate limits pause lookups
+for at least one minute or until GitHub's later retry or reset time. A valid
+response that exhausts the rate limit still updates the chip. Hiding,
+deactivating, or switching the workspace stops queued lookups and discards
+late renderer responses. A lookup already sent to GitHub may still finish.
+If retained links require explicit recovery, the separately stored origin
+issue remains eligible for lookup.

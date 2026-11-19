@@ -6,6 +6,8 @@ import { sessionLinks } from '../schema.js';
 export type LinkSource = GitHubLinkSource;
 export interface StoredSessionLink { sessionId: string; url: string; kind: 'repository' | 'issue' | 'pull'; source: LinkSource; createdAt: Date }
 
+export class GitHubLinkRecoveryRequiredError extends Error {}
+
 const MAX_LEGACY_LINK_ROWS = 4096;
 const linkKey = (link: { source: LinkSource; url: string }) => `${link.source}\0${link.url}`;
 
@@ -31,7 +33,7 @@ export class SqliteGitHubRepository {
       if (overflow) {
         const message = 'Session link metadata exceeds the 4096-row automatic recovery limit';
         this.logger.warn(message, { sessionId });
-        throw new Error(message);
+        throw new GitHubLinkRecoveryRequiredError(message);
       }
       if (input.some((item) => item.sessionId !== sessionId)) throw new Error('Link session does not match admission target');
       const count = tx.select({ value: sql<number>`count(*)` }).from(sessionLinks).where(eq(sessionLinks.sessionId, sessionId)).get()?.value ?? 0;
