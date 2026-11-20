@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import type { Agent, Project, Server, Session } from '@spawnea/domain';
 import {
   ArrowLeft,
@@ -135,6 +135,7 @@ export function DashboardView(props: Props) {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+  const distributionGroup = useId();
   const [dimension, setDimension] = useState<'Harness' | 'Project' | 'Host'>('Harness');
   const [collapsedHosts, setCollapsedHosts] = useState<Set<string>>(new Set());
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
@@ -234,6 +235,78 @@ export function DashboardView(props: Props) {
   const donutRadius = 60;
   const donutCircumference = 2 * Math.PI * donutRadius;
   let accumulatedPercent = 0;
+
+  const distributionCard = (
+    <section className="flex min-w-0 flex-col rounded-xl border border-zinc-800/80 bg-[#111620] p-3">
+      <h2 className="text-sm font-semibold text-white">Session distribution</h2>
+      <fieldset aria-label="Distribution group" className="mt-2 flex min-w-0 flex-wrap gap-x-2 gap-y-1">
+        {(['Harness', 'Project', 'Host'] as const).map((option) => (
+          <label key={option} className="flex cursor-pointer items-center gap-1 text-xs text-zinc-200">
+            <input type="radio" name={distributionGroup} value={option} checked={dimension === option}
+              onChange={() => setDimension(option)} className="size-3 accent-sky-400" />
+            {option}
+          </label>
+        ))}
+      </fieldset>
+      <div className="mt-2 max-w-full self-end rounded-md bg-[#0d1117] px-2 py-1.5">
+        {!all.length ? (
+          <p className="text-zinc-400 text-xs">No sessions to distribute</p>
+        ) : (
+          <ul aria-label="Distribution legend" tabIndex={0} className="max-h-40 space-y-1 overflow-y-auto text-xs text-zinc-200">
+            {[...distribution.entries()].map(([key, entry], i) => (
+              <li key={key} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-baseline gap-1.5">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: colors[i % colors.length] }} />
+                <span className="min-w-0 wrap-break-word">{entry.label}:</span>
+                <span className="tabular-nums">{entry.count}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="grid flex-1 place-items-center py-2">
+        <div className="relative aspect-square w-28 max-w-full">
+          <svg aria-hidden="true" viewBox="0 0 160 160" className="w-full h-full -rotate-90">
+            {/* Background track circle */}
+            <circle
+              cx="80"
+              cy="80"
+              r={donutRadius}
+              stroke="#1c2333"
+              strokeWidth="18"
+              fill="none"
+            />
+            {totalDistributionCount > 0 &&
+              [...distribution.entries()].map(([key, entry], i) => {
+                const percent = entry.count / totalDistributionCount;
+                const strokeDasharray = `${(percent * donutCircumference).toFixed(1)} ${donutCircumference.toFixed(1)}`;
+                const strokeDashoffset = (-accumulatedPercent * donutCircumference).toFixed(1);
+                accumulatedPercent += percent;
+                const color = colors[i % colors.length];
+
+                return (
+                  <circle
+                    key={key}
+                    cx="80"
+                    cy="80"
+                    r={donutRadius}
+                    stroke={color}
+                    strokeWidth="18"
+                    strokeDasharray={strokeDasharray}
+                    strokeDashoffset={strokeDashoffset}
+                    fill="none"
+                  />
+                );
+              })}
+          </svg>
+          {/* Inner Center Text */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+            <span className="text-xl font-bold text-white leading-none">{totalDistributionCount}</span>
+            <span className="text-[11px] text-zinc-400 mt-0.5">sessions</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
 
   return (
     <section aria-label="Session dashboard" className="flex-1 min-w-0 overflow-auto p-6 space-y-5 bg-[#0d1117]">
@@ -347,115 +420,12 @@ export function DashboardView(props: Props) {
         </div>
       </div>
 
-      {/* Middle Row: Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Activity Chart */}
-        <div>
-          {historyError && <p role="alert" className="text-xs text-rose-400">{historyError}</p>}
-          {historyRevision === undefined ? <ActivityChart samples={samples} startedAt={startedAt} /> : <HistoryChart revision={historyRevision} />}
-        </div>
-
-        {/* Distribution Chart */}
-        <section className="rounded-xl border border-zinc-800/80 bg-[#111620] p-4 flex flex-col justify-between">
-          <div className="flex items-center justify-between pb-2 border-b border-zinc-850/60">
-            <div>
-              <h2 className="text-sm font-semibold text-white">Session distribution</h2>
-              <p className="text-[11px] text-zinc-400">Current sessions by {dimension.toLowerCase()}</p>
-            </div>
-            <div className="flex items-center gap-1 bg-zinc-850 p-1 rounded-lg border border-zinc-800">
-              {(['Harness', 'Project', 'Host'] as const).map((dim) => (
-                <button
-                  key={dim}
-                  type="button"
-                  onClick={() => setDimension(dim)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    dimension === dim
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  {dim}
-                </button>
-              ))}
-              <select
-                aria-label="Distribution group"
-                value={dimension}
-                onChange={(e) => setDimension(e.target.value as 'Harness' | 'Project' | 'Host')}
-                className="sr-only"
-              >
-                <option value="Harness">Harness</option>
-                <option value="Project">Project</option>
-                <option value="Host">Host</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="py-2 flex items-center justify-around gap-6">
-            {/* SVG Donut */}
-            <div className="relative w-44 h-44 shrink-0 flex items-center justify-center">
-              <svg viewBox="0 0 160 160" className="w-full h-full -rotate-90">
-                {/* Background track circle */}
-                <circle
-                  cx="80"
-                  cy="80"
-                  r={donutRadius}
-                  stroke="#1c2333"
-                  strokeWidth="18"
-                  fill="none"
-                />
-                {totalDistributionCount > 0 &&
-                  [...distribution.entries()].map(([key, entry], i) => {
-                    const percent = entry.count / totalDistributionCount;
-                    const strokeDasharray = `${(percent * donutCircumference).toFixed(1)} ${donutCircumference.toFixed(1)}`;
-                    const strokeDashoffset = (-accumulatedPercent * donutCircumference).toFixed(1);
-                    accumulatedPercent += percent;
-                    const color = colors[i % colors.length];
-
-                    return (
-                      <circle
-                        key={key}
-                        cx="80"
-                        cy="80"
-                        r={donutRadius}
-                        stroke={color}
-                        strokeWidth="18"
-                        strokeDasharray={strokeDasharray}
-                        strokeDashoffset={strokeDashoffset}
-                        fill="none"
-                      />
-                    );
-                  })}
-              </svg>
-              {/* Inner Center Text */}
-              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-2xl font-bold text-white leading-none">{totalDistributionCount}</span>
-                <span className="text-[11px] text-zinc-400 mt-0.5">sessions</span>
-              </div>
-            </div>
-
-            {/* Legend */}
-            <div className="flex-1 min-w-[140px] max-w-xs">
-              {!all.length ? (
-                <p className="text-zinc-500 text-xs">No sessions to distribute</p>
-              ) : (
-                <ul className="space-y-1.5 pl-2">
-                  {[...distribution.entries()].map(([key, entry], i) => {
-                    const color = colors[i % colors.length];
-                    return (
-                      <li key={key} className="text-xs list-disc font-medium" style={{ color }}>
-                        {entry.label}: {entry.count}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </div>
-
-          <div className="text-[11px] text-zinc-500 pt-1 border-t border-zinc-850/60">
-            Total observed: {totalDistributionCount} sessions
-          </div>
-        </section>
+      {historyRevision === undefined && historyError && <p role="alert" className="text-xs text-rose-400">{historyError}</p>}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,5fr)_minmax(10rem,1fr)]">
+        {historyRevision === undefined
+          ? <ActivityChart samples={samples} startedAt={startedAt} />
+          : <HistoryChart revision={historyRevision} recordingError={historyError} />}
+        {distributionCard}
       </div>
 
       {/* Filter and Search Bar */}

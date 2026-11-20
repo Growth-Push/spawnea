@@ -931,9 +931,18 @@ An unobserved marker separates app openings, hidden periods, delayed samples,
 and persistence failures. A range inside an unobserved period remains marked
 unknown. The Dashboard reads bounded time buckets from SQLite and labels
 buckets containing multiple observations; zooming requests the selected range
-again so older stored observations remain accessible. Markers in a summarized
-bucket identify an interval containing a gap, rather than its exact duration.
-The observation browser pages through the selected range, including observations
+again so older stored observations remain accessible. Both stepped series break
+at gaps, including summarized buckets containing a gap. Both series use solid
+steps. Only summarized points and step segments are faded. Pointer and keyboard
+inspection identifies gaps, summarized buckets and the recorded counts for
+observed points. Ranges without counts keep their time labels and show an
+explicit empty or unobserved state without a count axis. Sub-day ranges that
+cross a local day boundary include the date on the time axis. Axis marks use a
+uniform, clock-aligned step. Continuous steps omit per-sample dots, and
+isolated observations remain visible and inspectable. Drag the zoomed chart or
+use Left and Right while the timeline is focused to pan.
+The activity card exposes the closed-session count and opens the observation
+browser for the selected range. The browser pages through that range, including observations
 with identical timestamps, without loading the entire history into the renderer.
 
 A separate counter records sessions removed by confirmed close or finalization.
