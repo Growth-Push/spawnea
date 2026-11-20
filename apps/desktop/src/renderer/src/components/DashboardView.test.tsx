@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { Session } from '@spawnea/domain';
 import { ActivityChart, DashboardView } from './DashboardView';
 import { HistoryChart } from './ActivityChart';
@@ -30,8 +30,11 @@ describe('Dashboard', () => {
     expect(screen.getByRole('button', { name: 'root' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'child' }));
     expect(props.onSelectSession).toHaveBeenCalledWith('child');
-    fireEvent.change(screen.getByLabelText('Distribution group'), { target: { value: 'Host' } });
-    expect(screen.getByText('Unavailable host (remote): 1', { selector: 'li' })).toBeTruthy();
+    const group = screen.getByRole('group', { name: 'Distribution group' });
+    expect(within(group).getAllByRole('radio')).toHaveLength(3);
+    fireEvent.click(within(group).getByRole('radio', { name: 'Host' }));
+    const hostCategory = within(screen.getByRole('list', { name: 'Distribution legend' })).getByText('Unavailable host (remote):');
+    expect(hostCategory.nextElementSibling?.textContent).toBe('1');
     expect(screen.getByText(/All current sessions: 2/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Return to workspace' }));
     expect(props.onReturn).toHaveBeenCalled();
@@ -211,9 +214,156 @@ describe('Aggregate observations', () => {
     expect(summarizedChildren.getAttribute('stroke')).toBe(children.getAttribute('stroke'));
     expect(summarizedParents.getAttribute('stroke-opacity')).toBe('0.6');
     expect(summarizedChildren.getAttribute('stroke-opacity')).toBe('0.6');
-    expect(summarizedChildren.getAttribute('stroke-dasharray')).not.toBe(children.getAttribute('stroke-dasharray'));
-    expect(screen.getByText('Faded steps summarize multiple observations. Counts can vary within them.')).toBeTruthy();
-    expect(chart.querySelectorAll('line[stroke="#f59e0b"]')).toHaveLength(2);
+    expect(chart.querySelectorAll('[stroke-dasharray], [stroke="#f59e0b"]')).toHaveLength(0);
+    expect(screen.getByText('Faded: summarized')).toBeTruthy();
+    const slider = screen.getByRole('slider', { name: 'Activity observation' });
+    expect(slider.getAttribute('aria-valuetext')).toContain('Parents: 0 · Children: 2');
+    fireEvent.change(slider, { target: { value: '3' } });
+    expect(slider.getAttribute('aria-valuetext')).toContain('This interval contains an unobserved period');
+    expect(slider.getAttribute('aria-valuetext')).toContain('Multiple observations');
+    fireEvent.change(slider, { target: { value: '6' } });
+    expect(slider.getAttribute('aria-valuetext')).toContain('Unobserved period');
+    expect(slider.getAttribute('aria-valuetext')).not.toContain('Parents:');
+  });
+
+  it('labels a sparse range without a count scale and recovers the observed zero by panning', () => {
+    const base = 1_760_000_000_000;
+    const rows = [[0, 1, 1], [1000, 1, 1], [2000, 0, 1], [350_000, 0, 0],
+      [352_000, 0, 0], [355_000, 0, 0], [360_000, 0, 0], [398_999, 1, 1]];
+    const samples = rows.map(([offset, parents, children]) => ({ time: base + offset, parents, children, gap: false }));
+    const onRangeChange = vi.fn();
+    render(<ActivityChart samples={samples} startedAt={base} bounds={[base, base + 399_000]} onRangeChange={onRangeChange} />);
+    const chart = screen.getByRole('img', { name: 'Observed concurrent working sessions' });
+    const ticks = () => [...chart.querySelectorAll('text')].map((tick) => tick.textContent);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(onRangeChange).toHaveBeenLastCalledWith({ from: base + 99_750, to: base + 299_250 });
+    expect(screen.getByText('No observations in this range')).toBeTruthy();
+    const timeline = screen.getByRole('group', { name: 'Activity timeline' });
+    expect(timeline.getAttribute('aria-describedby')).toBeTruthy();
+    const description = document.getElementById(timeline.getAttribute('aria-describedby')!);
+    expect(description?.textContent).toContain(new Date(base + 99_750).toLocaleString());
+    expect(description?.textContent).toContain(new Date(base + 299_250).toLocaleString());
+    expect(ticks()).not.toContain('0');
+    expect(chart.querySelectorAll('circle')).toHaveLength(0);
+    expect(screen.queryByRole('slider')).toBeNull();
+
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Activity timeline' }), { key: 'ArrowRight' });
+    expect(screen.queryByText('No observations in this range')).toBeNull();
+    expect(ticks()).toContain('0');
+    expect(chart.querySelector('path[stroke="#10b981"]')?.getAttribute('d')).toContain('140.0');
+    expect(screen.getByRole('slider').getAttribute('aria-valuetext')).toContain('Parents: 0 · Children: 0');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Full range' }));
+    expect(onRangeChange).toHaveBeenLastCalledWith(null);
+    expect(chart.querySelectorAll('circle')).toHaveLength(0);
+  });
+
+  it('distinguishes matching clock labels on different local days in a range shorter than 24 hours', () => {
+    // Build the same clock times as the sparse fixture in the test runner's local zone.
+    const start = new Date(2025, 9, 9, 10, 0, 50).getTime();
+    const end = start + 86_361_000;
+    render(<ActivityChart startedAt={start} bounds={[start, end]} samples={[
+      { time: start, parents: 1, children: 1, gap: false },
+      { time: start + 43_200_000, parents: 0, children: 1, gap: false },
+      { time: end - 1000, parents: 1, children: 0, gap: false },
+    ]} />);
+
+    const chart = screen.getByRole('img', { name: 'Observed concurrent working sessions' });
+    const ticks = [...chart.querySelectorAll('text')].map((tick) => tick.textContent);
+    const format = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    expect(ticks[2]).toBe(format.format(new Date(2025, 9, 9, 12)));
+    expect(ticks.at(-1)).toBe(format.format(new Date(2025, 9, 10)));
+    expect(ticks.at(-1)).not.toBe(ticks[2]);
+  });
+
+  it.each([20_000, 120_000])('aligns dated ticks to a uniform clock step across midnight (%i ms)', (duration) => {
+    const start = new Date(2025, 11, 31, 23, 59, 46).getTime();
+    const end = start + duration;
+    render(<ActivityChart startedAt={start} bounds={[start, end]} samples={[
+      { time: start, parents: 1, children: 1, gap: false },
+      { time: end - 1, parents: 1, children: 0, gap: false },
+    ]} />);
+    const chart = screen.getByRole('img', { name: 'Observed concurrent working sessions' });
+    const labels = [...chart.querySelectorAll('text')].slice(2);
+    const format = new Intl.DateTimeFormat(undefined, {
+      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+      ...(duration === 20_000 ? { second: '2-digit' } : {}),
+    });
+    const midnight = new Date(2026, 0, 1);
+    const clockStep = duration === 20_000 ? 10_000 : 60_000;
+    expect(labels.map((tick) => tick.textContent)).toEqual(
+      [-clockStep, 0].concat(duration === 120_000 ? [clockStep] : [])
+        .filter((delta) => midnight.getTime() + delta >= start)
+        .map((delta) => format.format(midnight.getTime() + delta)),
+    );
+    const positions = labels.map((tick) => Number(tick.getAttribute('x')));
+    expect(positions[1] - positions[0]).toBeCloseTo(430 * clockStep / duration);
+    const descriptionId = screen.getByRole('group', { name: 'Activity timeline' }).getAttribute('aria-describedby')!;
+    expect(document.getElementById(descriptionId)?.classList.contains('sr-only')).toBe(duration === 20_000);
+  });
+
+  it('pans a zoomed range by dragging the plot without changing the observation slider', () => {
+    const samples = [0, 10_000, 20_000, 30_000, 40_000].map((time) => ({ time, parents: 1, children: 0, gap: false }));
+    const onRangeChange = vi.fn();
+    render(<ActivityChart samples={samples} startedAt={0} onRangeChange={onRangeChange} />);
+    const chart = screen.getByRole('img', { name: 'Observed concurrent working sessions' });
+    const setPointerCapture = vi.fn();
+    Object.defineProperty(chart, 'setPointerCapture', { value: setPointerCapture });
+    vi.spyOn(chart, 'getBoundingClientRect').mockReturnValue({ width: 477 } as DOMRect);
+
+    const pointer = (type: string, clientX: number) => {
+      const event = new MouseEvent(type, { bubbles: true, button: 0, clientX });
+      Object.defineProperty(event, 'pointerId', { value: 1 });
+      fireEvent(chart, event);
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(onRangeChange).toHaveBeenLastCalledWith({ from: 10_000, to: 30_000 });
+    pointer('pointerdown', 250);
+    pointer('pointermove', 164);
+    expect(onRangeChange).toHaveBeenCalledTimes(1);
+    pointer('pointerup', 164);
+    expect(setPointerCapture).toHaveBeenCalledWith(1);
+    expect(onRangeChange).toHaveBeenLastCalledWith({ from: 14_000, to: 34_000 });
+    expect((screen.getByRole('slider') as HTMLInputElement).value).toBe('0');
+  });
+
+  it('draws exact steps without run markers and leaves an isolated zero inspectable', () => {
+    const samples = [
+      { time: 0, parents: 1, children: 0, gap: false },
+      { time: 1000, parents: 1, children: 0, gap: false },
+      { time: 2000, parents: 1, children: 2, gap: false },
+      { time: 3000, parents: 0, children: 0, gap: true },
+      { time: 4000, parents: 0, children: 0, gap: false },
+    ];
+    render(<ActivityChart samples={samples} startedAt={0} />);
+    const chart = screen.getByRole('img', { name: 'Observed concurrent working sessions' });
+    const markers = [...chart.querySelectorAll('circle')];
+    expect(markers).toHaveLength(2);
+    expect(markers.every((marker) => marker.getAttribute('cy') === '140')).toBe(true);
+    setScreenTransform(chart, 1, 0, 0);
+    movePointer(chart, 465);
+    expect(screen.getByRole('slider').getAttribute('aria-valuetext')).toContain('Parents: 0 · Children: 0');
+  });
+
+  it('renders an explicit count-free state for empty samples and summarized gap-only history', () => {
+    const view = render(<ActivityChart samples={[]} startedAt={1000} bounds={[1000, 11_000]} />);
+    const chart = screen.getByRole('img', { name: 'Observed concurrent working sessions' });
+    const ticks = () => [...chart.querySelectorAll('text')].map((tick) => tick.textContent);
+    expect(screen.getByText('No observations in this range')).toBeTruthy();
+    expect(ticks().length).toBeGreaterThanOrEqual(2);
+    expect(ticks()).not.toContain('0');
+    expect(screen.queryByRole('slider')).toBeNull();
+
+    view.rerender(<ActivityChart startedAt={1000} samples={[
+      { time: 1000, parents: 0, children: 0, gap: true, summarized: true, containsGap: true },
+    ]} bounds={[1000, 11_000]} />);
+    expect(screen.getByText('Unobserved period in this range')).toBeTruthy();
+    expect(ticks().length).toBeGreaterThanOrEqual(2);
+    expect(ticks()).not.toContain('0');
+    expect(chart.querySelectorAll('circle')).toHaveLength(0);
+    expect(screen.queryByText('Faded: summarized')).toBeNull();
+    expect(screen.getByRole('slider').getAttribute('aria-valuetext')).toContain('Unobserved period');
   });
 
   it('preserves the selected observation across a live refresh and resets on range changes', () => {
@@ -241,7 +391,7 @@ describe('Aggregate observations', () => {
     const getDashboardHistoryPage = vi.fn().mockRejectedValueOnce(new Error('unavailable')).mockResolvedValueOnce({ observations: [{ id: 1, time: 1000, parents: 2, children: 1, gap: false }], next: null });
     Object.defineProperty(window, 'spawneaApi', { configurable: true, value: { getDashboardHistory, getDashboardHistoryPage } });
     const view = render(<HistoryChart revision={0} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Browse observations in this range' }));
+    fireEvent.click(await screen.findByRole('button', { name: /History · 2 closed/ }));
     expect((await screen.findByRole('alert')).textContent).toContain('Could not load dashboard observations.');
     view.rerender(<HistoryChart revision={1} />);
     await vi.waitFor(() => expect(getDashboardHistory).toHaveBeenCalledTimes(2));
@@ -259,12 +409,12 @@ describe('Aggregate observations', () => {
     const getDashboardHistoryPage = vi.fn().mockResolvedValueOnce({ observations: [{ id: 1, time: 1000, parents: 1, children: 0, gap: false }], next: { id: 1, time: 1000 } }).mockResolvedValueOnce({ observations: [{ id: 2, time: 1000, parents: 2, children: 0, gap: false }], next: null });
     Object.defineProperty(window, 'spawneaApi', { configurable: true, value: { getDashboardHistory, getDashboardHistoryPage } });
     render(<HistoryChart revision={0} />);
-    expect(await screen.findByText(/Closed sessions since history was enabled: 2/)).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /History · 2 closed/ })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
     await vi.waitFor(() => expect(getDashboardHistory).toHaveBeenLastCalledWith({ from: 3500, to: 8500 }));
     fireEvent.click(screen.getByRole('button', { name: 'Full range' }));
     await vi.waitFor(() => expect(getDashboardHistory).toHaveBeenLastCalledWith(undefined));
-    fireEvent.click(screen.getByRole('button', { name: 'Browse observations in this range' }));
+    fireEvent.click(screen.getByRole('button', { name: /History · 2 closed/ }));
     await screen.findByRole('list', { name: 'Observed activity records' });
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
     await vi.waitFor(() => expect(getDashboardHistoryPage).toHaveBeenLastCalledWith({ from: 1000, to: 11000 }, { id: 1, time: 1000 }));
@@ -286,7 +436,7 @@ describe('Aggregate observations', () => {
     fireEvent.change(slider, { target: { value: '2' } });
     expect(screen.getByText(/Parents: 3 · Children: 4/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Pan right' }));
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Activity timeline' }), { key: 'ArrowRight' });
     fireEvent.click(screen.getByRole('button', { name: 'Full range' }));
     expect((slider as HTMLInputElement).max).toBe('2');
   });
@@ -305,16 +455,42 @@ describe('Aggregate observations', () => {
     movePointer(chart, left + 465 * scale, top + 85 * scale);
     expect(screen.getByText(/Parents: 3 · Children: 4/)).toBeTruthy();
   });
+  it('uses the resized plot width for time coordinates and pointer inspection', () => {
+    let resize: ResizeObserverCallback | undefined;
+    const disconnect = vi.fn();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: ResizeObserverCallback) { resize = callback; }
+      observe() {}
+      disconnect = disconnect;
+    });
+    try {
+      const view = render(<ActivityChart startedAt={0} samples={[
+        { time: 0, parents: 0, children: 1, gap: false },
+        { time: 10_000, parents: 2, children: 0, gap: false },
+      ]} />);
+      const chart = screen.getByRole('img', { name: 'Observed concurrent working sessions' });
+      act(() => resize?.([{ contentRect: { width: 800 } } as ResizeObserverEntry], {} as ResizeObserver));
+      expect(chart.getAttribute('viewBox')).toBe('0 0 800 170');
+      expect(chart.querySelector('path')?.getAttribute('d')).toBe('M35.0,140.0 H788.0 V30.0');
+      setScreenTransform(chart, 1, 0, 0);
+      movePointer(chart, 788);
+      expect(screen.getByText(/Parents: 2 · Children: 0/)).toBeTruthy();
+      view.unmount();
+      expect(disconnect).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it('ignores a pointer when its SVG transform is unavailable or non-invertible', () => {
     render(<ActivityChart samples={[{ time: 0, parents: 1, children: 0, gap: false }, { time: 10_000, parents: 2, children: 0, gap: false }]} startedAt={0} />);
     const chart = screen.getByRole('img', { name: 'Observed concurrent working sessions' });
     Object.defineProperty(chart, 'getScreenCTM', { configurable: true, value: () => null });
     movePointer(chart, 465);
-    expect(screen.getByText(/Parents: 1 · Children: 0/)).toBeTruthy();
+    expect(screen.getByRole('slider').getAttribute('aria-valuetext')).toContain('Parents: 1 · Children: 0');
     setScreenTransform(chart, 1, 0, 0);
     Object.defineProperty(chart, 'getScreenCTM', { configurable: true, value: () => ({ inverse: () => { throw new Error('non-invertible'); } }) });
     movePointer(chart, 465);
-    expect(screen.getByText(/Parents: 1 · Children: 0/)).toBeTruthy();
+    expect(screen.getByRole('slider').getAttribute('aria-valuetext')).toContain('Parents: 1 · Children: 0');
   });
   it('classifies roots without children, children, promotion and deletion without rewriting history', () => {
     const root = session('root'); const child = session('child', { parentSessionId: 'root' });
