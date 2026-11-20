@@ -8,6 +8,31 @@ import { DASHBOARD_BOUNDS_SQL, DashboardHistoryRepository } from '../src/dashboa
 import { createDatabase, createRepositories } from '../src/index.js';
 
 describe('dashboard history storage', () => {
+  it('excludes observations from a prior opening even when its clock was ahead', () => {
+    const sqlite = new Database(':memory:');
+    try {
+      sqlite.exec(dashboardHistorySchema);
+      new DashboardHistoryRepository(sqlite).record({ time: 500, parents: 9, children: 8, gap: false });
+      const opening = new DashboardHistoryRepository(sqlite, 'launch');
+      expect(opening.view()).toMatchObject({ first: null, last: null, points: [] });
+      expect(opening.page(0, 600, null, 100)).toEqual({ observations: [], next: null });
+    } finally { sqlite.close(); }
+  });
+
+  it('includes this opening’s new observations after the clock rolls back', () => {
+    const sqlite = new Database(':memory:');
+    try {
+      sqlite.exec(dashboardHistorySchema);
+      const opening = new DashboardHistoryRepository(sqlite, 'launch');
+      opening.record({ time: 410, parents: 1, children: 1, gap: false });
+      opening.record({ time: 350, parents: 0, children: 0, gap: false });
+      expect(opening.view()).toMatchObject({ first: 350, last: 410 });
+      expect(opening.view(340, 360).points).toEqual([
+        { time: 350, parents: 0, children: 0, gap: false, summarized: false, containsGap: false },
+      ]);
+      expect(opening.page(340, 360, null, 100).observations.map(({ time }) => time)).toEqual([350]);
+    } finally { sqlite.close(); }
+  });
   it('uses indexed searches for both history bounds', () => {
     const sqlite = new Database(':memory:');
     try {
@@ -17,6 +42,56 @@ describe('dashboard history storage', () => {
       expect(details.some((detail) => /SCAN dashboard_activity_samples/.test(detail))).toBe(false);
       expect(new DashboardHistoryRepository(sqlite).bounds()).toEqual({ first: null, last: null });
     } finally { sqlite.close(); }
+  });
+  it('scopes chart bounds, zoom and detail to each writer sharing a profile', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dashboard-launch-'));
+    const path = join(directory, 'fixture.db');
+    const sqlite = new Database(path);
+    const peer = new Database(path);
+    try {
+      sqlite.exec(dashboardHistorySchema);
+      sqlite.exec('UPDATE dashboard_closed_sessions SET count = 7');
+      const history = new DashboardHistoryRepository(sqlite);
+      history.record({ time: 10, parents: 9, children: 8, gap: false });
+      const firstOpening = new DashboardHistoryRepository(sqlite, 'launch');
+      firstOpening.begin(100);
+      expect(firstOpening.view()).toEqual({ first: null, last: null, points: [], closedCount: 7 });
+      expect(firstOpening.page(0, 99, null, 100)).toEqual({ observations: [], next: null });
+      firstOpening.record({ time: 100, parents: 0, children: 0, gap: false });
+      firstOpening.record({ time: 102, parents: 2, children: 1, gap: false });
+      firstOpening.record({ time: 102, parents: 3, children: 1, gap: false });
+      expect(firstOpening.view()).toMatchObject({ first: 100, last: 102, closedCount: 7 });
+      expect(firstOpening.view(0, 101).points).toEqual([
+        { time: 100, parents: 0, children: 0, gap: false, summarized: false, containsGap: false },
+      ]);
+      expect(firstOpening.view(0, 99).points).toEqual([]);
+      const page = firstOpening.page(0, 102, { time: 10, id: 1 }, 2);
+      expect(page.observations.map(({ parents }) => parents)).toEqual([0, 2]);
+      expect(page.next).toMatchObject({ time: 102 });
+      expect(firstOpening.page(0, 102, page.next, 2).observations.map(({ parents }) => parents)).toEqual([3]);
+      firstOpening.begin(150);
+      firstOpening.record({ time: 150, parents: 1, children: 1, gap: false });
+      expect(firstOpening.view(110, 140).points[0]).toMatchObject({ time: 110, gap: true });
+      expect(firstOpening.bounds()).toEqual({ first: 100, last: 150 });
+
+      const secondOpening = new DashboardHistoryRepository(peer, 'launch');
+      secondOpening.begin(200);
+      expect(secondOpening.view()).toEqual({ first: null, last: null, points: [], closedCount: 7 });
+      secondOpening.record({ time: 200, parents: 0, children: 0, gap: true });
+      secondOpening.record({ time: 201, parents: 1, children: 0, gap: false });
+      expect(secondOpening.view().points.map(({ time, gap }) => [time, gap])).toEqual([[200, true], [201, false]]);
+      firstOpening.record({ time: 201, parents: 4, children: 2, gap: false });
+      expect(new DashboardHistoryRepository(sqlite, 'launch').bounds()).toEqual({ first: 100, last: 201 });
+      expect(firstOpening.view(200, 201).points.map(({ parents }) => parents)).toEqual([4]);
+      expect(secondOpening.bounds()).toEqual({ first: 200, last: 201 });
+      expect(secondOpening.page(0, 201, null, 100).observations.map(({ time }) => time)).toEqual([200, 201]);
+      expect(history.page(0, 201, null, 100).observations.map(({ time }) => time))
+        .toEqual([10, 11, 100, 102, 102, 103, 150, 151, 200, 201, 201]);
+    } finally {
+      peer.close();
+      sqlite.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
   it('retains confirmed closure count across reopening without counting repeated deletion', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'dashboard-closure-'));

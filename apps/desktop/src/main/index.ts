@@ -365,7 +365,7 @@ function registerIpcHandlers(
   controlService: AgentControlService
 ): void {
   // Dashboard history is local metadata and never contains terminal output.
-  const history = new DashboardHistoryRepository(dbConnection!.sqlite);
+  const history = new DashboardHistoryRepository(dbConnection!.sqlite, 'launch');
   ipcMain.handle('dashboard:begin', (_event, time?: number) => {
     if (time !== undefined && (!Number.isSafeInteger(time) || time < 0)) throw new Error('Invalid dashboard observation time');
     history.begin(time ?? Date.now());

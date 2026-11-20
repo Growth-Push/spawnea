@@ -930,8 +930,12 @@ feature is enabled; no prior activity or terminal output is reconstructed.
 An unobserved marker separates app openings, hidden periods, delayed samples,
 and persistence failures. A range inside an unobserved period remains marked
 unknown. The Dashboard reads bounded time buckets from SQLite and labels
-buckets containing multiple observations; zooming requests the selected range
-again so older stored observations remain accessible. Both stepped series break
+buckets containing multiple observations. The chart bounds, zoom queries and
+observation browser include only samples recorded by the current Desktop
+process. An indexed temporary table on its SQLite connection isolates these
+reads from earlier launches and concurrent processes, even if the system clock
+changes. Observations retain their original timestamps and stay in SQLite
+across launches. Both stepped series break
 at gaps, including summarized buckets containing a gap. Both series use solid
 steps. Only summarized points and step segments are faded. Pointer and keyboard
 inspection identifies gaps, summarized buckets and the recorded counts for
